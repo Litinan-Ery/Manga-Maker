@@ -179,6 +179,8 @@ function pageVersion(version: number, isCurrent: boolean): ComicPageVersion {
       width: 2048,
       height: 3072,
       reading_direction: "left_to_right",
+      color_mode: "grayscale",
+      background_color: "#ffffff",
       language: "zh-Hans",
       template_id: "grid-1",
       storyboard_version_id: "storyboard-version-1",

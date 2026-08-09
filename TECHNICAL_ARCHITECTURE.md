@@ -4,12 +4,12 @@
 |---|---|
 | 文档版本 | v0.1 |
 | 日期 | 2026-08-09 |
-| 状态 | P0 离线 Mock 闭环、P1 连续性与整本有界生产已实现；P2 开发中 |
+| 状态 | P0 离线 Mock 闭环、P1 整本有界生产、P2 高级版式与素材库已实现 |
 | 对应产品文档 | [README.md](README.md)、[PRD.md](PRD.md) |
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前 P0 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；P1 已交付跨章节连续性账本与整本有界生产计划。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前 P0 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；P1 已交付跨章节连续性账本与整本有界生产计划；P2 已交付高级页面 profile、扩展模板和可复用素材库。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
 
 ## 1. 架构结论
 
@@ -333,13 +333,17 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 | `POST /api/v1/projects/{id}/generation/masks` | 校验并冻结与父素材绑定的本地 PNG 蒙版 |
 | `POST /api/v1/projects/{id}/generation/revisions/estimate` | 固定 reroll/inpaint 父版本、目标和成本预留，不出图 |
 | `POST /api/v1/projects/{id}/generation/revisions/jobs` | 第一次确认后创建有界 revision Job，不出图 |
-| `GET /api/v1/projects/{id}/pages/templates` | 读取本机 1–6 格模板，不访问外部服务 |
+| `GET /api/v1/projects/{id}/pages/templates` | 读取本机 16 种分页/条漫模板，不访问外部服务 |
 | `POST /api/v1/projects/{id}/pages/draft` | 从当前已生成素材创建规范 PageVersion 与 PNG |
 | `GET /api/v1/projects/{id}/pages?chapter_id=...` | 列出章节的当前页面版本 |
 | `POST /api/v1/projects/{id}/pages/{page_id}/versions` | 以乐观锁保存布局/文字新版本，仅在本机渲染 |
 | `GET /api/v1/projects/{id}/pages/{page_id}/versions/{version_id}/content` | 经本地会话保护读取规范页面 PNG |
 | `GET /api/v1/projects/{id}/pages/{page_id}/versions` | 列出页面不可变历史与分支 |
 | `POST /api/v1/projects/{id}/pages/{page_id}/versions/{version_id}/activate` | 以乐观锁恢复页面版本，不调用外部服务 |
+| `GET /api/v1/projects/{id}/asset-library` | 列出项目内活动或归档的可复用素材引用 |
+| `POST /api/v1/projects/{id}/asset-library` | 将同项目 ready AssetVersion 加入素材库，不复制文件 |
+| `PUT /api/v1/projects/{id}/asset-library/{item_id}` | 以乐观锁更新类型、名称、标签与备注 |
+| `POST /api/v1/projects/{id}/asset-library/{item_id}/archive` | 可恢复归档，不影响既有 PageVersion |
 | `POST /api/v1/panels/{id}/reroll` | 创建单格新 seed 任务 |
 | `POST /api/v1/panels/{id}/inpaint` | 固化父素材、蒙版和局部重绘任务 |
 | `POST /api/v1/pages/{id}/reroll` | 为当前页所有面板创建有界任务 |
@@ -604,7 +608,7 @@ PageVersion 是以下内容的不可变快照：
 PageVersion JSON
 → schema 校验
 → 字体授权/存在性检查
-→ 2048×3072 规范画布
+→ PageDocument v1 固定画布或 v2 有界动态画布
 → 格框与图像裁切
 → 气泡/旁白/音效/页码
 → 溢出、遮挡和阅读顺序检查
@@ -615,7 +619,9 @@ PageVersion JSON
 
 浏览器和后端共享坐标模型与文本测量测试，但正式导出以后端为准。前端显示“预览与正式渲染差异”警告，黄金页面测试比较像素差、文字边界和页序。
 
-当前实现固定 2048 × 3072 像素坐标、六种 1–6 格模板、10 px 黑色格框、灰度面板素材、对白椭圆、旁白圆角框、描边音效字和页码。素材以 cover-crop 加焦点与缩放参数放置；中文按字符换行，无法在边界内排下时拒绝版本而不生成不可读页面。PNG 压缩参数、渲染器版本和字体文件 SHA-256 写入 PageVersion，同一输入的回归测试比较完整文件哈希。`comic_pages` 保存当前指针，`page_versions` 内容只追加并可用 `source_job_id` 回溯 revision Job，`mask_assets` 固定父素材和蒙版哈希。
+PageDocument v1 继续固定 2048 × 3072、黑白、左到右，保证既有页面可重现。v2 使用有界动态画布（宽 512–4096、高 512–16000，总像素不超过 3200 万），支持 `grayscale / color`、LTR/RTL/从上到下和十六进制底色。模板共 16 种：六种基础 1–6 格分页、四种对开/主镜头/RTL 分页和六种 1440 px 宽竖向条漫。所有格框和文字矩形必须落在选定画布内。
+
+Pillow renderer v2 按 `color_mode` 明确保留 RGB 或转灰度，再绘制 10 px 格框、对白椭圆、旁白圆角框、描边音效字和可选页码。素材以 cover-crop 加焦点与缩放参数放置；中文按字符换行，无法在边界内排下时拒绝版本而不生成不可读页面。PNG 压缩参数、画布 profile、渲染器版本和字体 SHA-256 进入 PageVersion 哈希；同一输入比较完整文件哈希。`comic_pages` 保存当前指针，`page_versions` 只追加并可用 `source_job_id` 回溯 revision Job，`mask_assets` 固定父素材和蒙版哈希。
 
 ## 13. 导出与恢复
 
@@ -631,20 +637,24 @@ PageVersion JSON
 
 ### 13.2 发布格式
 
-- PNG：零填充页号，2048×3072；
+- PNG：零填充页号，尺寸与每个冻结 PageVersion 一致；
 - PDF：与 PNG 同页序，尽量保留矢量中文文字；
 - CBZ：复用最终 PNG 与漫画元数据；
 - 发布格式不包含小说正文、参考图原件、提示词、Token、调试日志或废弃版本。
 
 导出先写独立 staging 目录，全部格式通过页数、尺寸、页序、打开测试和秘密扫描后，才登记 ExportRevision。
 
-当前数据库 schema 为 v14。`export_revisions` 冻结按阅读顺序排列的 PageVersion、版本号、尺寸和渲染 SHA-256，并登记发布前秘密扫描摘要；`export_files` 逐文件登记类型、序号、大小与 SHA-256；`recovery_runs` 只持久化脱敏的本地完整性计数。工程包 schema v1.2 在 ContinuityLedger 版本与审批之外增加整本计划和逐章快照。Exporter 生成逐页 PNG、由相同 PNG 合成的 PDF、带 `ComicInfo.xml` 的 CBZ，以及含 `records.json`/文件清单的 `.manga-maker.zip`。只有四种结果和解包后的 ZIP 条目全部完成凭证字节扫描，staging 才原子移动到正式导出目录并提交 `completed`；失败版本只登记安全错误码，之前的成功目录和哈希不变。
+当前数据库 schema 为 v15。`export_revisions` 冻结按阅读顺序排列的 PageVersion、版本号、实际尺寸、颜色模式、阅读方向和渲染 SHA-256，并登记发布前秘密扫描摘要；`export_files` 逐文件登记类型、序号、大小与 SHA-256；`recovery_runs` 只持久化脱敏的本地完整性计数。工程包 schema v1.3 在 ContinuityLedger、整本计划之外增加素材库引用。Exporter 生成逐页 PNG、由相同 PNG 合成且允许不同页尺寸的 PDF、写入 RTL 阅读元数据的 CBZ，以及含 `records.json`/文件清单的 `.manga-maker.zip`。只有四种结果和解包后的 ZIP 条目全部完成凭证字节扫描，staging 才原子移动到正式导出目录并提交 `completed`；失败版本只登记安全错误码，之前的成功目录和哈希不变。
 
 ### 13.3 跨章节连续性账本
 
 `continuity_ledgers` 为每个项目保存一个稳定账本，`continuity_ledger_versions` 只追加不可变 JSON 快照，`continuity_approvals` 独立保存用户批准证据。账本必须按当前章节集的序号推进；每次草拟只读取该章当前已审批的 Storyboard 与 CharacterBible，不调用模型。状态项用稳定 key 跨版本保留 entry ID，覆盖角色、服装、道具、场景和剧情五类，并保留来源章节与分格。
 
 手工修改先与父版本比较，再扫描序号更大的当前已审批 Storyboard：角色/服装按人物名，道具/场景按可见文本，剧情变化保守命中未来分格。影响报告只提供审稿范围，不自动修改分镜或启动图片生成。上游分镜或角色设定变化后，未批准账本不能沿用旧来源；进入下一章前必须批准当前版本。
+
+### 13.4 可复用素材库
+
+`asset_library_items` 只保存项目 ID、来源 AssetVersion、类型、名称、标签、备注、状态和乐观锁 revision，不保存第二份图片。来源必须是同项目 `ready` 的不可变素材；成为素材库条目后，可以被不同 panel 的 PageDocument 引用。归档只隐藏条目，不撤销既有页面引用；恢复重新显示条目，不访问 NovelAI。内容读取仍经过本地会话校验和工作区路径边界。工程包恢复先重映射 AssetVersion，再通过外键和 JSON 重映射保持素材库与页面引用一致。
 
 工程包导入首先只把上传内容放入应用级 import staging，并在不解压到工作区的情况下检查重复名、绝对路径、反斜杠、`..`、符号链接、文件数、单文件/总展开大小、压缩比、schema、对象计数、清单完整性、逐文件 SHA-256 和可用磁盘空间。用户第二次确认后，才在新的 project staging 解出清单允许的文件。项目 ID 冲突会为所有主键和外键生成新 UUIDv7，同时递归更新版本 JSON 引用、重算文档哈希并保留 `source_project_id`；任何失败把半成品留在 orphan 边界，不覆盖既有项目。
 
@@ -719,7 +729,7 @@ MM-011 已保存经审阅的官方 Swagger 快照元数据：URL、抓取时间�
 | Schema | Storyboard、Bible、GenerationSpec、PageVersion、工程包 |
 | NovelAI mock | 连接和图像 201、401/403/余额/429/5xx、发送前网络失败、发送后结果不明、异常 JSON/base64/尺寸、Precise Reference 和有界重试已实现 |
 | 恢复 | 每个两阶段提交断点、在途请求崩溃、staging reconciliation、取消/暂停 |
-| 渲染 | 1–6 格模板、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
+| 渲染 | 16 种分页/条漫模板、彩色/灰度、RTL、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
 | E2E mock | TXT 到四类导出、单格/整页 reroll、inpaint、历史恢复 |
 | 真实 smoke | 用户确认后一次低成本连接与生成，记录完整证据 |
 | 真实单章 | 授权章节的成本、耗时、失败率和人工一致性抽检 |

@@ -17,6 +17,7 @@ from .api.continuity import router as continuity_router
 from .api.exports import router as exports_router
 from .api.generation import router as generation_router
 from .api.health import router as health_router
+from .api.library import router as library_router
 from .api.novelai import router as novelai_router
 from .api.pages import router as pages_router
 from .api.projects import router as projects_router
@@ -34,6 +35,7 @@ from .generation.executor import GenerationExecutor
 from .generation.queue import GenerationQueueService
 from .generation.revisions import RevisionService
 from .ingestion.txt import TxtIngestionService
+from .library.service import AssetLibraryService
 from .novelai.service import NovelAIService
 from .pages.service import PageService
 from .projects import ProjectService
@@ -59,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     book_production = BookProductionService(database, generation_queue)
     asset_store = AssetStore(database, generation_queue)
     pages = PageService(database)
+    asset_library = AssetLibraryService(database)
     revisions = RevisionService(database, generation_queue, pages)
     secret_scanner = SecretScanner(vault)
     exports = ExportService(database, projects, secret_scanner)
@@ -108,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.asset_store = asset_store
     app.state.generation_executor = generation_executor
     app.state.pages = pages
+    app.state.asset_library = asset_library
     app.state.revisions = revisions
     app.state.exports = exports
     app.state.recovery = recovery
@@ -127,6 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(novelai_router)
     app.include_router(generation_router)
     app.include_router(pages_router)
+    app.include_router(library_router)
     app.include_router(exports_router)
     app.include_router(recovery_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)

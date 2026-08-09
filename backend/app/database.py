@@ -810,6 +810,28 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON book_production_chapters(book_plan_id, ordinal);
         """,
     ),
+    (
+        15,
+        """
+        CREATE TABLE asset_library_items (
+            library_item_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            source_asset_version_id TEXT NOT NULL REFERENCES asset_versions(asset_version_id),
+            kind TEXT NOT NULL CHECK(kind IN ('character', 'prop', 'location', 'panel')),
+            name TEXT NOT NULL CHECK(length(name) >= 1 AND length(name) <= 120),
+            tags_json TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, source_asset_version_id)
+        );
+
+        CREATE INDEX asset_library_by_project
+        ON asset_library_items(project_id, status, kind, created_at);
+        """,
+    ),
 )
 
 

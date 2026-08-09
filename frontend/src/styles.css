@@ -544,6 +544,66 @@ h1 {
   gap: 14px;
 }
 
+.page-profile-controls,
+.asset-library-create {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid rgb(31 93 73 / 18%);
+  border-radius: 11px;
+  background: rgb(231 241 235 / 54%);
+}
+
+.page-profile-controls label,
+.asset-library-create label {
+  display: grid;
+  gap: 6px;
+}
+
+.page-profile-controls > span {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.asset-library-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid rgb(136 95 43 / 22%);
+  border-radius: 12px;
+  background: #f8f4eb;
+}
+
+.asset-library-panel h3,
+.asset-library-panel small {
+  margin: 0;
+}
+
+.asset-library-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 9px;
+}
+
+.asset-library-list article {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid rgb(25 24 21 / 12%);
+  border-radius: 10px;
+  background: #fffdf8;
+}
+
+.asset-library-list span,
+.asset-library-list small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .page-panel-controls,
 .page-text-controls {
   margin-top: 12px;

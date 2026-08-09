@@ -9,14 +9,14 @@ from typing import cast
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
-from .models import PAGE_HEIGHT, PAGE_WIDTH, PageDocument, PixelRect, TextLayer
+from .models import PageDocument, PixelRect, TextLayer
 
 DEFAULT_CJK_FONT_PATHS = (
     Path("/System/Library/Fonts/STHeiti Medium.ttc"),
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
     Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
 )
-RENDERER_VERSION = "pillow-page-renderer-1"
+RENDERER_VERSION = "pillow-page-renderer-2"
 
 
 class PageRenderError(ValueError):
@@ -40,7 +40,11 @@ class PageRenderer:
             raise PageRenderError("a local CJK font is required for page rendering")
 
     def render(self, document: PageDocument, asset_paths: dict[str, Path]) -> RenderedPage:
-        canvas = Image.new("RGB", (PAGE_WIDTH, PAGE_HEIGHT), color="white")
+        canvas = Image.new(
+            "RGB",
+            (document.width, document.height),
+            color=document.background_color,
+        )
         draw = ImageDraw.Draw(canvas)
         for placement in document.panels:
             path = asset_paths.get(placement.asset_version_id)
@@ -53,14 +57,23 @@ class PageRenderer:
                 focal_x=placement.focal_x,
                 focal_y=placement.focal_y,
                 zoom=placement.zoom,
-            ).convert("L").convert("RGB")
+            )
+            if document.color_mode == "grayscale":
+                fitted = fitted.convert("L").convert("RGB")
+            else:
+                fitted = fitted.convert("RGB")
             canvas.paste(fitted, (placement.frame.x, placement.frame.y))
             draw.rectangle(rectangle(placement.frame), outline="black", width=10)
 
         for layer in document.text_layers:
             self._draw_text_layer(draw, layer)
         if document.show_page_number:
-            self._draw_page_number(draw, document.page_number)
+            self._draw_page_number(
+                draw,
+                document.page_number,
+                width=document.width,
+                height=document.height,
+            )
 
         output = BytesIO()
         canvas.save(output, format="PNG", optimize=False, compress_level=9)
@@ -68,8 +81,8 @@ class PageRenderer:
         return RenderedPage(
             png_bytes=payload,
             sha256=hashlib.sha256(payload).hexdigest(),
-            width=PAGE_WIDTH,
-            height=PAGE_HEIGHT,
+            width=document.width,
+            height=document.height,
             renderer_version=RENDERER_VERSION,
             font_sha256=file_sha256(self.font_path),
         )
@@ -117,13 +130,15 @@ class PageRenderer:
                 draw.text((x, y), line, font=font, fill="black", stroke_width=1)
             y += line_height
 
-    def _draw_page_number(self, draw: ImageDraw.ImageDraw, page_number: int) -> None:
+    def _draw_page_number(
+        self, draw: ImageDraw.ImageDraw, page_number: int, *, width: int, height: int
+    ) -> None:
         font = load_font(self.font_path, 38)
         text = str(page_number)
         box = draw.textbbox((0, 0), text, font=font)
-        width = box[2] - box[0]
+        text_width = box[2] - box[0]
         draw.text(
-            ((PAGE_WIDTH - width) // 2, PAGE_HEIGHT - 82),
+            ((width - text_width) // 2, height - 82),
             text,
             font=font,
             fill="black",

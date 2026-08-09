@@ -124,7 +124,23 @@ def test_page_templates_cover_one_to_six_panels(
         f"/api/v1/projects/{prepared['project_id']}/pages/templates"
     )
     assert response.status_code == 200
-    assert [item["panel_count"] for item in response.json()] == [1, 2, 3, 4, 5, 6]
+    templates = response.json()
+    assert [item["panel_count"] for item in templates[:6]] == [1, 2, 3, 4, 5, 6]
+    assert len(templates) == 16
+    assert {item["layout_mode"] for item in templates} == {"page", "vertical_strip"}
+    assert next(item for item in templates if item["template_id"] == "strip-6") == {
+        "template_id": "strip-6",
+        "label": "6 格·竖向条漫",
+        "panel_count": 6,
+        "width": 1440,
+        "height": 9484,
+        "reading_direction": "top_to_bottom",
+        "layout_mode": "vertical_strip",
+        "frames": [
+            {"x": 96, "y": 96 + index * 1536, "width": 1248, "height": 1500}
+            for index in range(6)
+        ],
+    }
 
 
 def prepare_page(

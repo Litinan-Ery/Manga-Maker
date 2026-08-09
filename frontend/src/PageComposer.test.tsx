@@ -24,7 +24,13 @@ it("edits and rerenders a page locally without starting an image request", async
     const url = String(path);
     const method = init?.method ?? "GET";
     if (url.endsWith("/pages/templates") && method === "GET") {
-      return Promise.resolve(jsonResponse([pageTemplate]));
+      return Promise.resolve(jsonResponse([pageTemplate, stripTemplate]));
+    }
+    if (url.includes("/asset-library?include_archived=false") && method === "GET") {
+      return Promise.resolve(jsonResponse([]));
+    }
+    if (url.endsWith("/asset-library") && method === "POST") {
+      return Promise.resolve(jsonResponse(libraryItem, 201));
     }
     if (url.includes("/pages?chapter_id=chapter-1") && method === "GET") {
       return Promise.resolve(jsonResponse([]));
@@ -74,6 +80,16 @@ it("edits and rerenders a page locally without starting an image request", async
   fireEvent.click(draft);
   expect(await screen.findByText(/未调用任何图像 API/)).toBeInTheDocument();
 
+  fireEvent.change(screen.getByLabelText("颜色"), { target: { value: "color" } });
+  fireEvent.change(screen.getByLabelText("分页与条漫模板"), {
+    target: { value: "strip-1" },
+  });
+  fireEvent.change(screen.getByLabelText("素材名称"), {
+    target: { value: "雨夜街景" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "加入素材库" }));
+  expect(await screen.findByText(/没有复制文件或调用图像 API/)).toBeInTheDocument();
+
   fireEvent.change(await screen.findByLabelText("文字"), {
     target: { value: "雨停了，街灯还亮着。" },
   });
@@ -88,6 +104,10 @@ it("edits and rerenders a page locally without starting an image request", async
   const payload = JSON.parse(String(saveCall?.[1]?.body));
   expect(payload.expected_revision).toBe(1);
   expect(payload.document.text_layers[0].text).toBe("雨停了，街灯还亮着。");
+  expect(payload.document.schema_version).toBe("2.0");
+  expect(payload.document.color_mode).toBe("color");
+  expect(payload.document.reading_direction).toBe("top_to_bottom");
+  expect([payload.document.width, payload.document.height]).toEqual([1440, 1804]);
   expect(
     fetchMock.mock.calls.some(([path]) =>
       /\/generation\/jobs|\/novelai|\/execute/.test(String(path)),
@@ -117,7 +137,41 @@ const pageTemplate = {
   template_id: "grid-1",
   label: "单格",
   panel_count: 1,
+  width: 2048,
+  height: 3072,
+  reading_direction: "left_to_right",
+  layout_mode: "page",
   frames: [{ x: 96, y: 96, width: 1856, height: 2748 }],
+};
+
+const stripTemplate = {
+  template_id: "strip-1",
+  label: "1 格·竖向条漫",
+  panel_count: 1,
+  width: 1440,
+  height: 1804,
+  reading_direction: "top_to_bottom",
+  layout_mode: "vertical_strip",
+  frames: [{ x: 96, y: 96, width: 1248, height: 1500 }],
+};
+
+const libraryItem = {
+  library_item_id: "library-1",
+  project_id: "project-1",
+  source_asset_version_id: "asset-version-1",
+  source_panel_id: "panel-1",
+  kind: "panel",
+  name: "雨夜街景",
+  tags: [],
+  notes: "",
+  status: "active",
+  revision: 1,
+  image_sha256: "a".repeat(64),
+  width: 832,
+  height: 1216,
+  created_at: "2026-08-09 12:00:00",
+  updated_at: "2026-08-09 12:00:00",
+  external_requests_started: 0,
 };
 
 function pageVersion(version: number, text: string) {
@@ -145,6 +199,8 @@ function pageVersion(version: number, text: string) {
       width: 2048 as const,
       height: 3072 as const,
       reading_direction: "left_to_right" as const,
+      color_mode: "grayscale" as const,
+      background_color: "#ffffff",
       language: "zh-Hans" as const,
       template_id: "grid-1",
       storyboard_version_id: "storyboard-version-1",

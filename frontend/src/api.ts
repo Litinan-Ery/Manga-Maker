@@ -351,12 +351,14 @@ export interface PageTextLayer {
 }
 
 export interface PageDocument {
-  schema_version: "1.0";
+  schema_version: "1.0" | "2.0";
   page_id: string;
   page_number: number;
-  width: 2048;
-  height: 3072;
-  reading_direction: "left_to_right";
+  width: number;
+  height: number;
+  reading_direction: "left_to_right" | "right_to_left" | "top_to_bottom";
+  color_mode: "grayscale" | "color";
+  background_color: string;
   language: "zh-Hans";
   template_id: string;
   storyboard_version_id: string;
@@ -395,8 +397,10 @@ export interface ExportPageSelection {
   page_version_id: string;
   version: number;
   render_sha256: string;
-  width: 2048;
-  height: 3072;
+  width: number;
+  height: number;
+  reading_direction: PageDocument["reading_direction"];
+  color_mode: PageDocument["color_mode"];
 }
 
 export interface ExportPreflight {
@@ -404,7 +408,7 @@ export interface ExportPreflight {
   project_title: string;
   chapter_id: string;
   chapter_title: string;
-  schema_version: "1.0";
+  schema_version: "1.0" | "1.1";
   page_count: number;
   pages: ExportPageSelection[];
   blockers: string[];
@@ -452,7 +456,7 @@ export interface ImportPreflight {
   package_sha256: string;
   source_project_id: string;
   source_title: string;
-  schema_version: "1.0" | "1.1" | "1.2";
+  schema_version: "1.0" | "1.1" | "1.2" | "1.3";
   file_count: number;
   expanded_bytes: number;
   record_counts: Record<string, number>;
@@ -674,7 +678,30 @@ export interface PageTemplate {
   template_id: string;
   label: string;
   panel_count: number;
+  width: number;
+  height: number;
+  reading_direction: PageDocument["reading_direction"];
+  layout_mode: "page" | "vertical_strip";
   frames: PixelRect[];
+}
+
+export interface AssetLibraryItem {
+  library_item_id: string;
+  project_id: string;
+  source_asset_version_id: string;
+  source_panel_id: string;
+  kind: "character" | "prop" | "location" | "panel";
+  name: string;
+  tags: string[];
+  notes: string;
+  status: "active" | "archived";
+  revision: number;
+  image_sha256: string;
+  width: number;
+  height: number;
+  created_at: string;
+  updated_at: string;
+  external_requests_started: 0;
 }
 
 export interface DialogueLine {
@@ -1483,6 +1510,90 @@ export function listPageTemplates(projectId: string): Promise<PageTemplate[]> {
     {},
     false,
   );
+}
+
+export function listAssetLibrary(
+  projectId: string,
+  includeArchived = false,
+): Promise<AssetLibraryItem[]> {
+  return request<AssetLibraryItem[]>(
+    `/api/v1/projects/${projectId}/asset-library?include_archived=${includeArchived}`,
+    {},
+    false,
+  );
+}
+
+export function createAssetLibraryItem(
+  projectId: string,
+  input: {
+    source_asset_version_id: string;
+    kind: AssetLibraryItem["kind"];
+    name: string;
+    tags: string[];
+    notes: string;
+  },
+): Promise<AssetLibraryItem> {
+  return request<AssetLibraryItem>(
+    `/api/v1/projects/${projectId}/asset-library`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    true,
+  );
+}
+
+export function updateAssetLibraryItem(
+  projectId: string,
+  item: AssetLibraryItem,
+  input: Pick<AssetLibraryItem, "kind" | "name" | "tags" | "notes">,
+): Promise<AssetLibraryItem> {
+  return request<AssetLibraryItem>(
+    `/api/v1/projects/${projectId}/asset-library/${item.library_item_id}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, expected_revision: item.revision }),
+    },
+    true,
+  );
+}
+
+export function setAssetLibraryItemArchived(
+  projectId: string,
+  item: AssetLibraryItem,
+  archived: boolean,
+): Promise<AssetLibraryItem> {
+  return request<AssetLibraryItem>(
+    `/api/v1/projects/${projectId}/asset-library/${item.library_item_id}/${archived ? "archive" : "restore"}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: item.revision }),
+    },
+    true,
+  );
+}
+
+export async function getAssetLibraryImage(
+  projectId: string,
+  libraryItemId: string,
+): Promise<Blob> {
+  if (!localSessionToken || !localCsrfToken) {
+    throw new ApiError("本地会话已失效，请重新运行 Manga Maker 启动器。", 401);
+  }
+  const response = await fetch(
+    `/api/v1/projects/${projectId}/asset-library/${libraryItemId}/content`,
+    {
+      headers: {
+        "X-Manga-Maker-Session": localSessionToken,
+        "X-CSRF-Token": localCsrfToken,
+      },
+    },
+  );
+  if (!response.ok) throw new ApiError("无法读取素材库图像。", response.status);
+  return response.blob();
 }
 
 export function listComicPages(

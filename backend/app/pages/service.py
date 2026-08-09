@@ -15,7 +15,7 @@ from ..generation.assets import canonical_json, fsync_directory, write_synced
 from ..ids import uuid7
 from .models import PageDocument, PanelPlacement, PixelRect, TextLayer
 from .renderer import PageRenderer, PageRenderError, RenderedPage
-from .templates import PageTemplate, template_for_count, templates
+from .templates import PageTemplate, all_templates, template_for_count
 
 
 class PageService:
@@ -24,7 +24,7 @@ class PageService:
         self.renderer = renderer or PageRenderer()
 
     def template_payloads(self) -> list[dict[str, object]]:
-        return [page_template.payload() for page_template in templates()]
+        return [page_template.payload() for page_template in all_templates()]
 
     def require_project(self, project_id: str) -> None:
         self._require_project(project_id)
@@ -553,7 +553,15 @@ class PageService:
                     FROM asset_versions av
                     JOIN projects p ON p.project_id = av.project_id
                     WHERE av.project_id = ? AND av.asset_version_id = ?
-                      AND av.panel_id = ? AND av.status = 'ready'
+                      AND av.status = 'ready'
+                      AND (
+                        av.panel_id = ?
+                        OR EXISTS (
+                          SELECT 1 FROM asset_library_items library
+                          WHERE library.project_id = av.project_id
+                            AND library.source_asset_version_id = av.asset_version_id
+                        )
+                      )
                     """,
                     (project_id, placement.asset_version_id, placement.panel_id),
                 ).fetchone()

@@ -19,11 +19,12 @@ from ..database import Database
 from ..errors import ApplicationError
 from ..generation.assets import canonical_json, fsync_directory, write_synced
 from ..ids import uuid7
+from ..pages.models import PageDocument
 from ..projects import PROJECT_DIRECTORIES, ProjectService
 from ..safety import SecretScanner
 
-EXPORT_SCHEMA_VERSION = "1.0"
-PACKAGE_SCHEMA_VERSION = "1.2"
+EXPORT_SCHEMA_VERSION = "1.1"
+PACKAGE_SCHEMA_VERSION = "1.3"
 MAX_PACKAGE_COMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_PACKAGE_FILES = 20_000
 MAX_PACKAGE_FILE_BYTES = 512 * 1024 * 1024
@@ -150,6 +151,7 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
            WHERE j.project_id = ?""",
     ),
     ("asset_versions", "SELECT * FROM asset_versions WHERE project_id = ?"),
+    ("asset_library_items", "SELECT * FROM asset_library_items WHERE project_id = ?"),
     ("comic_pages", "SELECT * FROM comic_pages WHERE project_id = ?"),
     (
         "page_versions",
@@ -597,19 +599,21 @@ class ExportService:
             if _sha256_file(candidate) != row["render_sha256"]:
                 raise ApplicationError("EXPORT_PAGE_DAMAGED", "页面渲染哈希不匹配。", 409)
             try:
+                document = PageDocument.model_validate_json(str(row["document_json"]))
                 with Image.open(candidate) as image:
                     image.verify()
                 with Image.open(candidate) as image:
-                    if image.size != (2048, 3072) or image.format != "PNG":
+                    if image.size != (document.width, document.height) or image.format != "PNG":
                         raise ValueError
             except (OSError, ValueError) as exc:
                 raise ApplicationError(
-                    "EXPORT_PAGE_INVALID", "页面必须是 2048 x 3072 的有效 PNG。", 409
+                    "EXPORT_PAGE_INVALID", "页面必须是与页面文档尺寸一致的有效 PNG。", 409
                 ) from exc
         return list(pages), project, chapter
 
     @staticmethod
     def _selection_entry(row: sqlite3.Row, ordinal: int) -> dict[str, Any]:
+        document = PageDocument.model_validate_json(str(row["document_json"]))
         return {
             "ordinal": ordinal,
             "page_id": str(row["page_id"]),
@@ -617,8 +621,10 @@ class ExportService:
             "page_version_id": str(row["page_version_id"]),
             "version": int(row["version"]),
             "render_sha256": str(row["render_sha256"]),
-            "width": 2048,
-            "height": 3072,
+            "width": document.width,
+            "height": document.height,
+            "reading_direction": document.reading_direction,
+            "color_mode": document.color_mode,
         }
 
     @staticmethod
@@ -726,7 +732,10 @@ class ExportService:
         ElementTree.SubElement(comic_info, "Series").text = str(plan["project_title"])
         ElementTree.SubElement(comic_info, "PageCount").text = str(len(png_paths))
         ElementTree.SubElement(comic_info, "LanguageISO").text = "zh-CN"
-        ElementTree.SubElement(comic_info, "Manga").text = "No"
+        directions = {str(page["reading_direction"]) for page in plan["pages"]}
+        ElementTree.SubElement(comic_info, "Manga").text = (
+            "YesAndRightToLeft" if directions == {"right_to_left"} else "No"
+        )
         pages = ElementTree.SubElement(comic_info, "Pages")
         for index in range(len(png_paths)):
             ElementTree.SubElement(pages, "Page", Image=str(index), Type="Story")
@@ -755,7 +764,7 @@ class ExportService:
         ]
         manifest = {
             "schema_version": PACKAGE_SCHEMA_VERSION,
-            "minimum_database_schema": 11,
+            "minimum_database_schema": 15,
             "source_project_id": plan["project_id"],
             "source_title": plan["project_title"],
             "export_revision_id": export_revision_id,
@@ -845,7 +854,8 @@ class ExportService:
             with Image.open(png) as image:
                 image.verify()
             with Image.open(png) as image:
-                if image.size != (2048, 3072):
+                expected = plan["pages"][index - 1]
+                if image.size != (expected["width"], expected["height"]):
                     raise ApplicationError("EXPORT_VALIDATION_FAILED", "PNG 尺寸无效。", 500)
         pdf_payload = (staging / "manga.pdf").read_bytes()
         if (

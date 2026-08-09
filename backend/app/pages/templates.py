@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import PAGE_HEIGHT, PAGE_WIDTH, PixelRect
+from .models import PAGE_HEIGHT, PAGE_WIDTH, STRIP_WIDTH, PixelRect
 
 PAGE_MARGIN = 96
 PAGE_NUMBER_SPACE = 112
@@ -15,6 +15,10 @@ class PageTemplate:
     template_id: str
     label: str
     frames: tuple[PixelRect, ...]
+    width: int = PAGE_WIDTH
+    height: int = PAGE_HEIGHT
+    reading_direction: str = "left_to_right"
+    layout_mode: str = "page"
 
     @property
     def panel_count(self) -> int:
@@ -25,6 +29,10 @@ class PageTemplate:
             "template_id": self.template_id,
             "label": self.label,
             "panel_count": self.panel_count,
+            "width": self.width,
+            "height": self.height,
+            "reading_direction": self.reading_direction,
+            "layout_mode": self.layout_mode,
             "frames": [frame.model_dump(mode="json") for frame in self.frames],
         }
 
@@ -121,8 +129,110 @@ def template_for_count(panel_count: int) -> PageTemplate:
         raise ValueError("page templates support one to six panels") from exc
 
 
+def advanced_templates() -> tuple[PageTemplate, ...]:
+    left = PAGE_MARGIN
+    top = PAGE_MARGIN
+    width = PAGE_WIDTH - PAGE_MARGIN * 2
+    height = CONTENT_BOTTOM - top
+    half_width = (width - GUTTER) // 2
+    half_height = (height - GUTTER) // 2
+    third_width = (width - GUTTER * 2) // 3
+    alternatives = (
+        PageTemplate(
+            "split-2-columns",
+            "2 格·左右对开",
+            (
+                rect(left, top, half_width, height),
+                rect(left + half_width + GUTTER, top, half_width, height),
+            ),
+        ),
+        PageTemplate(
+            "focus-3-left",
+            "3 格·左主镜头",
+            (
+                rect(left, top, half_width, height),
+                rect(left + half_width + GUTTER, top, half_width, half_height),
+                rect(
+                    left + half_width + GUTTER,
+                    top + half_height + GUTTER,
+                    half_width,
+                    half_height,
+                ),
+            ),
+        ),
+        PageTemplate(
+            "focus-3-right-rtl",
+            "3 格·右主镜头 (右到左)",
+            (
+                rect(left + half_width + GUTTER, top, half_width, height),
+                rect(left, top, half_width, half_height),
+                rect(left, top + half_height + GUTTER, half_width, half_height),
+            ),
+            reading_direction="right_to_left",
+        ),
+        PageTemplate(
+            "spotlight-4",
+            "4 格·上宽下三",
+            (
+                rect(left, top, width, half_height),
+                rect(left, top + half_height + GUTTER, third_width, half_height),
+                rect(
+                    left + third_width + GUTTER,
+                    top + half_height + GUTTER,
+                    third_width,
+                    half_height,
+                ),
+                rect(
+                    left + (third_width + GUTTER) * 2,
+                    top + half_height + GUTTER,
+                    third_width,
+                    half_height,
+                ),
+            ),
+        ),
+    )
+    return (*alternatives, *strip_templates())
+
+
+def strip_templates() -> tuple[PageTemplate, ...]:
+    frame_width = STRIP_WIDTH - PAGE_MARGIN * 2
+    frame_height = 1500
+    result: list[PageTemplate] = []
+    for count in range(1, 7):
+        canvas_height = (
+            PAGE_MARGIN * 2
+            + count * frame_height
+            + (count - 1) * GUTTER
+            + PAGE_NUMBER_SPACE
+        )
+        result.append(
+            PageTemplate(
+                f"strip-{count}",
+                f"{count} 格·竖向条漫",
+                tuple(
+                    rect(
+                        PAGE_MARGIN,
+                        PAGE_MARGIN + index * (frame_height + GUTTER),
+                        frame_width,
+                        frame_height,
+                    )
+                    for index in range(count)
+                ),
+                width=STRIP_WIDTH,
+                height=canvas_height,
+                reading_direction="top_to_bottom",
+                layout_mode="vertical_strip",
+            )
+        )
+    return tuple(result)
+
+
+def all_templates() -> tuple[PageTemplate, ...]:
+    return (*templates(), *advanced_templates())
+
+
 def get_template(template_id: str) -> PageTemplate:
-    for page_template in templates():
+    for page_template in all_templates():
         if page_template.template_id == template_id:
             return page_template
     raise ValueError("unknown page template")

@@ -6,6 +6,7 @@ import io
 import json
 import zipfile
 from typing import Any
+from xml.etree import ElementTree
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -167,6 +168,110 @@ def test_failed_export_does_not_modify_previous_success(
     assert {
         item["export_file_id"]: item["sha256"] for item in current_success["files"]
     } == previous_hashes
+
+
+def test_color_vertical_strip_exports_preserve_profile_and_dimensions(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared, provider, page = prepare_page(client, session_headers)
+    project_id = prepared["project_id"]
+    templates = client.get(
+        f"/api/v1/projects/{project_id}/pages/templates"
+    ).json()
+    strip = next(item for item in templates if item["template_id"] == "strip-1")
+    document = copy.deepcopy(page["document"])
+    document.update(
+        {
+            "schema_version": "2.0",
+            "width": strip["width"],
+            "height": strip["height"],
+            "reading_direction": "top_to_bottom",
+            "color_mode": "color",
+            "background_color": "#fff4df",
+            "template_id": strip["template_id"],
+            "show_page_number": False,
+            "text_layers": [],
+        }
+    )
+    document["panels"][0]["frame"] = strip["frames"][0]
+    revised_response = client.post(
+        f"/api/v1/projects/{project_id}/pages/{page['page_id']}/versions",
+        headers=session_headers,
+        json={"expected_revision": page["page_revision"], "document": document},
+    )
+    assert revised_response.status_code == 201, revised_response.text
+    revised = revised_response.json()
+    rendered = client.get(
+        f"/api/v1/projects/{project_id}/pages/{page['page_id']}/versions/"
+        f"{revised['page_version_id']}/content",
+        headers=session_headers,
+    )
+    with Image.open(io.BytesIO(rendered.content)) as image:
+        assert image.size == (1440, 1804)
+
+    preflight = export_preflight(
+        client,
+        session_headers,
+        project_id,
+        prepared["chapter"]["chapter_id"],
+    )
+    assert preflight["schema_version"] == "1.1"
+    assert preflight["pages"][0]["width"] == 1440
+    assert preflight["pages"][0]["height"] == 1804
+    assert preflight["pages"][0]["reading_direction"] == "top_to_bottom"
+    assert preflight["pages"][0]["color_mode"] == "color"
+    exported = client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=session_headers,
+        json=export_request(preflight),
+    )
+    assert exported.status_code == 201, exported.text
+    png_file = next(item for item in exported.json()["files"] if item["kind"] == "png")
+    payload = download_file(
+        client, session_headers, project_id, exported.json(), png_file
+    )
+    with Image.open(io.BytesIO(payload)) as image:
+        assert image.size == (1440, 1804)
+    assert provider.generation_calls == 1
+
+
+def test_right_to_left_page_sets_cbz_reading_metadata(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared, provider, page = prepare_page(client, session_headers)
+    project_id = prepared["project_id"]
+    document = copy.deepcopy(page["document"])
+    document.update(
+        {
+            "schema_version": "2.0",
+            "reading_direction": "right_to_left",
+            "text_layers": [],
+        }
+    )
+    revised = client.post(
+        f"/api/v1/projects/{project_id}/pages/{page['page_id']}/versions",
+        headers=session_headers,
+        json={"expected_revision": page["page_revision"], "document": document},
+    )
+    assert revised.status_code == 201, revised.text
+    preflight = export_preflight(
+        client,
+        session_headers,
+        project_id,
+        prepared["chapter"]["chapter_id"],
+    )
+    assert preflight["pages"][0]["reading_direction"] == "right_to_left"
+    exported = client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=session_headers,
+        json=export_request(preflight),
+    ).json()
+    cbz_file = next(item for item in exported["files"] if item["kind"] == "cbz")
+    cbz = download_file(client, session_headers, project_id, exported, cbz_file)
+    with zipfile.ZipFile(io.BytesIO(cbz)) as archive:
+        comic_info = ElementTree.fromstring(archive.read("ComicInfo.xml"))
+    assert comic_info.findtext("Manga") == "YesAndRightToLeft"
+    assert provider.generation_calls == 1
 
 
 def test_import_preflight_rejects_zip_slip_symlink_and_compression_bomb(

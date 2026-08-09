@@ -7,7 +7,7 @@ from PIL import Image
 
 from backend.app.pages.models import PageDocument, PanelPlacement, PixelRect, TextLayer
 from backend.app.pages.renderer import PageRenderer
-from backend.app.pages.templates import templates
+from backend.app.pages.templates import all_templates, templates
 
 
 def test_one_to_six_panel_templates_are_bounded_and_non_overlapping() -> None:
@@ -85,6 +85,55 @@ def test_canonical_page_render_is_deterministic_and_contains_chinese_text(
         assert image.format == "PNG"
         assert image.getpixel((100, 100))[0] == image.getpixel((100, 100))[1]
         assert image.getbbox() is not None
+
+
+def test_color_vertical_strip_and_rtl_profiles_render_without_forced_grayscale(
+    tmp_path: Path,
+) -> None:
+    asset = tmp_path / "color.png"
+    Image.new("RGB", (640, 960), color=(210, 80, 30)).save(asset, format="PNG")
+    strip = next(item for item in all_templates() if item.template_id == "strip-1")
+    document = PageDocument(
+        schema_version="2.0",
+        page_id="page-color",
+        page_number=1,
+        width=strip.width,
+        height=strip.height,
+        reading_direction="top_to_bottom",
+        color_mode="color",
+        background_color="#fff4df",
+        template_id=strip.template_id,
+        storyboard_version_id="storyboard-v1",
+        panels=[
+            PanelPlacement(
+                panel_id="panel-1",
+                asset_version_id="asset-1",
+                frame=strip.frames[0],
+            )
+        ],
+        show_page_number=False,
+    )
+    rendered = PageRenderer().render(document, {"asset-1": asset})
+    with Image.open(BytesIO(rendered.png_bytes)) as image:
+        assert image.size == (1440, 1804)
+        assert image.getpixel((720, 800)) == (210, 80, 30)
+        assert image.getpixel((20, 20)) == (255, 244, 223)
+
+    rtl = document.model_copy(
+        update={
+            "page_id": "page-rtl",
+            "width": 2048,
+            "height": 3072,
+            "reading_direction": "right_to_left",
+            "template_id": "grid-1",
+            "panels": [
+                document.panels[0].model_copy(
+                    update={"frame": templates()[0].frames[0]}
+                )
+            ],
+        }
+    )
+    assert PageDocument.model_validate(rtl.model_dump()).reading_direction == "right_to_left"
 
 
 def rectangles_overlap(first: PixelRect, second: PixelRect) -> bool:
