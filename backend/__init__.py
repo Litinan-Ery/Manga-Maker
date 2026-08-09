@@ -1,0 +1,1 @@
+"""Manga Maker backend package."""
