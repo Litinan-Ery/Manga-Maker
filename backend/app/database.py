@@ -323,6 +323,99 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        7,
+        """
+        CREATE TABLE generation_jobs (
+            job_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            character_bible_version_id TEXT NOT NULL
+                REFERENCES character_bible_versions(character_bible_version_id),
+            style_bible_version_id TEXT NOT NULL
+                REFERENCES style_bible_versions(style_bible_version_id),
+            novelai_config_revision INTEGER NOT NULL CHECK(novelai_config_revision >= 1),
+            provider_model_id TEXT NOT NULL,
+            mapping_version TEXT NOT NULL,
+            contract_sha256 TEXT NOT NULL,
+            plan_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN (
+                'draft', 'awaiting_approval', 'queued', 'running', 'paused',
+                'needs_review', 'failed', 'completed', 'canceled'
+            )),
+            user_action_id TEXT NOT NULL,
+            page_count INTEGER NOT NULL CHECK(page_count >= 1),
+            panel_count INTEGER NOT NULL CHECK(panel_count >= 1),
+            max_calls INTEGER NOT NULL CHECK(max_calls >= 1),
+            max_cost_anlas INTEGER NOT NULL CHECK(max_cost_anlas >= 0),
+            estimated_cost_upper_anlas INTEGER NOT NULL
+                CHECK(estimated_cost_upper_anlas >= 0),
+            cost_basis TEXT NOT NULL,
+            calls_started INTEGER NOT NULL DEFAULT 0 CHECK(calls_started >= 0),
+            calls_completed INTEGER NOT NULL DEFAULT 0 CHECK(calls_completed >= 0),
+            recorded_cost_anlas INTEGER NOT NULL DEFAULT 0 CHECK(recorded_cost_anlas >= 0),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at TEXT,
+            paused_at TEXT,
+            completed_at TEXT
+        );
+
+        CREATE TABLE generation_job_items (
+            item_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES generation_jobs(job_id),
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 1),
+            page_id TEXT NOT NULL,
+            page_number INTEGER NOT NULL CHECK(page_number >= 1),
+            panel_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN (
+                'queued', 'running', 'needs_review', 'failed', 'completed', 'canceled'
+            )),
+            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+            cost_ceiling_anlas INTEGER NOT NULL CHECK(cost_ceiling_anlas >= 0),
+            recorded_cost_anlas INTEGER NOT NULL DEFAULT 0 CHECK(recorded_cost_anlas >= 0),
+            active_attempt_id TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(job_id, ordinal),
+            UNIQUE(job_id, panel_id)
+        );
+
+        CREATE TABLE generation_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            item_id TEXT NOT NULL REFERENCES generation_job_items(item_id),
+            attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),
+            status TEXT NOT NULL CHECK(status IN (
+                'running', 'needs_review', 'failed', 'completed', 'canceled'
+            )),
+            cost_ceiling_anlas INTEGER NOT NULL CHECK(cost_ceiling_anlas >= 0),
+            recorded_cost_anlas INTEGER CHECK(
+                recorded_cost_anlas IS NULL OR recorded_cost_anlas >= 0
+            ),
+            error_code TEXT,
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            UNIQUE(item_id, attempt_number)
+        );
+
+        CREATE UNIQUE INDEX one_global_running_generation_attempt
+        ON generation_attempts(status)
+        WHERE status = 'running';
+
+        CREATE UNIQUE INDEX one_active_generation_job_per_project
+        ON generation_jobs(project_id)
+        WHERE status IN ('queued', 'running', 'paused', 'needs_review');
+
+        CREATE INDEX generation_jobs_by_project
+        ON generation_jobs(project_id, created_at);
+
+        CREATE INDEX generation_job_items_by_job
+        ON generation_job_items(job_id, ordinal);
+        """,
+    ),
 )
 
 

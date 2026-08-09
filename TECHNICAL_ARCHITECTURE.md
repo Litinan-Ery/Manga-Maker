@@ -9,7 +9,7 @@
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器、结构化分镜版本/审批、CharacterBible、StyleBible、参考图和审批失效工作台，以及 NovelAI 固定契约、能力 profile、项目配置、错误归一化、本地 Mock 与用户点击的无出图连接测试。所有云模型链路仍只通过 Mock 验收，尚未执行真实模型调用；付费图像生产、队列、页面合成与完整导出尚未实现。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器、结构化分镜版本/审批、CharacterBible、StyleBible、参考图和审批失效工作台，NovelAI 固定契约、能力 profile、项目配置、错误归一化、本地 Mock 与用户点击的无出图连接测试，以及有界串行生成队列状态机。所有云模型链路仍只通过 Mock 验收，尚未执行真实模型调用；付费图像执行器、页面合成与完整导出尚未实现。
 
 ## 1. 架构结论
 
@@ -319,12 +319,12 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 | `GET /api/v1/projects/{id}/novelai/capabilities` | 读取固定契约哈希、allowlist 和模型能力，不联网 |
 | `PUT /api/v1/projects/{id}/novelai/config` | 保存模型、超时和本地 vault profile 引用，不保存 Token |
 | `POST /api/v1/projects/{id}/novelai/connection-test` | 用户点击触发一次标签建议查询；不出图、不自动重试 |
-| `POST /api/v1/generation-jobs/estimate` | 编译 exact specs 与成本估算，不生成 |
-| `POST /api/v1/generation-jobs` | 固化有界 Job 和用户动作 |
-| `POST /api/v1/generation-jobs/{id}/start` | 明确启动任务 |
-| `POST /api/v1/generation-jobs/{id}/pause` | 当前请求收尾后暂停 |
-| `POST /api/v1/generation-jobs/{id}/resume` | 新的人类操作，恢复未完成项 |
-| `POST /api/v1/generation-jobs/{id}/cancel` | 停止领取新项 |
+| `POST /api/v1/projects/{id}/generation/estimate` | 固定版本和 panel 清单，计算用户保守预留，不生成 |
+| `POST /api/v1/projects/{id}/generation/jobs` | 用户确认后固化有界 Job、调用/成本上限和用户动作 |
+| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/start` | 明确启动任务；MM-012 尚无图像执行器 |
+| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/pause` | 当前在途项可收尾，停止领取新项 |
+| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/resume` | 新的人类操作，恢复领取资格 |
+| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/cancel` | 取消 queued 项并保留在途结算记录 |
 | `POST /api/v1/panels/{id}/reroll` | 创建单格新 seed 任务 |
 | `POST /api/v1/panels/{id}/inpaint` | 固化父素材、蒙版和局部重绘任务 |
 | `POST /api/v1/pages/{id}/reroll` | 为当前页所有面板创建有界任务 |
@@ -505,15 +505,15 @@ stateDiagram-v2
     paused --> canceled: 取消
 ```
 
-Job 状态沿用 PRD 的统一枚举。每个 GenerationItem 另有 `pending / in_flight / succeeded / retry_wait / needs_review / failed / canceled`，避免用 Job 总状态推测单格结果。
+Job 状态沿用 PRD 的统一枚举。MM-012 的 GenerationItem 使用 `queued / running / needs_review / failed / completed / canceled`；重试等待由独立 attempt 记录承载，不用 Job 总状态推测单格结果。数据库的 partial unique index 与单写者事务共同保证全应用最多一个 `running` attempt。
 
 ### 9.3 崩溃恢复
 
 启动时：
 
 - `queued` 不自动开始；
-- `running` Job 统一恢复为 `paused`；
-- 没有远端响应证据的 `in_flight` item 进入 `needs_review`；
+- 有 `running` attempt 的 Job 和 item 进入 `needs_review`，不猜测是否计费；
+- 其余 `running` Job 恢复为 `paused`；
 - 已有完整文件但数据库未提交的 item 通过 staging reconciliation 修复；
 - 用户查看范围和已产生成本后，必须点击恢复。
 
@@ -545,6 +545,8 @@ Job 状态沿用 PRD 的统一枚举。每个 GenerationItem 另有 `pending / i
 1. `CostPolicySnapshot`：估算时使用的模型规则、参考图附加规则、来源 URL、抓取日期和哈希；
 2. `CostEstimate`：每格区间、Job 上限、参考图附加成本和风险说明；
 3. `CostRecord`：实际请求数、成功/失败/重试、供应商可验证的扣费值，或明确标记为 `estimated_only`。
+
+MM-012 尚未引入可能漂移的供应商定价公式。界面要求用户输入“每格保守预留上限”，把 panel 数量乘以该值作为队列分配上限，并明确它不是实际扣费预测。MM-013 只有在取得可审计价格规则或供应商可验证数据后，才能新增自动估算，不得把保守预留改名为实际成本。
 
 Swagger 没有为所有模型暴露稳定的实时价格和单次扣费响应。系统不得把本地成本表计算值伪装成账户实际扣费，也不为查询余额而扩大 Primary API 账户权限。用户看到的“实际”只包含供应商响应或官方可验证数据；否则显示“按规则估算”。
 

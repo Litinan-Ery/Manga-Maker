@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .adaptation.service import AdaptationService
 from .api.adaptation import router as adaptation_router
 from .api.bibles import router as bibles_router
+from .api.generation import router as generation_router
 from .api.health import router as health_router
 from .api.novelai import router as novelai_router
 from .api.projects import router as projects_router
@@ -20,6 +21,7 @@ from .bibles.service import BibleService
 from .config import Settings, get_settings
 from .database import Database
 from .errors import install_error_handlers
+from .generation.queue import GenerationQueueService
 from .ingestion.txt import TxtIngestionService
 from .novelai.service import NovelAIService
 from .projects import ProjectService
@@ -38,10 +40,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     adaptation = AdaptationService(database, ingestion, vault)
     bibles = BibleService(database, projects)
     novelai = NovelAIService(database, vault)
+    generation_queue = GenerationQueueService(database, bibles)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         database.migrate()
+        generation_queue.reconcile_startup()
         yield
         vault.lock()
 
@@ -61,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.adaptation = adaptation
     app.state.bibles = bibles
     app.state.novelai = novelai
+    app.state.generation_queue = generation_queue
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -72,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(adaptation_router)
     app.include_router(bibles_router)
     app.include_router(novelai_router)
+    app.include_router(generation_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 

@@ -154,6 +154,94 @@ export interface NovelAIConfiguration {
   last_connection_at: string | null;
 }
 
+export interface GenerationPlanPanel {
+  ordinal: number;
+  page_id: string;
+  page_number: number;
+  panel_id: string;
+  panel_order: number;
+  cost_ceiling_anlas: number;
+}
+
+export interface GenerationEstimate {
+  project_id: string;
+  chapter_id: string;
+  storyboard_version_id: string;
+  character_bible_version_id: string;
+  style_bible_version_id: string;
+  novelai_config_revision: number;
+  provider_model_id: string;
+  mapping_version: string;
+  contract_sha256: string;
+  page_count: number;
+  panel_count: number;
+  estimated_calls: number;
+  per_panel_cost_ceiling_anlas: number;
+  estimated_cost_upper_anlas: number;
+  cost_basis: "user_confirmed_per_panel_ceiling";
+  cost_notice: string;
+  plan_fingerprint: string;
+  panels: GenerationPlanPanel[];
+  external_request_created: false;
+}
+
+export type GenerationJobStatus =
+  | "draft"
+  | "awaiting_approval"
+  | "queued"
+  | "running"
+  | "paused"
+  | "needs_review"
+  | "failed"
+  | "completed"
+  | "canceled";
+
+export interface GenerationJobItem {
+  item_id: string;
+  ordinal: number;
+  page_id: string;
+  page_number: number;
+  panel_id: string;
+  status: "queued" | "running" | "needs_review" | "failed" | "completed" | "canceled";
+  attempt_count: number;
+  cost_ceiling_anlas: number;
+  recorded_cost_anlas: number;
+  active_attempt_id: string | null;
+}
+
+export interface GenerationJob {
+  job_id: string;
+  project_id: string;
+  chapter_id: string;
+  storyboard_version_id: string;
+  character_bible_version_id: string;
+  style_bible_version_id: string;
+  novelai_config_revision: number;
+  provider_model_id: string;
+  mapping_version: string;
+  contract_sha256: string;
+  plan_fingerprint: string;
+  status: GenerationJobStatus;
+  user_action_id: string;
+  page_count: number;
+  panel_count: number;
+  max_calls: number;
+  max_cost_anlas: number;
+  estimated_cost_upper_anlas: number;
+  cost_basis: string;
+  calls_started: number;
+  calls_completed: number;
+  recorded_cost_anlas: number;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  paused_at: string | null;
+  completed_at: string | null;
+  items: GenerationJobItem[];
+  external_requests_started: number;
+}
+
 export interface DialogueLine {
   speaker: string;
   text: string;
@@ -577,6 +665,74 @@ export function testNovelAIConnection(projectId: string): Promise<{
   return request(
     `/api/v1/projects/${projectId}/novelai/connection-test`,
     { method: "POST" },
+    true,
+  );
+}
+
+export function estimateGeneration(
+  projectId: string,
+  chapterId: string,
+  perPanelCostCeilingAnlas: number,
+): Promise<GenerationEstimate> {
+  return request<GenerationEstimate>(
+    `/api/v1/projects/${projectId}/generation/estimate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapter_id: chapterId,
+        per_panel_cost_ceiling_anlas: perPanelCostCeilingAnlas,
+      }),
+    },
+    true,
+  );
+}
+
+export function createGenerationJob(
+  projectId: string,
+  estimate: GenerationEstimate,
+  maxCalls: number,
+  maxCostAnlas: number,
+): Promise<GenerationJob> {
+  return request<GenerationJob>(
+    `/api/v1/projects/${projectId}/generation/jobs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapter_id: estimate.chapter_id,
+        per_panel_cost_ceiling_anlas: estimate.per_panel_cost_ceiling_anlas,
+        plan_fingerprint: estimate.plan_fingerprint,
+        max_calls: maxCalls,
+        max_cost_anlas: maxCostAnlas,
+        confirmed: true,
+      }),
+    },
+    true,
+  );
+}
+
+export function listGenerationJobs(projectId: string): Promise<GenerationJob[]> {
+  return request<GenerationJob[]>(
+    `/api/v1/projects/${projectId}/generation/jobs`,
+    {},
+    false,
+  );
+}
+
+export function transitionGenerationJob(
+  projectId: string,
+  jobId: string,
+  action: "start" | "pause" | "resume" | "cancel",
+  expectedRevision: number,
+): Promise<GenerationJob> {
+  return request<GenerationJob>(
+    `/api/v1/projects/${projectId}/generation/jobs/${jobId}/${action}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    },
     true,
   );
 }

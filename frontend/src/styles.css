@@ -167,7 +167,8 @@ h1 {
 .notice,
 .workspace,
 .credential-panel,
-.novelai-settings {
+.novelai-settings,
+.generation-console {
   margin-top: 34px;
   border: 1px solid rgb(25 24 21 / 15%);
   border-radius: 18px;
@@ -177,6 +178,44 @@ h1 {
 
 .novelai-settings {
   margin-top: 24px;
+}
+
+.generation-console {
+  margin-top: 24px;
+}
+
+.generation-estimate,
+.queue-status-card {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid rgb(25 24 21 / 12%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 60%);
+}
+
+.queue-facts {
+  margin: 0 0 14px;
+}
+
+.queue-status-card,
+.queue-status-card > div:first-child {
+  display: grid;
+  gap: 10px;
+}
+
+.queue-status-card span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.confirmation-row {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+}
+
+.confirmation-row input {
+  width: auto;
 }
 
 .contract-note,

@@ -33,7 +33,7 @@
 | 9 | MM-009 文本模型适配与结构化分镜 | P1 | Done | MM-008、MM-004 |
 | 10 | MM-010 角色表、风格板与审批门禁 | P1 | Done | MM-009 |
 | 11 | MM-011 NovelAI 契约、Mock 与连接测试 | P1 | Done | MM-004、MM-010 |
-| 12 | MM-012 有界串行生成队列 | P1 | Todo | MM-003、MM-011 |
+| 12 | MM-012 有界串行生成队列 | P1 | Done | MM-003、MM-011 |
 | 13 | MM-013 NovelAI 逐格生成与素材版本 | P1 | Todo | MM-012 |
 | 14 | MM-014 页面编辑与确定性合成 | P1 | Todo | MM-013、MM-005 |
 | 15 | MM-015 reroll、inpaint 与版本恢复 | P1 | Todo | MM-014 |
@@ -143,6 +143,7 @@
 
 - Job 固定 panel 清单、调用/成本上限和用户动作；默认串行。
 - 暂停/取消后不领取新项；重启不自动恢复付费调用。
+- 完成证据：已交付基于已审批 Storyboard/CharacterBible/StyleBible 和已验证 NovelAI 配置的确定性计划指纹，冻结有序 panel、模型映射版本、契约哈希、用户动作、每格保守成本预留、总成本与最多三倍 panel 数的调用上限；SQLite Job/Item/Attempt 状态机通过 partial unique index 与单写者事务保证全应用单在途，支持 revision 冲突保护、开始、暂停、恢复、取消、成本超限转人工审阅及启动 reconciliation。queued 项重启不自动开始，running 无在途转 paused，在途转 needs_review；55 项后端测试、10 项前端测试、ruff、mypy 和生产构建通过，图像执行器尚未接入且外部请求数为 0。
 
 ### MM-013 NovelAI 逐格生成与素材版本
 
