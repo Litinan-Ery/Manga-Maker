@@ -691,6 +691,50 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON recovery_runs(created_at, recovery_run_id);
         """,
     ),
+    (
+        13,
+        """
+        CREATE TABLE continuity_ledgers (
+            continuity_ledger_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL UNIQUE REFERENCES projects(project_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE continuity_ledger_versions (
+            continuity_version_id TEXT PRIMARY KEY,
+            continuity_ledger_id TEXT NOT NULL REFERENCES continuity_ledgers(continuity_ledger_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            parent_version_id TEXT REFERENCES continuity_ledger_versions(continuity_version_id),
+            through_chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            source_storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            source_character_bible_version_id TEXT NOT NULL
+                REFERENCES character_bible_versions(character_bible_version_id),
+            document_json TEXT NOT NULL,
+            document_sha256 TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            impact_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(continuity_ledger_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_continuity_version_per_ledger
+        ON continuity_ledger_versions(continuity_ledger_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE continuity_approvals (
+            approval_id TEXT PRIMARY KEY,
+            continuity_version_id TEXT NOT NULL UNIQUE
+                REFERENCES continuity_ledger_versions(continuity_version_id),
+            approval_hash TEXT NOT NULL,
+            approved_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX continuity_versions_by_ledger
+        ON continuity_ledger_versions(continuity_ledger_id, version);
+        """,
+    ),
 )
 
 

@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .adaptation.service import AdaptationService
 from .api.adaptation import router as adaptation_router
 from .api.bibles import router as bibles_router
+from .api.continuity import router as continuity_router
 from .api.exports import router as exports_router
 from .api.generation import router as generation_router
 from .api.health import router as health_router
@@ -22,6 +23,7 @@ from .api.recovery import router as recovery_router
 from .api.vault import router as vault_router
 from .bibles.service import BibleService
 from .config import Settings, get_settings
+from .continuity.service import ContinuityService
 from .database import Database
 from .errors import install_error_handlers
 from .exports.service import ExportService
@@ -49,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ingestion = TxtIngestionService(database, projects)
     adaptation = AdaptationService(database, ingestion, vault)
     bibles = BibleService(database, projects)
+    continuity = ContinuityService(database)
     novelai = NovelAIService(database, vault)
     generation_queue = GenerationQueueService(database, bibles)
     asset_store = AssetStore(database, generation_queue)
@@ -88,6 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.ingestion = ingestion
     app.state.adaptation = adaptation
     app.state.bibles = bibles
+    app.state.continuity = continuity
     app.state.novelai = novelai
     app.state.generation_queue = generation_queue
     app.state.asset_store = asset_store
@@ -107,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects_router)
     app.include_router(adaptation_router)
     app.include_router(bibles_router)
+    app.include_router(continuity_router)
     app.include_router(novelai_router)
     app.include_router(generation_router)
     app.include_router(pages_router)

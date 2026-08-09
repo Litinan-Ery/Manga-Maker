@@ -1,4 +1,8 @@
 :root {
+  --line: rgb(25 24 21 / 18%);
+  --muted: #6b675f;
+  --panel: #fffdf8;
+  --soft-panel: #eee9df;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #191815;
   background: #f2efe8;
@@ -122,6 +126,73 @@ h1 {
 .recovery-status h2,
 .recovery-status p {
   margin: 0.2rem 0;
+}
+
+.continuity-workbench {
+  margin-top: 2rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--line);
+}
+
+.continuity-toolbar,
+.continuity-actions,
+.continuity-summary {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.continuity-toolbar label {
+  flex: 1 1 18rem;
+}
+
+.continuity-summary {
+  align-items: center;
+  margin: 1rem 0;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  background: var(--soft-panel);
+}
+
+.continuity-group {
+  margin: 1.2rem 0;
+}
+
+.continuity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 0.8rem;
+}
+
+.continuity-grid article {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.continuity-grid article p {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.4fr) 1fr;
+  gap: 0.5rem;
+  margin: 0.45rem 0;
+  font-size: 0.88rem;
+}
+
+.continuity-grid article p span {
+  color: var(--muted);
+}
+
+.continuity-actions {
+  margin-top: 1rem;
+}
+
+.impact-report {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 12px;
+  background: var(--soft-panel);
 }
 
 .status-dot {

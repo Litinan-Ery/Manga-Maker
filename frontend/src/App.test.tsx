@@ -84,6 +84,9 @@ describe("App", () => {
           }),
         );
       }
+      if (path === "/api/v1/projects/project-1/continuity" && method === "GET") {
+        return Promise.resolve(jsonResponse({ error: { message: "尚未建立" } }, 404));
+      }
       if (path === "/api/v1/projects" && method === "POST") {
         return Promise.resolve(
           jsonResponse(

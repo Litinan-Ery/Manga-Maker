@@ -452,7 +452,7 @@ export interface ImportPreflight {
   package_sha256: string;
   source_project_id: string;
   source_title: string;
-  schema_version: "1.0";
+  schema_version: "1.0" | "1.1";
   file_count: number;
   expanded_bytes: number;
   record_counts: Record<string, number>;
@@ -496,6 +496,71 @@ export interface RecoveryReport {
     critical_findings: number;
   };
   provider_requests_started?: 0;
+  external_requests_started: 0;
+}
+
+export type ContinuityKind = "character" | "outfit" | "prop" | "location" | "plot";
+
+export interface ContinuityEntry {
+  entry_id: string;
+  kind: ContinuityKind;
+  stable_key: string;
+  name: string;
+  status: string;
+  attributes: Record<string, string>;
+  notes: string;
+  source_chapter_ids: string[];
+  source_panel_ids: string[];
+}
+
+export interface ContinuityDocument {
+  schema_version: "1.0";
+  continuity_ledger_id: string;
+  project_id: string;
+  through_chapter_id: string;
+  through_chapter_ordinal: number;
+  entries: ContinuityEntry[];
+  notes: string;
+}
+
+export interface ContinuityImpact {
+  changed_entries: Array<{
+    stable_key: string;
+    kind: ContinuityKind;
+    name: string;
+    change: "added" | "changed" | "removed";
+  }>;
+  affected_chapters: Array<{
+    chapter_id: string;
+    ordinal: number;
+    title: string;
+    panel_count: number;
+  }>;
+  affected_panel_ids: string[];
+  requires_future_review: boolean;
+  external_requests_started: 0;
+}
+
+export interface ContinuityVersion {
+  continuity_ledger_id: string;
+  continuity_version_id: string;
+  project_id: string;
+  version: number;
+  parent_version_id: string | null;
+  through_chapter_id: string;
+  through_chapter_ordinal: number;
+  through_chapter_title: string;
+  source_storyboard_version_id: string;
+  source_character_bible_version_id: string;
+  document_sha256: string;
+  document: ContinuityDocument;
+  provenance: Record<string, unknown>;
+  impact: ContinuityImpact;
+  approval_status: "draft" | "approved" | "stale";
+  approval_hash: string | null;
+  approved_at: string | null;
+  is_current: boolean;
+  created_at: string;
   external_requests_started: 0;
 }
 
@@ -715,6 +780,72 @@ export function getRecoveryReport(signal?: AbortSignal): Promise<RecoveryReport>
 export function runRecoveryCheck(): Promise<RecoveryReport> {
   return request<RecoveryReport>(
     "/api/v1/system/recovery",
+    { method: "POST" },
+    true,
+  );
+}
+
+export function getContinuity(projectId: string): Promise<ContinuityVersion> {
+  return request<ContinuityVersion>(
+    `/api/v1/projects/${projectId}/continuity`,
+    {},
+    false,
+  );
+}
+
+export function draftContinuity(
+  projectId: string,
+  chapterId: string,
+): Promise<ContinuityVersion> {
+  return request<ContinuityVersion>(
+    `/api/v1/projects/${projectId}/continuity/draft`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_id: chapterId }),
+    },
+    true,
+  );
+}
+
+export function analyzeContinuityImpact(
+  projectId: string,
+  versionId: string,
+  document: ContinuityDocument,
+): Promise<ContinuityImpact> {
+  return request<ContinuityImpact>(
+    `/api/v1/projects/${projectId}/continuity/${versionId}/impact`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document }),
+    },
+    true,
+  );
+}
+
+export function reviseContinuity(
+  projectId: string,
+  versionId: string,
+  document: ContinuityDocument,
+): Promise<ContinuityVersion> {
+  return request<ContinuityVersion>(
+    `/api/v1/projects/${projectId}/continuity/${versionId}/revisions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document }),
+    },
+    true,
+  );
+}
+
+export function approveContinuity(
+  projectId: string,
+  versionId: string,
+): Promise<ContinuityVersion> {
+  return request<ContinuityVersion>(
+    `/api/v1/projects/${projectId}/continuity/${versionId}/approve`,
     { method: "POST" },
     true,
   );

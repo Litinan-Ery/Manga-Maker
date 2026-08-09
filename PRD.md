@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v0.1 |
 | 日期 | 2026-08-09 |
-| 产品状态 | P0 离线 Mock 单章闭环已完成；启动恢复、磁盘故障、秘密扫描和四类导出已有自动化证据；真实 NovelAI 付费调用与代表性授权章节的真实生产仍未验收 |
+| 产品状态 | P0 离线 Mock 单章闭环已完成；P1 跨章节连续性账本已实现；真实 NovelAI 付费调用与代表性授权章节的真实生产仍未验收 |
 | 产品形态 | 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 | 默认成品 | 黑白分页漫画，2:3 竖版，左到右、从上到下，简体中文横排 |
@@ -254,6 +254,7 @@ draft
 | PageVersion | `page_version_id` | 布局、素材选择、文字图层、父版本 | SQLite + JSON/预览图 |
 | GenerationJob | `job_id` | 用户动作、范围、预算、状态、重试 | SQLite |
 | ExportRevision | `export_revision_id` | 页面版本清单、格式、哈希、结果 | SQLite + 导出文件 |
+| ContinuityLedger | `continuity_ledger_id` + `version` | 角色、服装、道具、场景、剧情状态、来源与影响分析 | SQLite + JSON 快照 |
 
 ### 9.2 身份与版本规则
 

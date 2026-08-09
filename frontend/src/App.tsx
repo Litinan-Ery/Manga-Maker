@@ -19,6 +19,7 @@ import {
 import { ChapterEditor } from "./ChapterEditor";
 import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
+import { ContinuityWorkbench } from "./ContinuityWorkbench";
 import { GenerationConsole } from "./GenerationConsole";
 import { ExportCenter } from "./ExportCenter";
 import { NovelAISettings } from "./NovelAISettings";
@@ -332,6 +333,11 @@ export function App() {
                 chapterSet={chapterSet}
                 onError={setActionError}
                 refreshKey={bibleRefreshKey}
+              />
+              <ContinuityWorkbench
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                onError={setActionError}
               />
               <NovelAISettings
                 projectId={selectedProjectId}

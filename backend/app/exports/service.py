@@ -23,7 +23,7 @@ from ..projects import PROJECT_DIRECTORIES, ProjectService
 from ..safety import SecretScanner
 
 EXPORT_SCHEMA_VERSION = "1.0"
-PACKAGE_SCHEMA_VERSION = "1.0"
+PACKAGE_SCHEMA_VERSION = "1.1"
 MAX_PACKAGE_COMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_PACKAGE_FILES = 20_000
 MAX_PACKAGE_FILE_BYTES = 512 * 1024 * 1024
@@ -109,6 +109,19 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
         """SELECT a.* FROM style_bible_approvals a JOIN style_bible_versions v
            ON v.style_bible_version_id = a.style_bible_version_id JOIN style_bibles b
            ON b.style_bible_id = v.style_bible_id WHERE b.project_id = ?""",
+    ),
+    ("continuity_ledgers", "SELECT * FROM continuity_ledgers WHERE project_id = ?"),
+    (
+        "continuity_ledger_versions",
+        """SELECT v.* FROM continuity_ledger_versions v JOIN continuity_ledgers l
+           ON l.continuity_ledger_id = v.continuity_ledger_id WHERE l.project_id = ?""",
+    ),
+    (
+        "continuity_approvals",
+        """SELECT a.* FROM continuity_approvals a JOIN continuity_ledger_versions v
+           ON v.continuity_version_id = a.continuity_version_id
+           JOIN continuity_ledgers l
+             ON l.continuity_ledger_id = v.continuity_ledger_id WHERE l.project_id = ?""",
     ),
     ("reference_assets", "SELECT * FROM reference_assets WHERE project_id = ?"),
     ("novelai_configs", "SELECT * FROM novelai_configs WHERE project_id = ?"),
@@ -1149,7 +1162,7 @@ class ExportService:
                         row["spec_sha256"] = hashlib.sha256(
                             str(row["document_json"]).encode()
                         ).hexdigest()
-                    if table == "page_versions":
+                    if table in ("page_versions", "continuity_ledger_versions"):
                         row["document_sha256"] = hashlib.sha256(
                             str(row["document_json"]).encode()
                         ).hexdigest()
