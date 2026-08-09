@@ -9,7 +9,7 @@
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器、结构化分镜版本/审批，以及 CharacterBible、StyleBible、参考图和审批失效工作台；模型链路仅通过 Mock 验收，尚未执行真实模型调用。NovelAI 集成、图像生产与完整导出尚未实现。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器、结构化分镜版本/审批、CharacterBible、StyleBible、参考图和审批失效工作台，以及 NovelAI 固定契约、能力 profile、项目配置、错误归一化、本地 Mock 与用户点击的无出图连接测试。所有云模型链路仍只通过 Mock 验收，尚未执行真实模型调用；付费图像生产、队列、页面合成与完整导出尚未实现。
 
 ## 1. 架构结论
 
@@ -65,6 +65,13 @@ Manga Maker P0 采用本地模块化单体：React/TypeScript 提供编辑界面
 P2 可以评估一个**完全独立的可选伴侣脚本**：在用户授权后，把选中的 NovelAI 故事内容整理为可下载文件，再由用户手工导入 Manga Maker。该能力不得绕过 Scripting 权限、不得尝试访问本机端口，也不属于 P0。
 
 ### 2.4 Image API 的 P0 接口面
+
+2026-08-09 的实现基线读取 `https://image.novelai.net/docs/doc.json`：Swagger 2.0，
+标题 `Omegalaser API`，版本 `1.0`，112,680 bytes，SHA-256 为
+`f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8`。映射版本为
+`novelai-image-2026-08-09.1`。注意同主机的 `/openapi.json` 当前标题为
+`Observability API`，只包含错误追踪能力，不是 Image API 契约。审计元数据保存在
+`contracts/novelai/`，应用启动时不会自动联网替换。
 
 P0 只允许访问 `https://image.novelai.net` 的以下路径：
 
@@ -125,13 +132,13 @@ Manga Maker 的规则：
 
 ## 3. 社区调研与采用边界
 
-调研日期为 2026-08-09。以下项目只作为设计证据，没有被下载、安装或加入依赖。
+调研日期为 2026-08-09。以下项目只作为设计证据，没有被引入仓库或安装为运行依赖。
 
 | 项目 | 许可与观察 | 可借鉴部分 | 不直接采用的原因 |
 |---|---|---|---|
 | [Aedial/novelai-api](https://github.com/Aedial/novelai-api) | MIT；Python；区分 low-level/high-level；有 schema 与 API 测试 | 供应商底层映射与高层语义分离、契约校验 | 覆盖账户登录和故事数据，README 仍展示用户名/密码取 token；与本项目最小账户权限边界不同 |
 | [caru-ini/novelai-sdk](https://github.com/caru-ini/novelai-sdk) | MIT；Python；Pydantic v2；用户模型/API 模型双层；支持 Precise Reference、多角色与 SSE | 强类型参数、两层 DTO、图片预处理和流式事件建模 | 社区 SDK 不能替代官方契约；测试和安全审计完成前不进入 P0 运行依赖 |
-| [Nya-Foundation/NekoAI-API](https://github.com/Nya-Foundation/NekoAI-API) | AGPL-3.0；异步 Python；覆盖生成、inpaint、Vibe、Director Tools、重试与节流 | 异步资源管理、错误分类、参考编码缓存思路 | AGPL 分发义务、账户凭证入口和自动重试策略需要单独评估 |
+| [Nya-Foundation/NekoAI-API](https://github.com/Nya-Foundation/NekoAI-API) | AGPL-3.0；交叉核对 commit `58e595d6f1a07aafc510eb946377df8066ade0bb`；覆盖生成、inpaint、Vibe、Director Tools、重试与节流 | 模型字符串、异步资源管理、错误分类、参考编码缓存思路 | 只记录独立观察结论，不复制代码；AGPL 分发义务、账户凭证入口和宽泛自动重试不适合 P0 |
 | [NovelAI/novelai-image-metadata](https://github.com/NovelAI/novelai-image-metadata) | NovelAI 官方 GitHub；MIT；读取/验证 PNG 隐藏元数据和签名 | 原始素材元数据检查、导入兼容性和验证测试 | 元数据不能替代 Manga Maker 自己的审计记录；官方 upscale 明确不带 NovelAI 元数据 |
 | [zhulinyv/Auto-NovelAI-Refactor](https://github.com/zhulinyv/Auto-NovelAI-Refactor) | GPL-3.0；NovelAI WebUI；批量生成、inpaint、角色分区和元数据工具 | 生成参数工作台、素材筛选、批处理可见性 | 明文 `.env`、量产导向和许可证边界不符合 P0 的本地加密凭证库、人类审批与受控负载设计 |
 | [victorhuangwq/story-to-manga](https://github.com/victorhuangwq/story-to-manga) | MIT；Next.js；故事分析、角色参考、逐格生成、渐进展示、rerun | “先角色、再分镜、再面板”的渐进体验，单格重跑入口 | 浏览器 localStorage/IndexedDB 不足以承担本项目的不可变版本、恢复和大素材单一真源 |
@@ -309,7 +316,9 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 | `POST /api/v1/projects/{id}/bibles/styles/{version_id}/revisions` | 保存不可变 StyleBible 新版本并使生成就绪失效 |
 | `POST /api/v1/projects/{id}/bibles/{kind}/{version_id}/references` | 校验授权、真实图片类型/尺寸/像素/解码与哈希后绑定参考图 |
 | `POST /api/v1/projects/{id}/bibles/{kind}/{version_id}/approve` | 独立审批角色表或风格板的精确版本哈希 |
-| `POST /api/v1/bibles/{id}/approve` | 角色/风格审批 |
+| `GET /api/v1/projects/{id}/novelai/capabilities` | 读取固定契约哈希、allowlist 和模型能力，不联网 |
+| `PUT /api/v1/projects/{id}/novelai/config` | 保存模型、超时和本地 vault profile 引用，不保存 Token |
+| `POST /api/v1/projects/{id}/novelai/connection-test` | 用户点击触发一次标签建议查询；不出图、不自动重试 |
 | `POST /api/v1/generation-jobs/estimate` | 编译 exact specs 与成本估算，不生成 |
 | `POST /api/v1/generation-jobs` | 固化有界 Job 和用户动作 |
 | `POST /api/v1/generation-jobs/{id}/start` | 明确启动任务 |
@@ -644,7 +653,7 @@ NovelAI 当前条款说明用户保留其内容权利、请求内容默认不在
 
 ### 16.1 官方契约快照
 
-实现阶段保存经审阅的官方 Swagger 快照元数据：URL、抓取时间、SHA-256、支持端点、支持模型 capability 和本地映射版本。升级前做结构 diff：
+MM-011 已保存经审阅的官方 Swagger 快照元数据：URL、抓取时间、SHA-256、支持端点、支持模型 capability 和本地映射版本。完整上游 Swagger 不在运行时自动更新；升级前做结构 diff：
 
 - 新增/删除路径；
 - 字段类型、required、enum 和响应状态变化；
@@ -659,7 +668,7 @@ NovelAI 当前条款说明用户保留其内容权利、请求内容默认不在
 |---|---|
 | 单元 | Prompt Compiler、参考图 padding、蒙版、状态机、预算、版本指针、TXT/SourceAnchor |
 | Schema | Storyboard、Bible、GenerationSpec、PageVersion、工程包 |
-| NovelAI mock | 201 JSON、401、403、429、5xx、超时、断流、损坏 base64、错误尺寸 |
+| NovelAI mock | 无出图连接成功、401、403、余额、429、5xx、超时和异常 JSON 已实现；图片 201、断流、损坏 base64、错误尺寸随 MM-013 完成 |
 | 恢复 | 每个两阶段提交断点、在途请求崩溃、staging reconciliation、取消/暂停 |
 | 渲染 | 1–6 格模板、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
 | E2E mock | TXT 到四类导出、单格/整页 reroll、inpaint、历史恢复 |

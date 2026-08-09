@@ -32,7 +32,7 @@
 | 8 | MM-008 章节修正、SourceAnchor 与 StoryBeat | P1 | Done | MM-007 |
 | 9 | MM-009 文本模型适配与结构化分镜 | P1 | Done | MM-008、MM-004 |
 | 10 | MM-010 角色表、风格板与审批门禁 | P1 | Done | MM-009 |
-| 11 | MM-011 NovelAI 契约、Mock 与连接测试 | P1 | Todo | MM-004、MM-010 |
+| 11 | MM-011 NovelAI 契约、Mock 与连接测试 | P1 | Done | MM-004、MM-010 |
 | 12 | MM-012 有界串行生成队列 | P1 | Todo | MM-003、MM-011 |
 | 13 | MM-013 NovelAI 逐格生成与素材版本 | P1 | Todo | MM-012 |
 | 14 | MM-014 页面编辑与确定性合成 | P1 | Todo | MM-013、MM-005 |
@@ -137,6 +137,7 @@
 
 - 固定官方 Swagger 哈希、能力 profile、错误分类和本地 mock。
 - 连接测试由用户点击触发，不进行隐藏图片生成。
+- 完成证据：已固定 2026-08-09 官方 `docs/doc.json` 的 URL、112,680-byte 大小、SHA-256 和映射版本，并明确排除错误的 Observability `/openapi.json`；交付 6 个模型 capability、固定 NovelAI host/path、应用本地加密 Token profile、项目非敏感配置、单次标签建议连接测试、本地 Mock，以及认证、权限、余额、限流、参数、网络、5xx 和异常响应分类。连接测试不自动重试并返回 `generated_images = 0`；49 项后端测试、9 项前端测试、ruff、mypy、契约复验、密钥扫描和生产构建通过，未执行真实 NovelAI 调用。
 
 ### MM-012 有界串行生成队列
 

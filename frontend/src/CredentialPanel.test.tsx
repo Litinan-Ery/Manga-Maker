@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -6,6 +6,7 @@ import { CredentialPanel } from "./CredentialPanel";
 import { type VaultStatus, clearLocalSession, consumeLocalSession } from "./api";
 
 afterEach(() => {
+  cleanup();
   clearLocalSession();
   window.history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
@@ -58,6 +59,38 @@ it("creates the local vault and clears credential inputs after encrypted save", 
     expect(headers.get("X-Manga-Maker-Session")).toBe("session-test");
     expect(headers.get("X-CSRF-Token")).toBe("csrf-test");
   }
+});
+
+it("saves a NovelAI token under the dedicated local provider type", async () => {
+  window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
+  consumeLocalSession();
+  const fetchMock = vi.fn((_path: RequestInfo | URL, init?: RequestInit) =>
+    Promise.resolve(
+      jsonResponse({
+        profile_id: "novelai",
+        provider: "novelai",
+        label: "NovelAI 图像生成",
+        fingerprint: "…cret",
+      }),
+    ),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <CredentialPanel
+      status={{ configured: true, unlocked: true, profiles: [] }}
+      onStatusChange={vi.fn()}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("凭证类型"), { target: { value: "novelai" } });
+  expect(screen.getByLabelText("凭证标识")).toHaveValue("novelai");
+  fireEvent.change(screen.getByLabelText("API 密钥"), { target: { value: "unit-local-secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "加密保存凭证" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  const [, init] = fetchMock.mock.calls[0];
+  expect(JSON.parse(String(init?.body))).toMatchObject({ provider: "novelai" });
+  expect(document.body.textContent).not.toContain("unit-local-secret");
 });
 
 function VaultHarness() {

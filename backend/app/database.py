@@ -300,6 +300,29 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON reference_assets(project_id, bible_kind, created_at);
         """,
     ),
+    (
+        6,
+        """
+        CREATE TABLE novelai_configs (
+            project_id TEXT PRIMARY KEY REFERENCES projects(project_id),
+            model_label TEXT NOT NULL,
+            provider_model_id TEXT NOT NULL,
+            inpaint_model_id TEXT NOT NULL,
+            credential_profile_id TEXT NOT NULL,
+            timeout_seconds REAL NOT NULL CHECK(timeout_seconds >= 1 AND timeout_seconds <= 180),
+            contract_sha256 TEXT NOT NULL,
+            mapping_version TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            last_connection_status TEXT CHECK(
+                last_connection_status IS NULL
+                OR last_connection_status IN ('ok', 'failed')
+            ),
+            last_connection_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+    ),
 )
 
 

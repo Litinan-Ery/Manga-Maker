@@ -18,6 +18,7 @@ export function CredentialPanel({ status, onStatusChange }: CredentialPanelProps
   const [confirmPassword, setConfirmPassword] = useState("");
   const [profileId, setProfileId] = useState("text-model");
   const [label, setLabel] = useState("文本模型");
+  const [provider, setProvider] = useState("openai-compatible");
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -48,7 +49,7 @@ export function CredentialPanel({ status, onStatusChange }: CredentialPanelProps
   async function handleSaveCredential(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(async () => {
-      const saved = await saveCredential(profileId, "openai-compatible", label, secret);
+      const saved = await saveCredential(profileId, provider, label, secret);
       const profiles = [
         ...(status?.profiles.filter((profile) => profile.profile_id !== saved.profile_id) ?? []),
         saved,
@@ -164,6 +165,27 @@ export function CredentialPanel({ status, onStatusChange }: CredentialPanelProps
             </ul>
           )}
           <form className="settings-form credential-form" onSubmit={(event) => void handleSaveCredential(event)}>
+            <label>
+              <span>凭证类型</span>
+              <select
+                aria-label="凭证类型"
+                value={provider}
+                onChange={(event) => {
+                  const nextProvider = event.target.value;
+                  setProvider(nextProvider);
+                  if (nextProvider === "novelai") {
+                    setProfileId("novelai");
+                    setLabel("NovelAI 图像生成");
+                  } else {
+                    setProfileId("text-model");
+                    setLabel("文本模型");
+                  }
+                }}
+              >
+                <option value="openai-compatible">文本模型（OpenAI-compatible）</option>
+                <option value="novelai">NovelAI 图像生成</option>
+              </select>
+            </label>
             <label>
               <span>凭证标识</span>
               <input

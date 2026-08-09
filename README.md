@@ -2,7 +2,7 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，计划调用 NovelAI 逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**P0 早期开发阶段。** 本地应用骨架、加密凭证库与设置界面、项目/TXT 导入、来源追溯、结构化分镜，以及角色/风格设定与审批工作台已实现并通过 Mock 验收。NovelAI、页面生成、排版、reroll 和导出尚未实现；尚未执行过真实文本模型或 NovelAI 调用。
+> 当前状态：**P0 早期开发阶段。** 本地应用骨架、加密凭证库、项目/TXT 导入、来源追溯、结构化分镜、角色/风格审批，以及 NovelAI 契约、配置和无出图连接测试已实现并通过 Mock 验收。付费图像生成、队列、排版、reroll 和导出尚未实现；尚未执行过真实文本模型或 NovelAI 调用。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)。
 
@@ -17,7 +17,8 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
 | 结构化分镜文本适配器 | 已实现（Mock 验收） | 可配置 OpenAI-compatible 端点；场景→页→格契约、来源覆盖、最多两次修复、不可变版本与审批门禁已接入界面；未做真实调用 |
 | CharacterBible、StyleBible 与参考图 | 已实现 | 从已审批分镜本地草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
-| NovelAI、排版、reroll、导出 | 未实现 | 不得把技术文档中的设计当作可用功能 |
+| NovelAI 契约、配置与连接测试 | 已实现（Mock 验收） | 固定官方 Swagger 哈希与模型能力；Token 在应用本地加密保存；连接测试须点击触发且只查标签、不出图；未做真实调用 |
+| NovelAI 付费出图、队列、排版、reroll、导出 | 未实现 | 不得把技术文档中的设计当作可用功能 |
 
 ## 本地启动
 
@@ -30,7 +31,7 @@ pnpm --dir frontend build
 uv run python -m backend.app.launcher
 ```
 
-启动器会选择本机端口并打开浏览器。运行数据默认写入 `~/Library/Application Support/Manga Maker/`，不会写入仓库。当前界面可以管理本地加密凭证、创建项目、导入 TXT、修正章节、建立来源覆盖账本、生成和审批结构化分镜，以及编辑和独立审批角色设定与黑白风格板。上传参考图后会自动创建新设定版本并撤销当前生成就绪状态。
+启动器会选择本机端口并打开浏览器。运行数据默认写入 `~/Library/Application Support/Manga Maker/`，不会写入仓库。当前界面可以管理本地加密凭证、创建项目、导入 TXT、修正章节、建立来源覆盖账本、生成和审批结构化分镜，编辑和独立审批角色设定与黑白风格板，并保存 NovelAI 模型配置。NovelAI 连接测试只在用户点击后查询标签建议，明确显示生成图片为 0 张。
 
 开发验收命令：
 
@@ -107,7 +108,6 @@ pnpm --dir frontend build
 - NovelAI 只负责无对白文字的面板画面；提示词默认要求 `no text`。
 - 本地排版器负责格框、留白、对白气泡、旁白框、音效、页码和阅读顺序。
 - 默认页面为 2:3 竖版，基准导出尺寸为 2048 × 3072 px。
-- 布局和文字始终可编辑，修改文字或格框不触发新的图像生成费用。
 
 ### 修改、reroll 与恢复
 
@@ -120,7 +120,7 @@ pnpm --dir frontend build
 ## 数据、密钥与版权边界
 
 - 小说、分镜、图片、版本和导出文件默认只保存在本机。
-- LLM 与 NovelAI 凭证计划存入 Manga Maker 自己管理的本地加密凭证库。凭证库位于应用数据目录、独立于项目工作区，使用用户主密码解锁，不写入工程包、SQLite、日志或版本库。
+- LLM 与 NovelAI 凭证存入 Manga Maker 自己管理的本地加密凭证库。凭证库位于应用数据目录、独立于项目工作区，使用用户主密码解锁，不写入工程包、SQLite、日志或版本库。
 - 日志只记录请求 ID、模型、参数摘要、状态、耗时和成本，不记录密钥或完整小说正文。
 - 用户必须拥有输入小说和参考图，或已经获得改编、处理和生成所需授权。
 - 用户必须满足所选模型供应商的年龄、账户、订阅和使用条款。
@@ -168,12 +168,14 @@ Manga Maker/
 ├── PRD.md
 ├── TECHNICAL_ARCHITECTURE.md
 ├── WORK_ITEMS.md            # 优先级、依赖、状态和验收证据
+├── contracts/novelai/       # 经审计的官方契约元数据、哈希和更新边界
 ├── pyproject.toml / uv.lock # Python 依赖与可复现锁文件
 ├── backend/app/
 │   ├── api/                 # 健康、凭证库、项目和来源 API
 │   ├── adaptation/          # Storyboard 契约与文本模型适配器
 │   ├── bibles/              # 角色/风格版本、参考图与审批门禁
-│   └── ingestion/           # TXT、章节、锚点和剧情节拍
+│   ├── ingestion/           # TXT、章节、锚点和剧情节拍
+│   └── novelai/             # 能力 profile、错误归一化、Mock 和安全连接测试
 ├── frontend/                # React/TypeScript 本地操作界面
 └── tests/                   # 后端单元/接口测试
 ```

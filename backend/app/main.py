@@ -13,6 +13,7 @@ from .adaptation.service import AdaptationService
 from .api.adaptation import router as adaptation_router
 from .api.bibles import router as bibles_router
 from .api.health import router as health_router
+from .api.novelai import router as novelai_router
 from .api.projects import router as projects_router
 from .api.vault import router as vault_router
 from .bibles.service import BibleService
@@ -20,6 +21,7 @@ from .config import Settings, get_settings
 from .database import Database
 from .errors import install_error_handlers
 from .ingestion.txt import TxtIngestionService
+from .novelai.service import NovelAIService
 from .projects import ProjectService
 from .security import LocalSession
 from .vault import CredentialVault
@@ -35,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ingestion = TxtIngestionService(database, projects)
     adaptation = AdaptationService(database, ingestion, vault)
     bibles = BibleService(database, projects)
+    novelai = NovelAIService(database, vault)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -57,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.ingestion = ingestion
     app.state.adaptation = adaptation
     app.state.bibles = bibles
+    app.state.novelai = novelai
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -67,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects_router)
     app.include_router(adaptation_router)
     app.include_router(bibles_router)
+    app.include_router(novelai_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 

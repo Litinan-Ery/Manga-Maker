@@ -113,6 +113,47 @@ export interface TextModelConfiguration {
   revision: number;
 }
 
+export interface NovelAIModelCapability {
+  provider_model_id: string;
+  label: string;
+  inpaint_model_id: string;
+  recommended: boolean;
+  supports_precise_reference: boolean;
+  supports_multi_character_prompt: boolean;
+  supports_vibe_transfer: boolean;
+  precise_reference_excludes_vibe_transfer: boolean;
+  prompt_token_note: string;
+}
+
+export interface NovelAICapabilities {
+  source_url: string;
+  sha256: string;
+  fetched_on: string;
+  swagger_version: string;
+  api_title: string;
+  api_version: string;
+  mapping_version: string;
+  allowed_paths: Record<string, string>;
+  models: NovelAIModelCapability[];
+}
+
+export interface NovelAIConfiguration {
+  project_id: string;
+  provider: "novelai";
+  model_label: string;
+  provider_model_id: string;
+  inpaint_model_id: string;
+  credential_profile_id: string;
+  credential_fingerprint: string | null;
+  credential_status: "available" | "locked" | "missing" | "provider_mismatch";
+  timeout_seconds: number;
+  contract_sha256: string;
+  mapping_version: string;
+  revision: number;
+  last_connection_status: "ok" | "failed" | null;
+  last_connection_at: string | null;
+}
+
 export interface DialogueLine {
   speaker: string;
   text: string;
@@ -484,6 +525,57 @@ export function testTextModelConfiguration(
 ): Promise<{ status: "ok"; endpoint_host: string; model: string; config_revision: number }> {
   return request(
     `/api/v1/projects/${projectId}/adaptation/text-model/test`,
+    { method: "POST" },
+    true,
+  );
+}
+
+export function getNovelAICapabilities(projectId: string): Promise<NovelAICapabilities> {
+  return request<NovelAICapabilities>(
+    `/api/v1/projects/${projectId}/novelai/capabilities`,
+    {},
+    false,
+  );
+}
+
+export function getNovelAIConfiguration(projectId: string): Promise<NovelAIConfiguration> {
+  return request<NovelAIConfiguration>(
+    `/api/v1/projects/${projectId}/novelai/config`,
+    {},
+    false,
+  );
+}
+
+export function saveNovelAIConfiguration(
+  projectId: string,
+  configuration: {
+    provider_model_id: string;
+    credential_profile_id: string;
+    timeout_seconds: number;
+  },
+): Promise<NovelAIConfiguration> {
+  return request<NovelAIConfiguration>(
+    `/api/v1/projects/${projectId}/novelai/config`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(configuration),
+    },
+    true,
+  );
+}
+
+export function testNovelAIConnection(projectId: string): Promise<{
+  status: "ok";
+  provider: "novelai";
+  provider_model_id: string;
+  config_revision: number;
+  suggestion_count: number;
+  generated_images: 0;
+  last_connection_at: string;
+}> {
+  return request(
+    `/api/v1/projects/${projectId}/novelai/connection-test`,
     { method: "POST" },
     true,
   );

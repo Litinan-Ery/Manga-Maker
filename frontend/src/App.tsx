@@ -19,6 +19,7 @@ import {
 import { ChapterEditor } from "./ChapterEditor";
 import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
+import { NovelAISettings } from "./NovelAISettings";
 import { StoryBeatPanel } from "./StoryBeatPanel";
 import { StoryboardWorkbench } from "./StoryboardWorkbench";
 import "./styles.css";
@@ -325,6 +326,11 @@ export function App() {
                 chapterSet={chapterSet}
                 onError={setActionError}
                 refreshKey={bibleRefreshKey}
+              />
+              <NovelAISettings
+                projectId={selectedProjectId}
+                vaultStatus={vaultStatus}
+                onError={setActionError}
               />
             </section>
           )}
