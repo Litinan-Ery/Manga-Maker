@@ -21,6 +21,7 @@ import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
 import { GenerationConsole } from "./GenerationConsole";
 import { NovelAISettings } from "./NovelAISettings";
+import { PageComposer } from "./PageComposer";
 import { StoryBeatPanel } from "./StoryBeatPanel";
 import { StoryboardWorkbench } from "./StoryboardWorkbench";
 import "./styles.css";
@@ -334,6 +335,11 @@ export function App() {
                 onError={setActionError}
               />
               <GenerationConsole
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                onError={setActionError}
+              />
+              <PageComposer
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}
                 onError={setActionError}

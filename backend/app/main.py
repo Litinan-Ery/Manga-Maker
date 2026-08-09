@@ -15,6 +15,7 @@ from .api.bibles import router as bibles_router
 from .api.generation import router as generation_router
 from .api.health import router as health_router
 from .api.novelai import router as novelai_router
+from .api.pages import router as pages_router
 from .api.projects import router as projects_router
 from .api.vault import router as vault_router
 from .bibles.service import BibleService
@@ -26,6 +27,7 @@ from .generation.executor import GenerationExecutor
 from .generation.queue import GenerationQueueService
 from .ingestion.txt import TxtIngestionService
 from .novelai.service import NovelAIService
+from .pages.service import PageService
 from .projects import ProjectService
 from .security import LocalSession
 from .vault import CredentialVault
@@ -47,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     generation_executor = GenerationExecutor(
         database, generation_queue, vault, asset_store
     )
+    pages = PageService(database)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -75,6 +78,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.generation_queue = generation_queue
     app.state.asset_store = asset_store
     app.state.generation_executor = generation_executor
+    app.state.pages = pages
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -87,6 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(bibles_router)
     app.include_router(novelai_router)
     app.include_router(generation_router)
+    app.include_router(pages_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 

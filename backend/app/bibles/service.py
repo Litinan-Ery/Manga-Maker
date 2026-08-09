@@ -36,9 +36,6 @@ IMAGE_FORMATS: dict[str, tuple[str, str]] = {
     "JPEG": ("image/jpeg", "jpg"),
     "WEBP": ("image/webp", "webp"),
 }
-Image.MAX_IMAGE_PIXELS = MAX_REFERENCE_PIXELS
-
-
 @dataclass(frozen=True, slots=True)
 class ReferenceImageMetadata:
     media_type: str
@@ -964,6 +961,16 @@ def inspect_reference_image(data: bytes) -> ReferenceImageMetadata:
             with Image.open(BytesIO(data)) as image:
                 image_format = image.format
                 width, height = image.size
+                if (
+                    width > MAX_REFERENCE_DIMENSION
+                    or height > MAX_REFERENCE_DIMENSION
+                    or width * height > MAX_REFERENCE_PIXELS
+                ):
+                    raise ApplicationError(
+                        code="REFERENCE_IMAGE_TOO_LARGE",
+                        message="参考图尺寸不得超过 8192 像素或 2500 万像素。",
+                        status_code=422,
+                    )
                 image.verify()
             with Image.open(BytesIO(data)) as decoded:
                 decoded.load()
@@ -984,16 +991,6 @@ def inspect_reference_image(data: bytes) -> ReferenceImageMetadata:
             code="UNSUPPORTED_REFERENCE_IMAGE",
             message="P0 只支持 PNG、JPEG 和 WebP 参考图。",
             status_code=415,
-        )
-    if (
-        width > MAX_REFERENCE_DIMENSION
-        or height > MAX_REFERENCE_DIMENSION
-        or width * height > MAX_REFERENCE_PIXELS
-    ):
-        raise ApplicationError(
-            code="REFERENCE_IMAGE_TOO_LARGE",
-            message="参考图尺寸不得超过 8192 像素或 2500 万像素。",
-            status_code=422,
         )
     media_type, extension = IMAGE_FORMATS[image_format]
     return ReferenceImageMetadata(

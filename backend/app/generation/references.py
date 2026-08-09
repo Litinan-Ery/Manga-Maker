@@ -29,15 +29,14 @@ class PreparedReference:
 def prepare_precise_reference(raw: bytes) -> PreparedReference:
     if not raw or len(raw) > MAX_REFERENCE_INPUT_BYTES:
         raise ReferencePreparationError("reference image is empty or too large")
-    Image.MAX_IMAGE_PIXELS = MAX_REFERENCE_INPUT_PIXELS
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(raw)) as source:
-                source.load()
                 width, height = source.size
                 if width <= 0 or height <= 0 or width * height > MAX_REFERENCE_INPUT_PIXELS:
                     raise ReferencePreparationError("reference image dimensions are invalid")
+                source.load()
                 converted = ImageOps.exif_transpose(source).convert("RGB")
                 width, height = converted.size
     except (UnidentifiedImageError, OSError, Image.DecompressionBombWarning) as exc:

@@ -326,15 +326,16 @@ def validate_image_generation_response(
         raise NovelAIResponseFormatError("NovelAI image base64 is invalid") from exc
     if not raw or len(raw) > MAX_GENERATED_IMAGE_BYTES or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise NovelAIResponseFormatError("NovelAI image is empty, oversized, or not PNG")
-    Image.MAX_IMAGE_PIXELS = MAX_GENERATED_PIXELS
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(raw)) as image:
-                image.load()
                 if image.format != "PNG":
                     raise NovelAIResponseFormatError("NovelAI image decoder did not confirm PNG")
                 width, height = image.size
+                if width <= 0 or height <= 0 or width * height > MAX_GENERATED_PIXELS:
+                    raise NovelAIResponseFormatError("NovelAI PNG dimensions are invalid")
+                image.load()
     except (UnidentifiedImageError, OSError, Image.DecompressionBombWarning) as exc:
         raise NovelAIResponseFormatError("NovelAI PNG failed safe decoding") from exc
     if (width, height) != (request.width, request.height):

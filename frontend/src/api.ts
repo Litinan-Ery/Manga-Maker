@@ -267,6 +267,75 @@ export interface GenerationAsset {
   created_at: string;
 }
 
+export interface PixelRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PagePanelPlacement {
+  panel_id: string;
+  asset_version_id: string;
+  frame: PixelRect;
+  focal_x: number;
+  focal_y: number;
+  zoom: number;
+}
+
+export interface PageTextLayer {
+  layer_id: string;
+  panel_id: string | null;
+  kind: "dialogue" | "narration" | "sfx";
+  text: string;
+  speaker: string | null;
+  bounds: PixelRect;
+  font_size: number;
+  align: "left" | "center" | "right";
+}
+
+export interface PageDocument {
+  schema_version: "1.0";
+  page_id: string;
+  page_number: number;
+  width: 2048;
+  height: 3072;
+  reading_direction: "left_to_right";
+  language: "zh-Hans";
+  template_id: string;
+  storyboard_version_id: string;
+  panels: PagePanelPlacement[];
+  text_layers: PageTextLayer[];
+  show_page_number: boolean;
+}
+
+export interface ComicPageVersion {
+  page_id: string;
+  project_id: string;
+  chapter_id: string;
+  page_number: number;
+  page_revision: number;
+  page_version_id: string;
+  version: number;
+  parent_page_version_id: string | null;
+  storyboard_version_id: string;
+  document_sha256: string;
+  render_sha256: string;
+  renderer_version: string;
+  font_sha256: string;
+  is_current: boolean;
+  created_at: string;
+  document: PageDocument;
+  external_requests_started: 0;
+}
+
+export interface PageTemplate {
+  template_id: string;
+  label: string;
+  panel_count: number;
+  frames: PixelRect[];
+}
+
 export interface DialogueLine {
   speaker: string;
   text: string;
@@ -820,6 +889,79 @@ export async function getGenerationAssetImage(
     { headers },
   );
   if (!response.ok) throw new ApiError("无法读取本地面板素材。", response.status);
+  return response.blob();
+}
+
+export function listPageTemplates(projectId: string): Promise<PageTemplate[]> {
+  return request<PageTemplate[]>(
+    `/api/v1/projects/${projectId}/pages/templates`,
+    {},
+    false,
+  );
+}
+
+export function listComicPages(
+  projectId: string,
+  chapterId: string,
+): Promise<ComicPageVersion[]> {
+  return request<ComicPageVersion[]>(
+    `/api/v1/projects/${projectId}/pages?chapter_id=${encodeURIComponent(chapterId)}`,
+    {},
+    false,
+  );
+}
+
+export function draftComicPages(
+  projectId: string,
+  chapterId: string,
+): Promise<ComicPageVersion[]> {
+  return request<ComicPageVersion[]>(
+    `/api/v1/projects/${projectId}/pages/draft`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_id: chapterId }),
+    },
+    true,
+  );
+}
+
+export function saveComicPageRevision(
+  projectId: string,
+  page: ComicPageVersion,
+  document: PageDocument,
+): Promise<ComicPageVersion> {
+  return request<ComicPageVersion>(
+    `/api/v1/projects/${projectId}/pages/${page.page_id}/versions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expected_revision: page.page_revision,
+        document,
+      }),
+    },
+    true,
+  );
+}
+
+export async function getComicPageImage(
+  projectId: string,
+  pageId: string,
+  pageVersionId: string,
+): Promise<Blob> {
+  if (!localSessionToken || !localCsrfToken) {
+    throw new ApiError("本地会话已失效，请重新运行 Manga Maker 启动器。", 401);
+  }
+  const headers = new Headers({
+    "X-Manga-Maker-Session": localSessionToken,
+    "X-CSRF-Token": localCsrfToken,
+  });
+  const response = await fetch(
+    `/api/v1/projects/${projectId}/pages/${pageId}/versions/${pageVersionId}/content`,
+    { headers },
+  );
+  if (!response.ok) throw new ApiError("无法读取本地漫画页。", response.status);
   return response.blob();
 }
 

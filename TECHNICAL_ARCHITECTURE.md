@@ -9,7 +9,7 @@
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已交付本地应用、TXT/来源链路、分镜/设定审批、NovelAI 固定契约与加密凭证引用、有界串行执行器、Precise Reference 预处理、严格响应校验和不可变素材登记。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用；页面合成、reroll/inpaint 和完整导出尚未实现。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已交付本地应用、TXT/来源链路、分镜/设定审批、NovelAI 固定契约与加密凭证引用、有界串行执行器、Precise Reference 预处理、严格响应校验、不可变素材登记，以及 2048 × 3072 本地确定性页面合成。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用；reroll/inpaint、历史激活和完整导出尚未实现。
 
 ## 1. 架构结论
 
@@ -210,7 +210,7 @@ flowchart LR
 
 ### 5.3 目标代码结构
 
-以下目录是模块化演进目标；当前仓库已经实现其中的 `api`、`ingestion`、`adaptation`、本地持久化基础和 React 前端，其余按 [WORK_ITEMS.md](WORK_ITEMS.md) 扩展：
+以下目录是模块化演进目标；当前仓库已经实现其中的 `api`、`ingestion`、`adaptation`、`bibles`、`novelai`、`generation`、`pages`、本地持久化基础和 React 前端，其余按 [WORK_ITEMS.md](WORK_ITEMS.md) 扩展：
 
 ```text
 backend/
@@ -252,7 +252,7 @@ tests/
 |---|---|---|
 | 项目与来源 | `projects`、`source_files`、`source_chapters`、`source_anchors`、`story_beats` | 源版本不可变；offset 与摘录哈希可复核 |
 | 改编与设定 | `storyboards`、`storyboard_versions`、`character_bibles`、`style_bibles`、`approvals` | 修改创建新版本；审批绑定精确版本哈希 |
-| 页面与素材 | `pages`、`panels`、`generation_specs`、`asset_versions`、`page_versions` | 当前指针可切换；版本行不可更新内容 |
+| 页面与素材 | `comic_pages`、`generation_specs`、`asset_versions`、`page_versions` | 当前指针可切换；版本行不可更新内容 |
 | 任务 | `generation_jobs`、`generation_items`、`user_actions`、`provider_attempts` | Job 范围不可变；每次 attempt 关联人类动作 |
 | 成本与审计 | `cost_estimates`、`cost_records`、`audit_events` | 追加式；估算与供应商可验证实际值分开 |
 | 导出 | `export_revisions`、`export_files`、`package_manifests` | 绑定固定 PageVersion 清单与 SHA-256 |
@@ -328,6 +328,11 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 | `POST /api/v1/projects/{id}/generation/jobs/{job_id}/cancel` | 取消 queued 项并保留在途结算记录 |
 | `GET /api/v1/projects/{id}/generation/assets` | 列出当前不可变面板素材元数据 |
 | `GET /api/v1/projects/{id}/generation/assets/{asset_version_id}/content` | 经本地会话保护读取原始 PNG |
+| `GET /api/v1/projects/{id}/pages/templates` | 读取本机 1–6 格模板，不访问外部服务 |
+| `POST /api/v1/projects/{id}/pages/draft` | 从当前已生成素材创建规范 PageVersion 与 PNG |
+| `GET /api/v1/projects/{id}/pages?chapter_id=...` | 列出章节的当前页面版本 |
+| `POST /api/v1/projects/{id}/pages/{page_id}/versions` | 以乐观锁保存布局/文字新版本，仅在本机渲染 |
+| `GET /api/v1/projects/{id}/pages/{page_id}/versions/{version_id}/content` | 经本地会话保护读取规范页面 PNG |
 | `POST /api/v1/panels/{id}/reroll` | 创建单格新 seed 任务 |
 | `POST /api/v1/panels/{id}/inpaint` | 固化父素材、蒙版和局部重绘任务 |
 | `POST /api/v1/pages/{id}/reroll` | 为当前页所有面板创建有界任务 |
@@ -584,6 +589,8 @@ PageVersion JSON
 ```
 
 浏览器和后端共享坐标模型与文本测量测试，但正式导出以后端为准。前端显示“预览与正式渲染差异”警告，黄金页面测试比较像素差、文字边界和页序。
+
+当前实现固定 2048 × 3072 像素坐标、六种 1–6 格模板、10 px 黑色格框、灰度面板素材、对白椭圆、旁白圆角框、描边音效字和页码。素材以 cover-crop 加焦点与缩放参数放置；中文按字符换行，无法在边界内排下时拒绝版本而不生成不可读页面。PNG 压缩参数、渲染器版本和字体文件 SHA-256 写入 PageVersion，同一输入的回归测试比较完整文件哈希。数据库 schema 当前为 v9；`comic_pages` 保存当前指针，`page_versions` 内容只追加。
 
 ## 13. 导出与恢复
 

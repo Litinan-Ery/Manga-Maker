@@ -502,6 +502,50 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON asset_versions(project_id, panel_id, version);
         """,
     ),
+    (
+        9,
+        """
+        CREATE TABLE comic_pages (
+            page_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            page_number INTEGER NOT NULL CHECK(page_number >= 1),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, chapter_id, page_number)
+        );
+
+        CREATE TABLE page_versions (
+            page_version_id TEXT PRIMARY KEY,
+            page_id TEXT NOT NULL REFERENCES comic_pages(page_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            parent_page_version_id TEXT REFERENCES page_versions(page_version_id),
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            schema_version TEXT NOT NULL,
+            document_json TEXT NOT NULL,
+            document_sha256 TEXT NOT NULL,
+            rendered_relative_path TEXT NOT NULL UNIQUE,
+            render_sha256 TEXT NOT NULL,
+            renderer_version TEXT NOT NULL,
+            font_sha256 TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(page_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_page_version
+        ON page_versions(page_id)
+        WHERE is_current = 1;
+
+        CREATE INDEX comic_pages_by_chapter
+        ON comic_pages(project_id, chapter_id, page_number);
+
+        CREATE INDEX page_versions_by_page
+        ON page_versions(page_id, version);
+        """,
+    ),
 )
 
 

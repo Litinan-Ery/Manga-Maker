@@ -10,7 +10,7 @@ def test_health_reports_local_components(client: TestClient) -> None:
         "version": "0.1.0",
         "environment": "test",
         "database": "ok",
-        "schema_version": 8,
+        "schema_version": 9,
         "vault_configured": False,
         "vault_unlocked": False,
     }
