@@ -385,6 +385,85 @@ export interface ComicPageVersion {
   external_requests_started: 0;
 }
 
+export type ExportFileKind = "engineering_package" | "png" | "pdf" | "cbz";
+
+export interface ExportPageSelection {
+  ordinal: number;
+  page_id: string;
+  page_number: number;
+  page_version_id: string;
+  version: number;
+  render_sha256: string;
+  width: 2048;
+  height: 3072;
+}
+
+export interface ExportPreflight {
+  project_id: string;
+  project_title: string;
+  chapter_id: string;
+  chapter_title: string;
+  schema_version: "1.0";
+  page_count: number;
+  pages: ExportPageSelection[];
+  blockers: string[];
+  warnings: string[];
+  plan_fingerprint: string;
+  formats: ExportFileKind[];
+  external_requests_started: 0;
+}
+
+export interface ExportFile {
+  export_file_id: string;
+  kind: ExportFileKind;
+  ordinal: number | null;
+  filename: string;
+  sha256: string;
+  byte_size: number;
+}
+
+export interface ExportRevision {
+  export_revision_id: string;
+  project_id: string;
+  chapter_id: string;
+  chapter_title: string;
+  status: "staging" | "completed" | "failed";
+  schema_version: "1.0";
+  pages: ExportPageSelection[];
+  selection_sha256: string;
+  failure_code: string | null;
+  created_at: string;
+  completed_at: string | null;
+  files: ExportFile[];
+  external_requests_started: 0;
+}
+
+export interface ImportPreflight {
+  import_preflight_id: string;
+  filename: string;
+  package_sha256: string;
+  source_project_id: string;
+  source_title: string;
+  schema_version: "1.0";
+  file_count: number;
+  expanded_bytes: number;
+  record_counts: Record<string, number>;
+  page_count: number;
+  requires_confirmation: true;
+  writes_performed: 0;
+}
+
+export interface RestoreResult {
+  import_preflight_id: string;
+  project_id: string;
+  source_project_id: string;
+  title: string;
+  id_conflict_remapped: boolean;
+  record_counts: Record<string, number>;
+  file_count: number;
+  external_requests_started: 0;
+}
+
 export interface PageTemplate {
   template_id: string;
   label: string;
@@ -1116,6 +1195,94 @@ export async function getComicPageImage(
   );
   if (!response.ok) throw new ApiError("无法读取本地漫画页。", response.status);
   return response.blob();
+}
+
+export function preflightExport(
+  projectId: string,
+  chapterId: string,
+): Promise<ExportPreflight> {
+  return request<ExportPreflight>(
+    `/api/v1/projects/${projectId}/exports/preflight`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_id: chapterId }),
+    },
+    true,
+  );
+}
+
+export function createExport(
+  projectId: string,
+  plan: ExportPreflight,
+): Promise<ExportRevision> {
+  return request<ExportRevision>(
+    `/api/v1/projects/${projectId}/exports`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapter_id: plan.chapter_id,
+        page_version_ids: plan.pages.map((page) => page.page_version_id),
+        plan_fingerprint: plan.plan_fingerprint,
+        confirmed: true,
+      }),
+    },
+    true,
+  );
+}
+
+export function listExports(projectId: string): Promise<ExportRevision[]> {
+  return request<ExportRevision[]>(
+    `/api/v1/projects/${projectId}/exports`,
+    {},
+    false,
+  );
+}
+
+export async function downloadExportFile(
+  projectId: string,
+  exportRevisionId: string,
+  exportFileId: string,
+): Promise<Blob> {
+  if (!localSessionToken || !localCsrfToken) {
+    throw new ApiError("本地会话已失效，请重新运行 Manga Maker 启动器。", 401);
+  }
+  const response = await fetch(
+    `/api/v1/projects/${projectId}/exports/${exportRevisionId}/files/${exportFileId}`,
+    {
+      headers: {
+        "X-Manga-Maker-Session": localSessionToken,
+        "X-CSRF-Token": localCsrfToken,
+      },
+    },
+  );
+  if (!response.ok) throw new ApiError("无法读取本地导出文件。", response.status);
+  return response.blob();
+}
+
+export function preflightProjectPackage(file: File): Promise<ImportPreflight> {
+  const body = new FormData();
+  body.set("file", file);
+  return request<ImportPreflight>(
+    "/api/v1/imports/preflight",
+    { method: "POST", body },
+    true,
+  );
+}
+
+export function restoreProjectPackage(
+  importPreflightId: string,
+): Promise<RestoreResult> {
+  return request<RestoreResult>(
+    `/api/v1/imports/${importPreflightId}/restore`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmed: true }),
+    },
+    true,
+  );
 }
 
 export function getCurrentStoryboard(

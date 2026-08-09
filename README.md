@@ -2,7 +2,7 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**P0 早期开发阶段。** 本地应用、TXT/来源链路、结构化分镜、角色/风格审批、NovelAI 固定契约、有界串行队列、逐格图像执行器、本地页面合成，以及单格/整页 reroll、蒙版 inpaint 和不可变版本恢复已通过离线 Mock 验收。真实付费图像调用尚未经用户单独批准或验收；工程包和发布格式导出仍未实现。
+> 当前状态：**P0 早期开发阶段。** 本地应用、TXT/来源链路、结构化分镜、角色/风格审批、NovelAI 固定契约、有界串行队列、逐格图像执行器、本地页面合成、单格/整页 reroll、蒙版 inpaint、不可变版本恢复，以及工程包/PNG/PDF/CBZ 导出与安全恢复已通过离线 Mock 验收。真实付费图像调用和代表性授权章节的完整验收尚未经用户单独批准或完成。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)。
 
@@ -22,7 +22,8 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | NovelAI 逐格执行与素材版本 | 已实现（离线 Mock 验收） | 二次明确确认后才执行；固定 host/字段、最多一张 Precise Reference、严格 201 JSON/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；未做真实付费 smoke |
 | 本地页面排版与不可变 PageVersion | 已实现 | 1–6 格模板、裁切焦点/缩放、气泡/旁白/音效/页码；后端规范输出 2048 × 3072 PNG；修改不访问图像 API |
 | reroll、inpaint 与历史恢复 | 已实现（离线 Mock 验收） | 单格/整页冻结父版本与成本，PNG 蒙版局部重绘，结果创建 AssetVersion + PageVersion；两层人工确认后才可执行；恢复不调用外部服务 |
-| 工程包、PNG、PDF、CBZ 导出 | 未实现 | 不得把技术文档中的设计当作可用功能 |
+| 工程包、PNG、PDF、CBZ 导出 | 已实现 | 导出冻结完整 PageVersion 清单；先在 staging 生成并校验全部格式，再一次性登记成功版本；失败不改旧导出 |
+| 工程包 dry-run 与恢复 | 已实现 | 校验 schema、SHA-256、文件数/大小/压缩比、磁盘空间，拒绝绝对路径、`..`、Zip Slip 和符号链接；确认后恢复到新工作区，ID 冲突整体重映射 |
 
 ## 本地启动
 
@@ -35,7 +36,7 @@ pnpm --dir frontend build
 uv run python -m backend.app.launcher
 ```
 
-启动器会选择本机端口并打开浏览器。运行数据默认写入 `~/Library/Application Support/Manga Maker/`，不会写入仓库。当前界面可以管理本地加密凭证、导入与改编章节、审批角色/风格、配置 NovelAI，预检、启动、二次确认执行初次生成或 revision 有界队列，并编辑、重绘和恢复漫画页。连接测试只查标签；只有点击执行按钮并完成第二次明确确认才会进入图像请求路径。页面文字、格框、裁切和历史恢复只在本机创建版本或切换指针，不产生真实费用。
+启动器会选择本机端口并打开浏览器。运行数据默认写入 `~/Library/Application Support/Manga Maker/`，不会写入仓库。当前界面可以管理本地加密凭证、导入与改编章节、审批角色/风格、配置 NovelAI，预检、启动、二次确认执行初次生成或 revision 有界队列，编辑、重绘和恢复漫画页，并创建或恢复四类本地导出。连接测试只查标签；只有点击执行按钮并完成第二次明确确认才会进入图像请求路径。页面文字、格框、裁切、历史恢复和导出均为本机操作，不产生真实费用。
 
 开发验收命令：
 
@@ -183,6 +184,7 @@ Manga Maker/
 │   ├── generation/          # 固定计划、串行执行、参考图预处理与不可变素材
 │   ├── ingestion/           # TXT、章节、锚点和剧情节拍
 │   ├── pages/               # 1–6 格模板、PageVersion 与确定性 PNG 渲染
+│   ├── exports/             # ExportRevision、四格式输出、工程包校验与恢复
 │   └── novelai/             # 能力 profile、错误归一化、Mock 和安全连接测试
 ├── frontend/                # React/TypeScript 本地操作界面
 └── tests/                   # 后端单元/接口测试

@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+import copy
+import hashlib
+import io
+import json
+import zipfile
+from typing import Any
+
+from fastapi.testclient import TestClient
+from PIL import Image
+
+from backend.app.errors import ApplicationError
+from backend.app.exports.service import ExportService
+from tests.test_pages_api import prepare_page
+
+
+def test_four_format_export_is_pinned_and_package_restores_with_remapped_ids(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared, provider, page = prepare_page(client, session_headers)
+    project_id = prepared["project_id"]
+    chapter_id = prepared["chapter"]["chapter_id"]
+    calls_before = provider.generation_calls
+
+    preflight = export_preflight(client, session_headers, project_id, chapter_id)
+    assert preflight["page_count"] == 1
+    assert preflight["pages"][0]["page_version_id"] == page["page_version_id"]
+    assert preflight["external_requests_started"] == 0
+
+    denied = client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=session_headers,
+        json=export_request(preflight, confirmed=False),
+    )
+    assert denied.status_code == 422
+    assert denied.json()["error"]["code"] == "EXPORT_CONFIRMATION_REQUIRED"
+
+    response = client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=session_headers,
+        json=export_request(preflight),
+    )
+    assert response.status_code == 201, response.text
+    exported = response.json()
+    assert exported["status"] == "completed"
+    assert [item["kind"] for item in exported["files"]] == [
+        "engineering_package",
+        "png",
+        "pdf",
+        "cbz",
+    ]
+    assert provider.generation_calls == calls_before
+
+    downloads = {
+        item["kind"]: download_file(client, session_headers, project_id, exported, item)
+        for item in exported["files"]
+    }
+    with Image.open(io.BytesIO(downloads["png"])) as image:
+        assert image.size == (2048, 3072)
+    assert downloads["pdf"].startswith(b"%PDF-")
+    with zipfile.ZipFile(io.BytesIO(downloads["cbz"])) as archive:
+        assert archive.namelist() == ["ComicInfo.xml", "001.png"]
+        assert archive.read("001.png") == downloads["png"]
+    with zipfile.ZipFile(io.BytesIO(downloads["engineering_package"])) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        records = json.loads(archive.read("records.json"))
+        assert manifest["credentials_included"] is False
+        assert records["tables"]["projects"][0]["workspace_path"] == "/MANGA_MAKER_PROJECT"
+        assert all(
+            row.get("credential_profile_id", "restore-required") == "restore-required"
+            for rows in records["tables"].values()
+            for row in rows
+        )
+        assert not any(name.startswith("secrets/") for name in archive.namelist())
+
+    original_download_hashes = {
+        kind: hashlib.sha256(content).hexdigest() for kind, content in downloads.items()
+    }
+    revised_document = copy.deepcopy(page["document"])
+    revised_document["text_layers"][0]["text"] = "新版本"
+    revised = client.post(
+        f"/api/v1/projects/{project_id}/pages/{page['page_id']}/versions",
+        headers=session_headers,
+        json={
+            "expected_revision": page["page_revision"],
+            "document": revised_document,
+        },
+    )
+    assert revised.status_code == 201, revised.text
+    for item in exported["files"]:
+        content = download_file(client, session_headers, project_id, exported, item)
+        assert hashlib.sha256(content).hexdigest() == original_download_hashes[item["kind"]]
+
+    import_preflight = client.post(
+        "/api/v1/imports/preflight",
+        headers=session_headers,
+        files={
+            "file": (
+                "project.manga-maker.zip",
+                downloads["engineering_package"],
+                "application/zip",
+            )
+        },
+    )
+    assert import_preflight.status_code == 201, import_preflight.text
+    dry_run = import_preflight.json()
+    assert dry_run["writes_performed"] == 0
+    assert dry_run["requires_confirmation"] is True
+
+    restored_response = client.post(
+        f"/api/v1/imports/{dry_run['import_preflight_id']}/restore",
+        headers=session_headers,
+        json={"confirmed": True},
+    )
+    assert restored_response.status_code == 200, restored_response.text
+    restored = restored_response.json()
+    assert restored["id_conflict_remapped"] is True
+    assert restored["project_id"] != project_id
+    restored_chapters = client.get(
+        f"/api/v1/projects/{restored['project_id']}/source/chapters"
+    ).json()
+    restored_pages = client.get(
+        f"/api/v1/projects/{restored['project_id']}/pages",
+        params={"chapter_id": restored_chapters["chapters"][0]["chapter_id"]},
+    )
+    assert restored_pages.status_code == 200, restored_pages.text
+    restored_page = restored_pages.json()[0]
+    assert restored_page["render_sha256"] == page["render_sha256"]
+    restored_content = client.get(
+        f"/api/v1/projects/{restored['project_id']}/pages/{restored_page['page_id']}"
+        f"/versions/{restored_page['page_version_id']}/content",
+        headers=session_headers,
+    )
+    assert restored_content.content == downloads["png"]
+    assert provider.generation_calls == calls_before
+
+
+def test_failed_export_does_not_modify_previous_success(
+    client: TestClient, session_headers: dict[str, str], monkeypatch: Any
+) -> None:
+    prepared, _provider, _page = prepare_page(client, session_headers)
+    project_id = prepared["project_id"]
+    preflight = export_preflight(
+        client, session_headers, project_id, prepared["chapter"]["chapter_id"]
+    )
+    successful = client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=session_headers,
+        json=export_request(preflight),
+    ).json()
+    previous_hashes = {item["export_file_id"]: item["sha256"] for item in successful["files"]}
+
+    def fail_pdf(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("injected local PDF failure")
+
+    monkeypatch.setattr(client.app.state.exports, "_write_pdf", fail_pdf)
+    failed = client.post(
+        f"/api/v1/projects/{project_id}/exports",
+        headers=session_headers,
+        json=export_request(preflight),
+    )
+    assert failed.status_code == 500
+    exports = client.get(f"/api/v1/projects/{project_id}/exports").json()
+    assert [item["status"] for item in exports] == ["failed", "completed"]
+    current_success = next(item for item in exports if item["status"] == "completed")
+    assert {
+        item["export_file_id"]: item["sha256"] for item in current_success["files"]
+    } == previous_hashes
+
+
+def test_import_preflight_rejects_zip_slip_symlink_and_compression_bomb(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    slip = make_zip({"../escape": b"bad", "manifest.json": b"{}", "records.json": b"{}"})
+    response = upload_package(client, session_headers, slip)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROJECT_PACKAGE_PATH_INVALID"
+
+    symlink = io.BytesIO()
+    with zipfile.ZipFile(symlink, "w") as archive:
+        info = zipfile.ZipInfo("project/link")
+        info.create_system = 3
+        info.external_attr = 0o120777 << 16
+        archive.writestr(info, "target")
+        archive.writestr("manifest.json", "{}")
+        archive.writestr("records.json", "{}")
+    response = upload_package(client, session_headers, symlink.getvalue())
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROJECT_PACKAGE_SYMLINK_REJECTED"
+
+    bomb = make_zip(
+        {
+            "manifest.json": b"{}",
+            "records.json": b"{}",
+            "project/repeated.bin": b"0" * (1024 * 1024),
+        }
+    )
+    response = upload_package(client, session_headers, bomb)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "PROJECT_PACKAGE_COMPRESSION_BOMB"
+
+
+def test_package_scope_and_credential_fields_fail_closed() -> None:
+    for name in ("project/secrets/token.txt", "outside.bin", "project/assets/staging/x"):
+        try:
+            ExportService._validate_package_file_scope(name)
+        except ApplicationError as error:
+            assert error.code == "PROJECT_PACKAGE_FILE_SCOPE_INVALID"
+        else:
+            raise AssertionError(f"unsafe package path accepted: {name}")
+    try:
+        ExportService._validate_package_json_safety('{"authorization":"Bearer value"}')
+    except ApplicationError as error:
+        assert error.code == "PROJECT_PACKAGE_CONTAINS_CREDENTIAL"
+    else:
+        raise AssertionError("credential field accepted")
+
+
+def export_preflight(
+    client: TestClient, headers: dict[str, str], project_id: str, chapter_id: str
+) -> dict[str, Any]:
+    response = client.post(
+        f"/api/v1/projects/{project_id}/exports/preflight",
+        headers=headers,
+        json={"chapter_id": chapter_id},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def export_request(preflight: dict[str, Any], confirmed: bool = True) -> dict[str, Any]:
+    return {
+        "chapter_id": preflight["chapter_id"],
+        "page_version_ids": [item["page_version_id"] for item in preflight["pages"]],
+        "plan_fingerprint": preflight["plan_fingerprint"],
+        "confirmed": confirmed,
+    }
+
+
+def download_file(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: str,
+    exported: dict[str, Any],
+    item: dict[str, Any],
+) -> bytes:
+    path = (
+        f"/api/v1/projects/{project_id}/exports/{exported['export_revision_id']}"
+        f"/files/{item['export_file_id']}"
+    )
+    assert client.get(path).status_code == 401
+    response = client.get(path, headers=headers)
+    assert response.status_code == 200, response.text
+    assert hashlib.sha256(response.content).hexdigest() == item["sha256"]
+    return response.content
+
+
+def upload_package(client: TestClient, headers: dict[str, str], content: bytes) -> Any:
+    return client.post(
+        "/api/v1/imports/preflight",
+        headers=headers,
+        files={"file": ("unsafe.zip", content, "application/zip")},
+    )
+
+
+def make_zip(files: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return output.getvalue()

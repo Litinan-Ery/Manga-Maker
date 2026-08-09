@@ -20,6 +20,7 @@ import { ChapterEditor } from "./ChapterEditor";
 import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
 import { GenerationConsole } from "./GenerationConsole";
+import { ExportCenter } from "./ExportCenter";
 import { NovelAISettings } from "./NovelAISettings";
 import { PageComposer } from "./PageComposer";
 import { StoryBeatPanel } from "./StoryBeatPanel";
@@ -340,6 +341,11 @@ export function App() {
                 onError={setActionError}
               />
               <PageComposer
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                onError={setActionError}
+              />
+              <ExportCenter
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}
                 onError={setActionError}

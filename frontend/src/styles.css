@@ -190,6 +190,98 @@ h1 {
   border-top: 2px solid rgb(31 93 73 / 24%);
 }
 
+.export-center {
+  margin-top: 30px;
+  padding-top: 30px;
+  border-top: 2px solid rgb(36 66 91 / 24%);
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.export-card,
+.export-history {
+  padding: 20px;
+  border: 1px solid rgb(25 24 21 / 13%);
+  border-radius: 14px;
+  background: #f8f4eb;
+}
+
+.export-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.export-card h3,
+.export-history h3 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.compact-drop {
+  min-height: 118px;
+}
+
+.export-plan {
+  padding: 14px;
+  border: 1px solid rgb(31 93 73 / 20%);
+  border-radius: 10px;
+  background: #fffdf8;
+}
+
+.export-plan ol {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: #6c665d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.export-history {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.export-history article {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgb(25 24 21 / 10%);
+  border-radius: 9px;
+  background: #fffdf8;
+}
+
+.export-history article > div {
+  display: grid;
+  gap: 3px;
+  margin-right: auto;
+}
+
+.export-history article span {
+  color: #756e64;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .export-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .export-history article {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .page-composer-toolbar {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;

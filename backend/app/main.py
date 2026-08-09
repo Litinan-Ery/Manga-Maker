@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .adaptation.service import AdaptationService
 from .api.adaptation import router as adaptation_router
 from .api.bibles import router as bibles_router
+from .api.exports import router as exports_router
 from .api.generation import router as generation_router
 from .api.health import router as health_router
 from .api.novelai import router as novelai_router
@@ -22,6 +23,7 @@ from .bibles.service import BibleService
 from .config import Settings, get_settings
 from .database import Database
 from .errors import install_error_handlers
+from .exports.service import ExportService
 from .generation.assets import AssetStore
 from .generation.executor import GenerationExecutor
 from .generation.queue import GenerationQueueService
@@ -49,6 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     asset_store = AssetStore(database, generation_queue)
     pages = PageService(database)
     revisions = RevisionService(database, generation_queue, pages)
+    exports = ExportService(database, projects)
     generation_executor = GenerationExecutor(
         database,
         generation_queue,
@@ -86,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.generation_executor = generation_executor
     app.state.pages = pages
     app.state.revisions = revisions
+    app.state.exports = exports
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -99,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(novelai_router)
     app.include_router(generation_router)
     app.include_router(pages_router)
+    app.include_router(exports_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 

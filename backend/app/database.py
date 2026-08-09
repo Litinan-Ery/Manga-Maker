@@ -615,6 +615,64 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         WHERE target_page_id IS NOT NULL;
         """,
     ),
+    (
+        11,
+        """
+        ALTER TABLE projects
+        ADD COLUMN source_project_id TEXT;
+
+        CREATE TABLE export_revisions (
+            export_revision_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            status TEXT NOT NULL CHECK(status IN ('staging', 'completed', 'failed')),
+            schema_version TEXT NOT NULL,
+            page_selection_json TEXT NOT NULL,
+            selection_sha256 TEXT NOT NULL,
+            export_directory_relative_path TEXT,
+            failure_code TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT
+        );
+
+        CREATE TABLE export_files (
+            export_file_id TEXT PRIMARY KEY,
+            export_revision_id TEXT NOT NULL
+                REFERENCES export_revisions(export_revision_id),
+            kind TEXT NOT NULL CHECK(kind IN ('engineering_package', 'png', 'pdf', 'cbz')),
+            ordinal INTEGER,
+            filename TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            byte_size INTEGER NOT NULL CHECK(byte_size >= 0),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(export_revision_id, relative_path),
+            CHECK(
+                (kind = 'png' AND ordinal IS NOT NULL AND ordinal >= 1)
+                OR (kind != 'png' AND ordinal IS NULL)
+            )
+        );
+
+        CREATE TABLE package_import_preflights (
+            import_preflight_id TEXT PRIMARY KEY,
+            package_path TEXT NOT NULL UNIQUE,
+            package_sha256 TEXT NOT NULL,
+            source_project_id TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('ready', 'restored', 'rejected')),
+            restored_project_id TEXT REFERENCES projects(project_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            restored_at TEXT
+        );
+
+        CREATE INDEX export_revisions_by_project
+        ON export_revisions(project_id, created_at);
+
+        CREATE INDEX export_files_by_revision
+        ON export_files(export_revision_id, kind, ordinal);
+        """,
+    ),
 )
 
 
