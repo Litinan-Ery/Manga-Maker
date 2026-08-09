@@ -25,6 +25,7 @@ from .errors import install_error_handlers
 from .generation.assets import AssetStore
 from .generation.executor import GenerationExecutor
 from .generation.queue import GenerationQueueService
+from .generation.revisions import RevisionService
 from .ingestion.txt import TxtIngestionService
 from .novelai.service import NovelAIService
 from .pages.service import PageService
@@ -46,10 +47,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     novelai = NovelAIService(database, vault)
     generation_queue = GenerationQueueService(database, bibles)
     asset_store = AssetStore(database, generation_queue)
-    generation_executor = GenerationExecutor(
-        database, generation_queue, vault, asset_store
-    )
     pages = PageService(database)
+    revisions = RevisionService(database, generation_queue, pages)
+    generation_executor = GenerationExecutor(
+        database,
+        generation_queue,
+        vault,
+        asset_store,
+        revision_finalizer=revisions,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -79,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.asset_store = asset_store
     app.state.generation_executor = generation_executor
     app.state.pages = pages
+    app.state.revisions = revisions
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],

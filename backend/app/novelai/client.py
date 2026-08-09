@@ -6,7 +6,7 @@ import json
 import warnings
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -15,6 +15,7 @@ from .contracts import (
     CONNECTION_TEST_PATH,
     GENERATION_PATH,
     IMAGE_API_BASE_URL,
+    require_inpaint_model_profile,
     require_model_profile,
 )
 
@@ -90,9 +91,30 @@ class NovelAIImageRequest:
     sampler: str = "k_euler_ancestral"
     noise_schedule: str = "karras"
     precise_reference: PreciseReferenceInput | None = None
+    action: Literal["generate", "infill"] = "generate"
+    source_image_base64: str | None = None
+    mask_base64: str | None = None
+    inpaint_strength: float | None = None
 
     def __post_init__(self) -> None:
-        require_model_profile(self.provider_model_id)
+        if self.action == "generate":
+            require_model_profile(self.provider_model_id)
+            if (
+                self.source_image_base64 is not None
+                or self.mask_base64 is not None
+                or self.inpaint_strength is not None
+            ):
+                raise NovelAIConfigurationError("generate request cannot include inpaint inputs")
+        else:
+            require_inpaint_model_profile(self.provider_model_id)
+            if not self.source_image_base64 or not self.mask_base64:
+                raise NovelAIConfigurationError("inpaint request requires image and mask")
+            if self.precise_reference is not None:
+                raise NovelAIConfigurationError(
+                    "P0 inpaint does not combine precise reference inputs"
+                )
+            if self.inpaint_strength is None or not 0.1 <= self.inpaint_strength <= 1:
+                raise NovelAIConfigurationError("inpaint strength must be between 0.1 and 1")
         if not self.correlation_id.strip() or len(self.correlation_id) > 100:
             raise NovelAIConfigurationError("correlation id is invalid")
         if not self.prompt.strip():
@@ -135,7 +157,10 @@ class NovelAIConfiguration:
     timeout_seconds: float = 30.0
 
     def __post_init__(self) -> None:
-        require_model_profile(self.provider_model_id)
+        try:
+            require_model_profile(self.provider_model_id)
+        except ValueError:
+            require_inpaint_model_profile(self.provider_model_id)
         if not self.credential_profile_id.strip():
             raise NovelAIConfigurationError("credential profile id must not be empty")
         if not 1 <= self.timeout_seconds <= 180:
@@ -294,8 +319,24 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
                 "director_reference_information_extracted": [1.0],
             }
         )
+    if request.action == "infill":
+        parameters.update(
+            {
+                "image": request.source_image_base64,
+                "mask": request.mask_base64,
+                "strength": request.inpaint_strength,
+                "noise": 0.0,
+                "img2img": {
+                    "strength": request.inpaint_strength,
+                    "noise": 0.0,
+                    "color_correct": True,
+                },
+                "add_original_image": False,
+                "color_correct": True,
+            }
+        )
     return {
-        "action": "generate",
+        "action": request.action,
         "input": request.prompt,
         "model": request.provider_model_id,
         "parameters": parameters,

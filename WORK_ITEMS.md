@@ -36,7 +36,7 @@
 | 12 | MM-012 有界串行生成队列 | P1 | Done | MM-003、MM-011 |
 | 13 | MM-013 NovelAI 逐格生成与素材版本 | P1 | Done | MM-012 |
 | 14 | MM-014 页面编辑与确定性合成 | P1 | Done | MM-013、MM-005 |
-| 15 | MM-015 reroll、inpaint 与版本恢复 | P1 | Todo | MM-014 |
+| 15 | MM-015 reroll、inpaint 与版本恢复 | P1 | Done | MM-014 |
 | 16 | MM-016 工程包、PNG、PDF、CBZ | P1 | Todo | MM-014、MM-015 |
 | 17 | MM-017 崩溃恢复、安全与单章验收 | P1 | Todo | MM-006–MM-016 |
 | 18 | MM-101 跨章节状态账本 | P2 | Todo | MM-017 |
@@ -161,6 +161,7 @@
 
 - 单格、整页和蒙版重绘均创建不可变版本。
 - 恢复只切换指针，不删除分支或产生外部调用。
+- 完成证据：已交付单格/整页 reroll 与 PNG 蒙版 inpaint 的范围预检、有界 Job 和两层人工确认，精确冻结父 PageVersion/AssetVersion、蒙版/父图哈希、局部说明、强度、模型和成本上限；官方 `infill` allowlist 映射经 Mock 契约测试，Focused Inpainting 明确排除。结果追加父子 AssetVersion，并自动派生 PageVersion；并发页面修改时保留非当前分支。素材和页面历史激活使用冲突保护，只切换指针、不删除文件，审计外部请求数为 0。蒙版拒绝非 PNG、尺寸不符、空选、全图选中和不匹配父素材；Mock 验证黑色未选区域像素保持。84 项后端测试、13 项前端测试、ruff、mypy、生产构建与 diff 检查通过，真实 NovelAI 请求为 0。
 
 ### MM-016 工程包、PNG、PDF、CBZ
 

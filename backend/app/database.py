@@ -546,6 +546,75 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON page_versions(page_id, version);
         """,
     ),
+    (
+        10,
+        """
+        CREATE TABLE mask_assets (
+            mask_asset_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            panel_id TEXT NOT NULL,
+            parent_asset_version_id TEXT NOT NULL
+                REFERENCES asset_versions(asset_version_id),
+            relative_path TEXT NOT NULL UNIQUE,
+            sha256 TEXT NOT NULL,
+            width INTEGER NOT NULL CHECK(width > 0),
+            height INTEGER NOT NULL CHECK(height > 0),
+            selected_pixel_count INTEGER NOT NULL CHECK(selected_pixel_count > 0),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, parent_asset_version_id, sha256)
+        );
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN operation_kind TEXT NOT NULL DEFAULT 'chapter_generate'
+            CHECK(operation_kind IN (
+                'chapter_generate', 'panel_reroll', 'page_reroll', 'inpaint'
+            ));
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN target_page_id TEXT;
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN target_page_version_id TEXT REFERENCES page_versions(page_version_id);
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN result_page_version_id TEXT REFERENCES page_versions(page_version_id);
+
+        ALTER TABLE generation_job_items
+        ADD COLUMN operation_kind TEXT NOT NULL DEFAULT 'chapter_generate'
+            CHECK(operation_kind IN (
+                'chapter_generate', 'panel_reroll', 'page_reroll', 'inpaint'
+            ));
+
+        ALTER TABLE generation_job_items
+        ADD COLUMN parent_asset_version_id TEXT REFERENCES asset_versions(asset_version_id);
+
+        ALTER TABLE generation_job_items
+        ADD COLUMN mask_asset_id TEXT REFERENCES mask_assets(mask_asset_id);
+
+        ALTER TABLE generation_job_items
+        ADD COLUMN edit_prompt TEXT;
+
+        ALTER TABLE generation_job_items
+        ADD COLUMN inpaint_strength REAL
+            CHECK(inpaint_strength IS NULL OR (
+                inpaint_strength >= 0.1 AND inpaint_strength <= 1
+            ));
+
+        ALTER TABLE page_versions
+        ADD COLUMN source_job_id TEXT REFERENCES generation_jobs(job_id);
+
+        CREATE UNIQUE INDEX one_page_version_per_source_job
+        ON page_versions(source_job_id)
+        WHERE source_job_id IS NOT NULL;
+
+        CREATE INDEX mask_assets_by_parent
+        ON mask_assets(project_id, parent_asset_version_id, created_at);
+
+        CREATE INDEX revision_jobs_by_page
+        ON generation_jobs(project_id, target_page_id, created_at)
+        WHERE target_page_id IS NOT NULL;
+        """,
+    ),
 )
 
 

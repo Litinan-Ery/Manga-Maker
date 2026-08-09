@@ -9,7 +9,7 @@
 - 大小：112,680 bytes
 - SHA-256：`f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8`
 - Swagger / 标题 / 版本：`2.0` / `Omegalaser API` / `1.0`
-- Manga Maker 映射版本：`novelai-image-2026-08-09.1`
+- Manga Maker 映射版本：`novelai-image-2026-08-09.2`（加入经审计的 P0 `infill` 字段组合）
 
 `https://image.novelai.net/openapi.json` 当前是标题为 `Observability API` 的另一份
 OpenAPI 3.1 契约，只含错误追踪能力，不能作为图像接口生成或验收依据。实现只允许显式列入
@@ -20,6 +20,7 @@ OpenAPI 3.1 契约，只含错误追踪能力，不能作为图像接口生成�
 - 连接测试只在用户点击后调用 `GET /ai/generate-image/suggest-tags`，固定发送无敏感内容的
   `manga` 查询，不生成图片、不产生隐藏付费任务、不自动重试。
 - 出图、重绘和放大必须由后续有界队列承接，绑定明确用户动作和调用上限。
+- P0 局部重绘仍使用固定的 `POST /ai/generate-image`，根操作为 `infill`，只发送经哈希冻结的父图、黑白蒙版、提示词与 allowlist 参数；Focused Inpainting 不在当前稳定契约内。
 - 应用接收用户已有的 Persistent API Token；不收集 NovelAI 邮箱/密码，也不调用登录或
   Token 创建接口。
 - Token 只从应用本地加密凭证库按需读取，不进入项目、SQLite、日志、接口响应或导出物。

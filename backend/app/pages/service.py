@@ -116,6 +116,226 @@ class PageService:
             raise ApplicationError("PAGE_VERSION_NOT_FOUND", "没有找到该页面版本。", 404)
         return self._payload(row)
 
+    def list_versions(self, project_id: str, page_id: str) -> list[dict[str, Any]]:
+        self._version_context(project_id, page_id)
+        with self.database.reader() as connection:
+            rows = connection.execute(
+                """
+                SELECT pv.*, cp.project_id, cp.chapter_id, cp.page_number,
+                       cp.revision AS page_revision
+                FROM page_versions pv
+                JOIN comic_pages cp ON cp.page_id = pv.page_id
+                WHERE cp.project_id = ? AND cp.page_id = ?
+                ORDER BY pv.version DESC
+                """,
+                (project_id, page_id),
+            ).fetchall()
+        return [self._payload(row) for row in rows]
+
+    def activate_version(
+        self,
+        project_id: str,
+        page_id: str,
+        page_version_id: str,
+        *,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        root, current = self._version_context(project_id, page_id)
+        if int(root["revision"]) != expected_revision:
+            raise ApplicationError(
+                "PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后重试。", 409
+            )
+        target = self.get_version(project_id, page_id, page_version_id)
+        if current is not None and str(current["page_version_id"]) == page_version_id:
+            return target
+        with self.database.writer() as connection:
+            live = connection.execute(
+                "SELECT revision FROM comic_pages WHERE page_id = ?", (page_id,)
+            ).fetchone()
+            if live is None or int(live["revision"]) != expected_revision:
+                raise ApplicationError(
+                    "PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后重试。", 409
+                )
+            connection.execute(
+                "UPDATE page_versions SET is_current = 0 WHERE page_id = ?", (page_id,)
+            )
+            updated = connection.execute(
+                """
+                UPDATE page_versions SET is_current = 1
+                WHERE page_id = ? AND page_version_id = ?
+                """,
+                (page_id, page_version_id),
+            ).rowcount
+            if updated != 1:
+                raise ApplicationError("PAGE_VERSION_NOT_FOUND", "没有找到该页面版本。", 404)
+            connection.execute(
+                """
+                UPDATE comic_pages SET revision = revision + 1,
+                    updated_at = CURRENT_TIMESTAMP WHERE page_id = ?
+                """,
+                (page_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events(event_id, project_id, event_type, payload_json)
+                VALUES (?, ?, 'page.version_activated', ?)
+                """,
+                (
+                    str(uuid7()),
+                    project_id,
+                    canonical_json(
+                        {
+                            "page_id": page_id,
+                            "page_version_id": page_version_id,
+                            "previous_page_version_id": (
+                                str(current["page_version_id"]) if current is not None else None
+                            ),
+                            "external_requests_started": 0,
+                        }
+                    ),
+                ),
+            )
+        return self.get_current(project_id, page_id)
+
+    def create_generated_revision(
+        self,
+        project_id: str,
+        page_id: str,
+        parent_page_version_id: str,
+        replacements: dict[str, str],
+        *,
+        source_job_id: str,
+    ) -> dict[str, Any]:
+        existing = self._version_for_source_job(project_id, source_job_id)
+        if existing is not None:
+            return existing
+        parent = self.get_version(project_id, page_id, parent_page_version_id)
+        document = PageDocument.model_validate(parent["document"])
+        panel_ids = {panel.panel_id for panel in document.panels}
+        if not replacements or not set(replacements).issubset(panel_ids):
+            raise ApplicationError(
+                "PAGE_GENERATED_REPLACEMENTS_INVALID",
+                "生成结果与冻结页面的面板范围不匹配。",
+                409,
+            )
+        revised = document.model_copy(
+            update={
+                "panels": [
+                    panel.model_copy(
+                        update={
+                            "asset_version_id": replacements.get(
+                                panel.panel_id, panel.asset_version_id
+                            )
+                        }
+                    )
+                    for panel in document.panels
+                ]
+            }
+        )
+        root, _ = self._version_context(project_id, page_id)
+        asset_paths = self._validate_assets(project_id, revised)
+        serialized = canonical_json(revised.model_dump(mode="json"))
+        document_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        try:
+            rendered = self.renderer.render(revised, asset_paths)
+        except PageRenderError as exc:
+            raise ApplicationError(
+                "PAGE_RENDER_INVALID", f"页面无法确定性渲染: {exc}", 422
+            ) from exc
+        with self.database.reader() as connection:
+            version_row = connection.execute(
+                """
+                SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+                FROM page_versions WHERE page_id = ?
+                """,
+                (page_id,),
+            ).fetchone()
+        version = int(version_row["next_version"] if version_row is not None else 1)
+        page_version_id = str(uuid7())
+        relative_path = self._persist_render_file(
+            Path(str(root["workspace_path"])),
+            page_id,
+            page_version_id,
+            version,
+            rendered,
+        )
+        try:
+            with self.database.writer() as connection:
+                live_current = connection.execute(
+                    """
+                    SELECT page_version_id FROM page_versions
+                    WHERE page_id = ? AND is_current = 1
+                    """,
+                    (page_id,),
+                ).fetchone()
+                make_current = (
+                    live_current is not None
+                    and str(live_current["page_version_id"]) == parent_page_version_id
+                )
+                if make_current:
+                    connection.execute(
+                        "UPDATE page_versions SET is_current = 0 WHERE page_id = ?",
+                        (page_id,),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO page_versions(
+                        page_version_id, page_id, version, parent_page_version_id,
+                        storyboard_version_id, schema_version, document_json,
+                        document_sha256, rendered_relative_path, render_sha256,
+                        renderer_version, font_sha256, is_current, source_job_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        page_version_id,
+                        page_id,
+                        version,
+                        parent_page_version_id,
+                        revised.storyboard_version_id,
+                        revised.schema_version,
+                        serialized,
+                        document_sha256,
+                        relative_path,
+                        rendered.sha256,
+                        rendered.renderer_version,
+                        rendered.font_sha256,
+                        int(make_current),
+                        source_job_id,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE comic_pages SET revision = revision + 1,
+                        updated_at = CURRENT_TIMESTAMP WHERE page_id = ?
+                    """,
+                    (page_id,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO audit_events(event_id, project_id, event_type, payload_json)
+                    VALUES (?, ?, 'page.generated_version_created', ?)
+                    """,
+                    (
+                        str(uuid7()),
+                        project_id,
+                        canonical_json(
+                            {
+                                "page_id": page_id,
+                                "page_version_id": page_version_id,
+                                "parent_page_version_id": parent_page_version_id,
+                                "source_job_id": source_job_id,
+                                "replacement_panel_ids": sorted(replacements),
+                                "activated": make_current,
+                            }
+                        ),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ApplicationError(
+                "PAGE_VERSION_CONFLICT", "生成页面版本登记冲突，请刷新后重试。", 409
+            ) from exc
+        return self.get_version(project_id, page_id, page_version_id)
+
     def create_revision(
         self,
         project_id: str,
@@ -471,9 +691,28 @@ class PageService:
             "font_sha256": str(row["font_sha256"]),
             "is_current": bool(row["is_current"]),
             "created_at": str(row["created_at"]),
+            "source_job_id": row["source_job_id"],
             "document": document.model_dump(mode="json"),
             "external_requests_started": 0,
         }
+
+    def _version_for_source_job(
+        self, project_id: str, source_job_id: str
+    ) -> dict[str, Any] | None:
+        with self.database.reader() as connection:
+            row = connection.execute(
+                """
+                SELECT pv.page_id, pv.page_version_id FROM page_versions pv
+                JOIN comic_pages cp ON cp.page_id = pv.page_id
+                WHERE cp.project_id = ? AND pv.source_job_id = ?
+                """,
+                (project_id, source_job_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.get_version(
+            project_id, str(row["page_id"]), str(row["page_version_id"])
+        )
 
 
 def default_text_layers(page: PageCandidate, page_template: PageTemplate) -> list[TextLayer]:

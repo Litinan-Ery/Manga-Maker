@@ -210,6 +210,68 @@ def test_precise_reference_is_mapped_as_one_aligned_reference() -> None:
     )
 
 
+def test_inpaint_uses_pinned_infill_fields_and_inpaint_model() -> None:
+    captured: dict[str, object] = {}
+    source = png_bytes(832, 1216)
+    mask = BytesIO()
+    Image.new("L", (832, 1216), color=0).save(mask, format="PNG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            201,
+            json={
+                "images": [
+                    {
+                        "image": base64.b64encode(source).decode("ascii"),
+                        "index": 0,
+                        "seed": 1234,
+                    }
+                ]
+            },
+        )
+
+    client = NovelAIClient(
+        NovelAIConfiguration(
+            provider_model_id="nai-diffusion-4-5-full-inpainting",
+            credential_profile_id="novelai",
+        ),
+        lambda _profile_id: "unit-test-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    request = NovelAIImageRequest(
+        correlation_id="correlation-inpaint",
+        provider_model_id="nai-diffusion-4-5-full-inpainting",
+        prompt="correct hand",
+        negative_prompt="text, watermark",
+        width=832,
+        height=1216,
+        steps=28,
+        scale=5,
+        seed=1234,
+        action="infill",
+        source_image_base64=base64.b64encode(source).decode("ascii"),
+        mask_base64=base64.b64encode(mask.getvalue()).decode("ascii"),
+        inpaint_strength=0.65,
+    )
+    asyncio.run(client.generate_image(request))
+
+    assert captured["action"] == "infill"
+    assert captured["model"] == "nai-diffusion-4-5-full-inpainting"
+    parameters = captured["parameters"]
+    assert isinstance(parameters, dict)
+    assert parameters["image"] == request.source_image_base64
+    assert parameters["mask"] == request.mask_base64
+    assert parameters["strength"] == 0.65
+    assert parameters["img2img"] == {
+        "strength": 0.65,
+        "noise": 0.0,
+        "color_correct": True,
+    }
+    assert parameters["add_original_image"] is False
+    assert "director_reference_images" not in parameters
+
+
 @pytest.mark.parametrize(
     "response",
     [

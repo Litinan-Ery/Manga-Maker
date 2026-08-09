@@ -86,7 +86,7 @@ const capabilities = {
   swagger_version: "2.0",
   api_title: "Omegalaser API",
   api_version: "1.0",
-  mapping_version: "novelai-image-2026-08-09.1",
+  mapping_version: "novelai-image-2026-08-09.2",
   allowed_paths: {},
   models: [
     {

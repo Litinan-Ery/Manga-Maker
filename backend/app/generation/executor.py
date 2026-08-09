@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable
@@ -45,6 +47,10 @@ class ImageProviderFactory(Protocol):
     ) -> NovelAIProvider: ...
 
 
+class RevisionFinalizer(Protocol):
+    def finalize_if_completed(self, job_id: str) -> dict[str, Any] | None: ...
+
+
 def default_image_provider_factory(
     configuration: NovelAIConfiguration, secret_reader: SecretReader
 ) -> NovelAIProvider:
@@ -57,6 +63,7 @@ class GenerationSpecCompiler:
 
     def compile(self, claim: dict[str, Any]) -> CompiledGenerationSpec:
         context = self._context(str(claim["attempt_id"]))
+        operation = str(context["operation_kind"])
         storyboard = StoryboardDocument.model_validate_json(str(context["storyboard_json"]))
         characters = CharacterBibleDocument.model_validate_json(str(context["character_json"]))
         style = StyleBibleDocument.model_validate_json(str(context["style_json"]))
@@ -82,6 +89,7 @@ class GenerationSpecCompiler:
                 style.positive_prompt_fragment,
                 *(character.positive_prompt_fragment for character in matched_characters),
                 panel.visual_prompt,
+                str(context["edit_prompt"] or "") if operation == "inpaint" else "",
                 "no text, no letters, no speech bubbles, no watermark, no logo",
             ]
         )
@@ -102,7 +110,11 @@ class GenerationSpecCompiler:
 
         reference_use: ReferenceUse | None = None
         provider_reference: PreciseReferenceInput | None = None
-        reference_candidate = first_reference_candidate(matched_characters, style)
+        reference_candidate = (
+            first_reference_candidate(matched_characters, style)
+            if operation != "inpaint"
+            else None
+        )
         if reference_candidate is not None:
             reference_asset_id, description = reference_candidate
             profile = require_model_profile(str(context["provider_model_id"]))
@@ -144,7 +156,19 @@ class GenerationSpecCompiler:
         seed = secrets.randbelow(4_294_967_288)
         spec_id = str(uuid7())
         correlation_id = str(uuid7())
+        revision_inputs = self._revision_inputs(context)
+        spec_action = {
+            "chapter_generate": "generate",
+            "panel_reroll": "reroll",
+            "page_reroll": "reroll",
+            "inpaint": "inpaint",
+        }.get(operation)
+        if spec_action is None:
+            raise ApplicationError(
+                "GENERATION_OPERATION_INVALID", "生成任务操作类型无效。", 409
+            )
         document = GenerationSpecDocument(
+            schema_version="1.0" if operation == "chapter_generate" else "1.1",
             spec_id=spec_id,
             project_id=str(context["project_id"]),
             chapter_id=str(context["chapter_id"]),
@@ -159,6 +183,7 @@ class GenerationSpecCompiler:
             provider_model_id=str(context["provider_model_id"]),
             mapping_version=str(context["mapping_version"]),
             contract_sha256=str(context["contract_sha256"]),
+            action=spec_action,
             prompt=prompt,
             negative_prompt=negative_prompt,
             width=832,
@@ -169,10 +194,32 @@ class GenerationSpecCompiler:
             noise_schedule="karras",
             seed=seed,
             references=[reference_use] if reference_use is not None else [],
+            parent_asset_version_id=revision_inputs["parent_asset_version_id"],
+            parent_image_sha256=revision_inputs["parent_image_sha256"],
+            mask_asset_id=revision_inputs["mask_asset_id"],
+            mask_sha256=revision_inputs["mask_sha256"],
+            edit_prompt=(
+                str(context["edit_prompt"]) if context["edit_prompt"] is not None else None
+            ),
+            inpaint_strength=(
+                float(context["inpaint_strength"])
+                if context["inpaint_strength"] is not None
+                else None
+            ),
+            prompt_source=(
+                "approved_storyboard_and_bibles_plus_user_edit"
+                if operation == "inpaint"
+                else "approved_storyboard_and_bibles"
+            ),
         )
         return CompiledGenerationSpec(
             document=document,
-            provider_request=self._provider_request(document, provider_reference),
+            provider_request=self._provider_request(
+                document,
+                provider_reference,
+                source_image_base64=revision_inputs["source_image_base64"],
+                mask_base64=revision_inputs["mask_base64"],
+            ),
         )
 
     def configuration_for_attempt(self, attempt_id: str) -> NovelAIConfiguration:
@@ -194,7 +241,10 @@ class GenerationSpecCompiler:
         with self.database.reader() as connection:
             row = connection.execute(
                 """
-                SELECT ga.attempt_id, gi.item_id, gi.panel_id, gj.job_id,
+                SELECT ga.attempt_id, gi.item_id, gi.panel_id,
+                       gi.operation_kind, gi.parent_asset_version_id,
+                       gi.mask_asset_id, gi.edit_prompt, gi.inpaint_strength,
+                       gj.job_id,
                        gj.project_id, gj.chapter_id, gj.storyboard_version_id,
                        gj.character_bible_version_id, gj.style_bible_version_id,
                        gj.provider_model_id, gj.mapping_version, gj.contract_sha256,
@@ -223,6 +273,90 @@ class GenerationSpecCompiler:
             )
         return cast(sqlite3.Row, row)
 
+    def _revision_inputs(self, context: sqlite3.Row) -> dict[str, str | None]:
+        parent_asset_version_id = context["parent_asset_version_id"]
+        if parent_asset_version_id is None:
+            return {
+                "parent_asset_version_id": None,
+                "parent_image_sha256": None,
+                "mask_asset_id": None,
+                "mask_sha256": None,
+                "source_image_base64": None,
+                "mask_base64": None,
+            }
+        with self.database.reader() as connection:
+            parent = connection.execute(
+                """
+                SELECT av.image_sha256, av.original_relative_path, p.workspace_path
+                FROM asset_versions av
+                JOIN projects p ON p.project_id = av.project_id
+                WHERE av.asset_version_id = ? AND av.project_id = ?
+                  AND av.panel_id = ? AND av.status = 'ready'
+                """,
+                (
+                    str(parent_asset_version_id),
+                    str(context["project_id"]),
+                    str(context["panel_id"]),
+                ),
+            ).fetchone()
+            mask = None
+            if context["mask_asset_id"] is not None:
+                mask = connection.execute(
+                    """
+                    SELECT sha256, relative_path FROM mask_assets
+                    WHERE mask_asset_id = ? AND project_id = ?
+                      AND panel_id = ? AND parent_asset_version_id = ?
+                    """,
+                    (
+                        str(context["mask_asset_id"]),
+                        str(context["project_id"]),
+                        str(context["panel_id"]),
+                        str(parent_asset_version_id),
+                    ),
+                ).fetchone()
+        if parent is None:
+            raise ApplicationError(
+                "REVISION_PARENT_ASSET_INVALID", "冻结的父素材不存在或已损坏。", 409
+            )
+        workspace = Path(str(parent["workspace_path"])).resolve()
+        parent_path = (workspace / str(parent["original_relative_path"])).resolve()
+        if not parent_path.is_relative_to(workspace) or not parent_path.is_file():
+            raise ApplicationError(
+                "REVISION_PARENT_ASSET_FILE_MISSING", "冻结的父素材文件缺失。", 409
+            )
+        parent_raw = parent_path.read_bytes()
+        if hashlib.sha256(parent_raw).hexdigest() != str(parent["image_sha256"]):
+            raise ApplicationError(
+                "REVISION_PARENT_ASSET_HASH_MISMATCH", "冻结的父素材哈希不一致。", 409
+            )
+        result: dict[str, str | None] = {
+            "parent_asset_version_id": str(parent_asset_version_id),
+            "parent_image_sha256": str(parent["image_sha256"]),
+            "mask_asset_id": None,
+            "mask_sha256": None,
+            "source_image_base64": None,
+            "mask_base64": None,
+        }
+        if str(context["operation_kind"]) != "inpaint":
+            return result
+        if mask is None:
+            raise ApplicationError("MASK_NOT_FOUND", "冻结的局部重绘蒙版不存在。", 409)
+        mask_path = (workspace / str(mask["relative_path"])).resolve()
+        if not mask_path.is_relative_to(workspace) or not mask_path.is_file():
+            raise ApplicationError("MASK_FILE_MISSING", "冻结的蒙版文件缺失。", 409)
+        mask_raw = mask_path.read_bytes()
+        if hashlib.sha256(mask_raw).hexdigest() != str(mask["sha256"]):
+            raise ApplicationError("MASK_HASH_MISMATCH", "冻结的蒙版哈希不一致。", 409)
+        result.update(
+            {
+                "mask_asset_id": str(context["mask_asset_id"]),
+                "mask_sha256": str(mask["sha256"]),
+                "source_image_base64": base64.b64encode(parent_raw).decode("ascii"),
+                "mask_base64": base64.b64encode(mask_raw).decode("ascii"),
+            }
+        )
+        return result
+
     def _reference_asset(
         self, project_id: str, workspace_path: str, reference_asset_id: str
     ) -> dict[str, Any]:
@@ -250,6 +384,9 @@ class GenerationSpecCompiler:
     def _provider_request(
         document: GenerationSpecDocument,
         reference: PreciseReferenceInput | None,
+        *,
+        source_image_base64: str | None,
+        mask_base64: str | None,
     ) -> NovelAIImageRequest:
         return NovelAIImageRequest(
             correlation_id=document.correlation_id,
@@ -264,6 +401,10 @@ class GenerationSpecCompiler:
             sampler=document.sampler,
             noise_schedule=document.noise_schedule,
             precise_reference=reference,
+            action="infill" if document.action == "inpaint" else "generate",
+            source_image_base64=source_image_base64,
+            mask_base64=mask_base64,
+            inpaint_strength=document.inpaint_strength,
         )
 
 
@@ -277,6 +418,7 @@ class GenerationExecutor:
         *,
         provider_factory: ImageProviderFactory = default_image_provider_factory,
         retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        revision_finalizer: RevisionFinalizer | None = None,
     ) -> None:
         self.database = database
         self.queue = queue
@@ -285,6 +427,7 @@ class GenerationExecutor:
         self.compiler = GenerationSpecCompiler(database)
         self.provider_factory = provider_factory
         self.retry_sleep = retry_sleep
+        self.revision_finalizer = revision_finalizer
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     def schedule(self, job_id: str) -> bool:
@@ -408,6 +551,12 @@ class GenerationExecutor:
                 attempt_id, error_code="LOCAL_ASSET_COMMIT_FAILED", outcome_unknown=True
             )
             return "needs_review"
+        if self.revision_finalizer is not None:
+            try:
+                self.revision_finalizer.finalize_if_completed(job_id)
+            except Exception:
+                self.queue.mark_job_needs_review(job_id, "PAGE_REVISION_FINALIZATION_FAILED")
+                return "needs_review"
         return "completed"
 
     async def shutdown(self) -> None:

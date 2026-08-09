@@ -55,6 +55,7 @@ class GenerationPlan:
     style_bible_version_id: str
     novelai_config_revision: int
     provider_model_id: str
+    inpaint_model_id: str
     mapping_version: str
     contract_sha256: str
     credential_profile_id: str
@@ -81,6 +82,7 @@ class GenerationPlan:
             "style_bible_version_id": self.style_bible_version_id,
             "novelai_config_revision": self.novelai_config_revision,
             "provider_model_id": self.provider_model_id,
+            "inpaint_model_id": self.inpaint_model_id,
             "mapping_version": self.mapping_version,
             "contract_sha256": self.contract_sha256,
             "credential_profile_id": self.credential_profile_id,
@@ -118,6 +120,20 @@ class GenerationQueueService:
             chapter_id,
             per_panel_cost_ceiling_anlas=per_panel_cost_ceiling_anlas,
         ).payload()
+
+    def build_plan(
+        self,
+        project_id: str,
+        chapter_id: str,
+        *,
+        per_panel_cost_ceiling_anlas: int,
+    ) -> GenerationPlan:
+        """Build an approved snapshot for a scoped revision without creating a job."""
+        return self._build_plan(
+            project_id,
+            chapter_id,
+            per_panel_cost_ceiling_anlas=per_panel_cost_ceiling_anlas,
+        )
 
     def create_job(
         self,
@@ -277,6 +293,10 @@ class GenerationQueueService:
             "style_bible_version_id": str(row["style_bible_version_id"]),
             "novelai_config_revision": int(row["novelai_config_revision"]),
             "provider_model_id": str(row["provider_model_id"]),
+            "operation_kind": str(row["operation_kind"]),
+            "target_page_id": row["target_page_id"],
+            "target_page_version_id": row["target_page_version_id"],
+            "result_page_version_id": row["result_page_version_id"],
             "mapping_version": str(row["mapping_version"]),
             "contract_sha256": str(row["contract_sha256"]),
             "credential_profile_id": str(row["credential_profile_id"]),
@@ -735,6 +755,19 @@ class GenerationQueueService:
             ).rowcount
         return {"needs_review": len(affected_jobs), "paused": max(paused, 0)}
 
+    def mark_job_needs_review(self, job_id: str, reason: str) -> None:
+        with self.database.writer() as connection:
+            row = connection.execute(
+                "SELECT status FROM generation_jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise ApplicationError(
+                    "GENERATION_JOB_NOT_FOUND", "没有找到该生成队列。", 404
+                )
+            if str(row["status"]) == "canceled":
+                return
+            self._mark_job_needs_review(connection, job_id, reason)
+
     def _build_plan(
         self,
         project_id: str,
@@ -785,7 +818,8 @@ class GenerationQueueService:
             ).fetchone()
             novelai_row = connection.execute(
                 """
-                SELECT provider_model_id, mapping_version, contract_sha256, revision,
+                SELECT provider_model_id, inpaint_model_id, mapping_version,
+                       contract_sha256, revision,
                        credential_profile_id, timeout_seconds, last_connection_status
                 FROM novelai_configs WHERE project_id = ?
                 """,
@@ -846,6 +880,7 @@ class GenerationQueueService:
             "style_bible_version_id": style_version_id,
             "novelai_config_revision": int(novelai_row["revision"]),
             "provider_model_id": str(novelai_row["provider_model_id"]),
+            "inpaint_model_id": str(novelai_row["inpaint_model_id"]),
             "mapping_version": str(novelai_row["mapping_version"]),
             "contract_sha256": str(novelai_row["contract_sha256"]),
             "credential_profile_id": str(novelai_row["credential_profile_id"]),
@@ -869,6 +904,7 @@ class GenerationQueueService:
             style_bible_version_id=style_version_id,
             novelai_config_revision=int(novelai_row["revision"]),
             provider_model_id=str(novelai_row["provider_model_id"]),
+            inpaint_model_id=str(novelai_row["inpaint_model_id"]),
             mapping_version=str(novelai_row["mapping_version"]),
             contract_sha256=str(novelai_row["contract_sha256"]),
             credential_profile_id=str(novelai_row["credential_profile_id"]),
@@ -1002,6 +1038,11 @@ class GenerationQueueService:
             "recorded_cost_anlas": int(row["recorded_cost_anlas"]),
             "active_attempt_id": row["active_attempt_id"],
             "asset_version_id": row["asset_version_id"],
+            "operation_kind": str(row["operation_kind"]),
+            "parent_asset_version_id": row["parent_asset_version_id"],
+            "mask_asset_id": row["mask_asset_id"],
+            "edit_prompt": row["edit_prompt"],
+            "inpaint_strength": row["inpaint_strength"],
         }
 
     @staticmethod

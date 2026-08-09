@@ -23,6 +23,10 @@ class CreatePageRevisionRequest(BaseModel):
     document: PageDocument
 
 
+class ActivatePageVersionRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+
+
 def service(request: Request) -> PageService:
     return cast(PageService, request.app.state.pages)
 
@@ -67,6 +71,31 @@ def page_version(
     project_id: str, page_id: str, page_version_id: str, request: Request
 ) -> dict[str, Any]:
     return service(request).get_version(project_id, page_id, page_version_id)
+
+
+@router.get("/{page_id}/versions")
+def page_versions(
+    project_id: str, page_id: str, request: Request
+) -> list[dict[str, Any]]:
+    return service(request).list_versions(project_id, page_id)
+
+
+@router.post("/{page_id}/versions/{page_version_id}/activate")
+def activate_page_version(
+    project_id: str,
+    page_id: str,
+    page_version_id: str,
+    request: Request,
+    body: ActivatePageVersionRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return service(request).activate_version(
+        project_id,
+        page_id,
+        page_version_id,
+        expected_revision=body.expected_revision,
+    )
 
 
 @router.post("/{page_id}/versions", status_code=status.HTTP_201_CREATED)

@@ -293,9 +293,51 @@ h1 {
   grid-column: 1 / -1;
 }
 
+.revision-workbench {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid rgb(25 24 21 / 15%);
+}
+
+.revision-workbench h3,
+.revision-workbench p {
+  margin: 0;
+}
+
+.revision-history,
+.revision-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.revision-history label,
+.revision-fields label {
+  display: grid;
+  gap: 6px;
+}
+
+.revision-history button {
+  min-height: 42px;
+}
+
+.revision-approval {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgb(31 93 73 / 24%);
+  border-radius: 12px;
+  background: rgb(231 241 235 / 72%);
+}
+
 @media (max-width: 780px) {
   .page-composer-toolbar,
-  .page-composer-workspace {
+  .page-composer-workspace,
+  .revision-history,
+  .revision-fields {
     grid-template-columns: 1fr;
   }
 }

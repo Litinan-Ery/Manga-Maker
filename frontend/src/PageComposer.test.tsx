@@ -29,6 +29,9 @@ it("edits and rerenders a page locally without starting an image request", async
     if (url.includes("/pages?chapter_id=chapter-1") && method === "GET") {
       return Promise.resolve(jsonResponse([]));
     }
+    if (url.endsWith("/pages/page-1/versions") && method === "GET") {
+      return Promise.resolve(jsonResponse([pageVersion(1, "雨还在下。")]));
+    }
     if (url.endsWith("/pages/draft") && method === "POST") {
       return Promise.resolve(jsonResponse([pageVersion(1, "雨还在下。")], 201));
     }
@@ -66,10 +69,12 @@ it("edits and rerenders a page locally without starting an image request", async
     />,
   );
 
-  fireEvent.click(await screen.findByRole("button", { name: "从当前素材建立漫画页" }));
+  const draft = await screen.findByRole("button", { name: "从当前素材建立漫画页" });
+  await waitFor(() => expect(draft).toBeEnabled());
+  fireEvent.click(draft);
   expect(await screen.findByText(/未调用任何图像 API/)).toBeInTheDocument();
 
-  fireEvent.change(screen.getByLabelText("文字"), {
+  fireEvent.change(await screen.findByLabelText("文字"), {
     target: { value: "雨停了，街灯还亮着。" },
   });
   fireEvent.click(screen.getByRole("button", { name: "保存并重新渲染页面（仅本地）" }));

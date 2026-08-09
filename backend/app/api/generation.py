@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..errors import ApplicationError
 from ..generation.assets import AssetStore
 from ..generation.queue import GenerationQueueService
+from ..generation.revisions import RevisionOperation, RevisionService
 from ..security import session_headers
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/generation", tags=["generation"])
@@ -35,6 +36,28 @@ class ExecuteRequest(TransitionRequest):
     confirmation: Literal["I_CONFIRM_NOVELAI_IMAGE_GENERATION"]
 
 
+class RevisionEstimateRequest(BaseModel):
+    operation: RevisionOperation
+    page_id: str = Field(min_length=1, max_length=64)
+    panel_id: str | None = Field(default=None, min_length=1, max_length=64)
+    mask_asset_id: str | None = Field(default=None, min_length=1, max_length=64)
+    edit_prompt: str | None = Field(default=None, min_length=1, max_length=2_000)
+    inpaint_strength: float | None = Field(default=None, ge=0.1, le=1)
+    per_panel_cost_ceiling_anlas: int = Field(default=10, ge=0, le=100_000)
+
+
+class CreateRevisionJobRequest(RevisionEstimateRequest):
+    plan_fingerprint: str = Field(min_length=64, max_length=64)
+    max_calls: int = Field(ge=1, le=10_000)
+    max_cost_anlas: int = Field(ge=0, le=10_000_000)
+    confirmed: bool
+
+
+class ActivateAssetRequest(BaseModel):
+    panel_id: str = Field(min_length=1, max_length=64)
+    expected_current_asset_version_id: str = Field(min_length=1, max_length=64)
+
+
 def verify_session(request: Request, headers: Headers) -> None:
     request.app.state.local_session.verify(*headers)
 
@@ -45,6 +68,10 @@ def queue_service(request: Request) -> GenerationQueueService:
 
 def asset_store(request: Request) -> AssetStore:
     return cast(AssetStore, request.app.state.asset_store)
+
+
+def revision_service(request: Request) -> RevisionService:
+    return cast(RevisionService, request.app.state.revisions)
 
 
 @router.post("/estimate")
@@ -178,9 +205,33 @@ def list_assets(project_id: str, request: Request) -> list[dict[str, Any]]:
     return asset_store(request).current_assets(project_id)
 
 
+@router.get("/assets/panels/{panel_id}/versions")
+def list_asset_versions(
+    project_id: str, panel_id: str, request: Request
+) -> list[dict[str, Any]]:
+    return asset_store(request).list_asset_versions(project_id, panel_id)
+
+
 @router.get("/assets/{asset_version_id}")
 def get_asset(project_id: str, asset_version_id: str, request: Request) -> dict[str, Any]:
     return asset_store(request).get_asset(project_id, asset_version_id)
+
+
+@router.post("/assets/{asset_version_id}/activate")
+def activate_asset(
+    project_id: str,
+    asset_version_id: str,
+    request: Request,
+    body: ActivateAssetRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return asset_store(request).activate_asset_version(
+        project_id,
+        body.panel_id,
+        asset_version_id,
+        expected_current_asset_version_id=body.expected_current_asset_version_id,
+    )
 
 
 @router.get("/assets/{asset_version_id}/content", response_class=FileResponse)
@@ -193,3 +244,75 @@ def get_asset_content(
     verify_session(request, headers)
     path = asset_store(request).asset_content_path(project_id, asset_version_id)
     return FileResponse(path, media_type="image/png", filename="panel.png")
+
+
+@router.post("/masks", status_code=status.HTTP_201_CREATED)
+async def create_mask(
+    project_id: str,
+    request: Request,
+    headers: Headers,
+    panel_id: str = Form(min_length=1, max_length=64),
+    parent_asset_version_id: str = Form(min_length=1, max_length=64),
+    mask: UploadFile = File(),  # noqa: B008
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    raw = await mask.read(8 * 1024 * 1024 + 1)
+    return revision_service(request).create_mask(
+        project_id, panel_id, parent_asset_version_id, raw
+    )
+
+
+@router.get("/masks/{mask_asset_id}/content", response_class=FileResponse)
+def mask_content(
+    project_id: str,
+    mask_asset_id: str,
+    request: Request,
+    headers: Headers,
+) -> FileResponse:
+    verify_session(request, headers)
+    path = revision_service(request).mask_content_path(project_id, mask_asset_id)
+    return FileResponse(path, media_type="image/png", filename="mask.png")
+
+
+@router.post("/revisions/estimate")
+def estimate_revision(
+    project_id: str,
+    request: Request,
+    body: RevisionEstimateRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return revision_service(request).estimate(
+        project_id,
+        body.operation,
+        body.page_id,
+        panel_id=body.panel_id,
+        mask_asset_id=body.mask_asset_id,
+        edit_prompt=body.edit_prompt,
+        inpaint_strength=body.inpaint_strength,
+        per_panel_cost_ceiling_anlas=body.per_panel_cost_ceiling_anlas,
+    )
+
+
+@router.post("/revisions/jobs", status_code=status.HTTP_201_CREATED)
+def create_revision_job(
+    project_id: str,
+    request: Request,
+    body: CreateRevisionJobRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return revision_service(request).create_job(
+        project_id,
+        body.operation,
+        body.page_id,
+        panel_id=body.panel_id,
+        mask_asset_id=body.mask_asset_id,
+        edit_prompt=body.edit_prompt,
+        inpaint_strength=body.inpaint_strength,
+        per_panel_cost_ceiling_anlas=body.per_panel_cost_ceiling_anlas,
+        plan_fingerprint=body.plan_fingerprint,
+        max_calls=body.max_calls,
+        max_cost_anlas=body.max_cost_anlas,
+        confirmed=body.confirmed,
+    )

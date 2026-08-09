@@ -105,6 +105,12 @@ class AssetStore:
             "mapping_version": document.mapping_version,
             "contract_sha256": document.contract_sha256,
             "action": document.action,
+            "parent_asset_version_id": document.parent_asset_version_id,
+            "parent_image_sha256": document.parent_image_sha256,
+            "mask_asset_id": document.mask_asset_id,
+            "mask_sha256": document.mask_sha256,
+            "edit_prompt": document.edit_prompt,
+            "inpaint_strength": document.inpaint_strength,
             "prompt": document.prompt,
             "negative_prompt": document.negative_prompt,
             "width": generated.width,
@@ -230,6 +236,92 @@ class AssetStore:
             ).fetchall()
         return [self._asset_payload(row) for row in rows]
 
+    def list_asset_versions(self, project_id: str, panel_id: str) -> list[dict[str, Any]]:
+        with self.database.reader() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM asset_versions
+                WHERE project_id = ? AND panel_id = ? AND status = 'ready'
+                ORDER BY version DESC
+                """,
+                (project_id, panel_id),
+            ).fetchall()
+        return [self._asset_payload(row) for row in rows]
+
+    def activate_asset_version(
+        self,
+        project_id: str,
+        panel_id: str,
+        asset_version_id: str,
+        *,
+        expected_current_asset_version_id: str,
+    ) -> dict[str, Any]:
+        with self.database.writer() as connection:
+            current = connection.execute(
+                """
+                SELECT asset_version_id FROM asset_versions
+                WHERE project_id = ? AND panel_id = ? AND is_current = 1
+                  AND status = 'ready'
+                """,
+                (project_id, panel_id),
+            ).fetchone()
+            if current is None or str(current["asset_version_id"]) != (
+                expected_current_asset_version_id
+            ):
+                raise ApplicationError(
+                    "ASSET_VERSION_CONFLICT", "当前素材版本已变化，请刷新后重试。", 409
+                )
+            target = connection.execute(
+                """
+                SELECT asset_version_id FROM asset_versions
+                WHERE project_id = ? AND panel_id = ? AND asset_version_id = ?
+                  AND status = 'ready'
+                """,
+                (project_id, panel_id, asset_version_id),
+            ).fetchone()
+            if target is None:
+                raise ApplicationError("ASSET_VERSION_NOT_FOUND", "没有找到该素材版本。", 404)
+            if asset_version_id == expected_current_asset_version_id:
+                selected = connection.execute(
+                    "SELECT * FROM asset_versions WHERE asset_version_id = ?",
+                    (asset_version_id,),
+                ).fetchone()
+                if selected is None:
+                    raise ApplicationError(
+                        "ASSET_VERSION_NOT_FOUND", "没有找到该素材版本。", 404
+                    )
+                return self._asset_payload(selected)
+            connection.execute(
+                """
+                UPDATE asset_versions SET is_current = 0
+                WHERE project_id = ? AND panel_id = ? AND is_current = 1
+                """,
+                (project_id, panel_id),
+            )
+            connection.execute(
+                "UPDATE asset_versions SET is_current = 1 WHERE asset_version_id = ?",
+                (asset_version_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events(event_id, project_id, event_type, payload_json)
+                VALUES (?, ?, 'generation.asset_activated', ?)
+                """,
+                (
+                    str(uuid7()),
+                    project_id,
+                    canonical_json(
+                        {
+                            "panel_id": panel_id,
+                            "asset_version_id": asset_version_id,
+                            "previous_asset_version_id": expected_current_asset_version_id,
+                            "external_requests_started": 0,
+                        }
+                    ),
+                ),
+            )
+        return self.get_asset(project_id, asset_version_id)
+
     def asset_content_path(self, project_id: str, asset_version_id: str) -> Path:
         with self.database.reader() as connection:
             row = connection.execute(
@@ -254,6 +346,7 @@ class AssetStore:
             row = connection.execute(
                 """
                 SELECT p.workspace_path, gi.status AS item_status,
+                       gi.parent_asset_version_id AS frozen_parent_asset_version_id,
                        ga.status AS attempt_status
                 FROM generation_attempts ga
                 JOIN generation_job_items gi ON gi.item_id = ga.item_id
@@ -292,7 +385,9 @@ class AssetStore:
             "workspace_path": str(row["workspace_path"]),
             "next_version": int(version_row["next_version"] if version_row else 1),
             "parent_asset_version_id": (
-                str(parent["asset_version_id"]) if parent is not None else None
+                str(row["frozen_parent_asset_version_id"])
+                if row["frozen_parent_asset_version_id"] is not None
+                else (str(parent["asset_version_id"]) if parent is not None else None)
             ),
         }
 

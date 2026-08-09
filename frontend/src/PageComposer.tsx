@@ -14,6 +14,7 @@ import {
   listPageTemplates,
   saveComicPageRevision,
 } from "./api";
+import { RevisionWorkbench } from "./RevisionWorkbench";
 
 interface PageComposerProps {
   projectId: string;
@@ -27,6 +28,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
   const [pages, setPages] = useState<ComicPageVersion[]>([]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [document, setDocument] = useState<PageDocument | null>(null);
+  const [pagesLoading, setPagesLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const selectedPage = useMemo(
@@ -43,6 +45,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
   useEffect(() => {
     if (!chapterId) return;
     let active = true;
+    setPagesLoading(true);
     setPages([]);
     setDocument(null);
     Promise.all([listPageTemplates(projectId), listComicPages(projectId, chapterId)])
@@ -54,6 +57,9 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
       })
       .catch((error: unknown) => {
         if (active) onError(errorMessage(error));
+      })
+      .finally(() => {
+        if (active) setPagesLoading(false);
       });
     return () => {
       active = false;
@@ -189,7 +195,11 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
             ))}
           </select>
         </label>
-        <button type="button" disabled={busy || !chapterId} onClick={() => void handleDraft()}>
+        <button
+          type="button"
+          disabled={busy || pagesLoading || !chapterId}
+          onClick={() => void handleDraft()}
+        >
           从当前素材建立漫画页
         </button>
       </div>
@@ -265,6 +275,17 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
             <button type="button" disabled={busy} onClick={() => void handleSave()}>
               保存并重新渲染页面（仅本地）
             </button>
+            <RevisionWorkbench
+              projectId={projectId}
+              page={selectedPage}
+              onPageChange={(next) => {
+                setPages((current) =>
+                  current.map((item) => (item.page_id === next.page_id ? next : item)),
+                );
+                setSelectedPageId(next.page_id);
+              }}
+              onError={onError}
+            />
           </div>
         </div>
       )}

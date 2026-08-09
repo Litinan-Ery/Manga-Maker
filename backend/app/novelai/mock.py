@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from io import BytesIO
 
@@ -43,7 +44,18 @@ class MockNovelAIClient:
             (request.seed >> 8) & 0x7F,
             request.seed & 0x7F,
         )
-        Image.new("RGB", (request.width, request.height), color=color).save(output, format="PNG")
+        generated = Image.new("RGB", (request.width, request.height), color=color)
+        if request.action == "infill":
+            if request.source_image_base64 is None or request.mask_base64 is None:
+                raise ValueError("mock inpaint requires source and mask")
+            with Image.open(BytesIO(base64.b64decode(request.source_image_base64))) as source:
+                base = source.convert("RGB")
+            with Image.open(BytesIO(base64.b64decode(request.mask_base64))) as mask_source:
+                mask = mask_source.convert("L")
+            if base.size != generated.size or mask.size != generated.size:
+                raise ValueError("mock inpaint dimensions do not match")
+            generated = Image.composite(generated, base, mask)
+        generated.save(output, format="PNG")
         return NovelAIGeneratedImage(
             png_bytes=output.getvalue(),
             seed=request.seed,

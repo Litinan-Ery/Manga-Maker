@@ -185,6 +185,52 @@ export interface GenerationEstimate {
   external_request_created: false;
 }
 
+export type RevisionOperation = "panel_reroll" | "page_reroll" | "inpaint";
+
+export interface RevisionTarget {
+  ordinal: number;
+  page_id: string;
+  page_number: number;
+  panel_id: string;
+  panel_order: number;
+  parent_asset_version_id: string;
+  mask_asset_id: string | null;
+  edit_prompt: string | null;
+  inpaint_strength: number | null;
+  cost_ceiling_anlas: number;
+}
+
+export interface RevisionEstimate {
+  operation: RevisionOperation;
+  project_id: string;
+  chapter_id: string;
+  page_id: string;
+  page_version_id: string;
+  page_number: number;
+  provider_model_id: string;
+  panel_count: number;
+  estimated_calls: number;
+  estimated_cost_upper_anlas: number;
+  cost_basis: "user_confirmed_per_panel_ceiling";
+  cost_notice: string;
+  plan_fingerprint: string;
+  targets: RevisionTarget[];
+  external_request_created: false;
+}
+
+export interface MaskAsset {
+  mask_asset_id: string;
+  project_id: string;
+  panel_id: string;
+  parent_asset_version_id: string;
+  sha256: string;
+  width: number;
+  height: number;
+  selected_pixel_count: number;
+  created_at: string;
+  external_requests_started: 0;
+}
+
 export type GenerationJobStatus =
   | "draft"
   | "awaiting_approval"
@@ -208,6 +254,11 @@ export interface GenerationJobItem {
   recorded_cost_anlas: number;
   active_attempt_id: string | null;
   asset_version_id: string | null;
+  operation_kind: "chapter_generate" | RevisionOperation;
+  parent_asset_version_id: string | null;
+  mask_asset_id: string | null;
+  edit_prompt: string | null;
+  inpaint_strength: number | null;
 }
 
 export interface GenerationJob {
@@ -219,6 +270,10 @@ export interface GenerationJob {
   style_bible_version_id: string;
   novelai_config_revision: number;
   provider_model_id: string;
+  operation_kind: "chapter_generate" | RevisionOperation;
+  target_page_id: string | null;
+  target_page_version_id: string | null;
+  result_page_version_id: string | null;
   mapping_version: string;
   contract_sha256: string;
   credential_profile_id: string;
@@ -325,6 +380,7 @@ export interface ComicPageVersion {
   font_sha256: string;
   is_current: boolean;
   created_at: string;
+  source_job_id?: string | null;
   document: PageDocument;
   external_requests_started: 0;
 }
@@ -873,6 +929,76 @@ export function listGenerationAssets(projectId: string): Promise<GenerationAsset
   );
 }
 
+export function uploadRevisionMask(
+  projectId: string,
+  panelId: string,
+  parentAssetVersionId: string,
+  file: File,
+): Promise<MaskAsset> {
+  const form = new FormData();
+  form.set("panel_id", panelId);
+  form.set("parent_asset_version_id", parentAssetVersionId);
+  form.set("mask", file);
+  return request<MaskAsset>(
+    `/api/v1/projects/${projectId}/generation/masks`,
+    { method: "POST", body: form },
+    true,
+  );
+}
+
+export interface RevisionEstimateInput {
+  operation: RevisionOperation;
+  page_id: string;
+  panel_id: string | null;
+  mask_asset_id: string | null;
+  edit_prompt: string | null;
+  inpaint_strength: number | null;
+  per_panel_cost_ceiling_anlas: number;
+}
+
+export function estimateRevision(
+  projectId: string,
+  input: RevisionEstimateInput,
+): Promise<RevisionEstimate> {
+  return request<RevisionEstimate>(
+    `/api/v1/projects/${projectId}/generation/revisions/estimate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+    true,
+  );
+}
+
+export function createRevisionJob(
+  projectId: string,
+  estimate: RevisionEstimate,
+): Promise<GenerationJob> {
+  const target = estimate.targets[0];
+  return request<GenerationJob>(
+    `/api/v1/projects/${projectId}/generation/revisions/jobs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: estimate.operation,
+        page_id: estimate.page_id,
+        panel_id: estimate.operation === "page_reroll" ? null : target.panel_id,
+        mask_asset_id: target.mask_asset_id,
+        edit_prompt: target.edit_prompt,
+        inpaint_strength: target.inpaint_strength,
+        per_panel_cost_ceiling_anlas: target.cost_ceiling_anlas,
+        plan_fingerprint: estimate.plan_fingerprint,
+        max_calls: estimate.panel_count,
+        max_cost_anlas: estimate.estimated_cost_upper_anlas,
+        confirmed: true,
+      }),
+    },
+    true,
+  );
+}
+
 export async function getGenerationAssetImage(
   projectId: string,
   assetVersionId: string,
@@ -940,6 +1066,33 @@ export function saveComicPageRevision(
         expected_revision: page.page_revision,
         document,
       }),
+    },
+    true,
+  );
+}
+
+export function listPageVersions(
+  projectId: string,
+  pageId: string,
+): Promise<ComicPageVersion[]> {
+  return request<ComicPageVersion[]>(
+    `/api/v1/projects/${projectId}/pages/${pageId}/versions`,
+    {},
+    false,
+  );
+}
+
+export function activatePageVersion(
+  projectId: string,
+  page: ComicPageVersion,
+  pageVersionId: string,
+): Promise<ComicPageVersion> {
+  return request<ComicPageVersion>(
+    `/api/v1/projects/${projectId}/pages/${page.page_id}/versions/${pageVersionId}/activate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: page.page_revision }),
     },
     true,
   );

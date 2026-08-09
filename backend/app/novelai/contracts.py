@@ -8,7 +8,7 @@ IMAGE_API_BASE_URL = "https://image.novelai.net"
 SWAGGER_DOCUMENT_URL = f"{IMAGE_API_BASE_URL}/docs/doc.json"
 CONTRACT_SHA256 = "f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8"
 CONTRACT_FETCHED_ON = "2026-08-09"
-MAPPING_VERSION = "novelai-image-2026-08-09.1"
+MAPPING_VERSION = "novelai-image-2026-08-09.2"
 CONNECTION_TEST_PATH = "/ai/generate-image/suggest-tags"
 GENERATION_PATH = "/ai/generate-image"
 UPSCALE_PATH = "/ai/upscale"
@@ -113,6 +113,7 @@ MODEL_PROFILES: tuple[ModelCapability, ...] = (
 )
 
 MODEL_PROFILES_BY_ID = {str(profile.model): profile for profile in MODEL_PROFILES}
+INPAINT_PROFILES_BY_ID = {profile.inpaint_model_id: profile for profile in MODEL_PROFILES}
 
 
 def require_model_profile(provider_model_id: str) -> ModelCapability:
@@ -120,6 +121,13 @@ def require_model_profile(provider_model_id: str) -> ModelCapability:
         return MODEL_PROFILES_BY_ID[provider_model_id]
     except KeyError as exc:
         raise ValueError("unsupported NovelAI model") from exc
+
+
+def require_inpaint_model_profile(inpaint_model_id: str) -> ModelCapability:
+    try:
+        return INPAINT_PROFILES_BY_ID[inpaint_model_id]
+    except KeyError as exc:
+        raise ValueError("unsupported NovelAI inpaint model") from exc
 
 
 def contract_payload() -> dict[str, Any]:
