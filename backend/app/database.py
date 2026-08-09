@@ -200,6 +200,106 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON storyboard_versions(storyboard_id, version);
         """,
     ),
+    (
+        5,
+        """
+        CREATE TABLE character_bibles (
+            character_bible_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, chapter_id)
+        );
+
+        CREATE TABLE character_bible_versions (
+            character_bible_version_id TEXT PRIMARY KEY,
+            character_bible_id TEXT NOT NULL REFERENCES character_bibles(character_bible_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            document_json TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(character_bible_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_character_bible_version
+        ON character_bible_versions(character_bible_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE character_bible_approvals (
+            approval_id TEXT PRIMARY KEY,
+            character_bible_version_id TEXT NOT NULL UNIQUE
+                REFERENCES character_bible_versions(character_bible_version_id),
+            approval_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE style_bibles (
+            style_bible_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, chapter_id)
+        );
+
+        CREATE TABLE style_bible_versions (
+            style_bible_version_id TEXT PRIMARY KEY,
+            style_bible_id TEXT NOT NULL REFERENCES style_bibles(style_bible_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            document_json TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(style_bible_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_style_bible_version
+        ON style_bible_versions(style_bible_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE style_bible_approvals (
+            approval_id TEXT PRIMARY KEY,
+            style_bible_version_id TEXT NOT NULL UNIQUE
+                REFERENCES style_bible_versions(style_bible_version_id),
+            approval_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE reference_assets (
+            reference_asset_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            bible_kind TEXT NOT NULL CHECK(bible_kind IN ('character', 'style')),
+            character_id TEXT,
+            original_filename TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            byte_size INTEGER NOT NULL CHECK(byte_size > 0),
+            width INTEGER NOT NULL CHECK(width > 0),
+            height INTEGER NOT NULL CHECK(height > 0),
+            sha256 TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            source_note TEXT NOT NULL,
+            rights_confirmed INTEGER NOT NULL CHECK(rights_confirmed = 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(
+                (bible_kind = 'character' AND character_id IS NOT NULL)
+                OR (bible_kind = 'style' AND character_id IS NULL)
+            )
+        );
+
+        CREATE INDEX character_bible_versions_by_bible
+        ON character_bible_versions(character_bible_id, version);
+
+        CREATE INDEX style_bible_versions_by_bible
+        ON style_bible_versions(style_bible_id, version);
+
+        CREATE INDEX reference_assets_by_project
+        ON reference_assets(project_id, bible_kind, created_at);
+        """,
+    ),
 )
 
 

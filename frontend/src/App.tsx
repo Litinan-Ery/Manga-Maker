@@ -17,6 +17,7 @@ import {
   preflightSource,
 } from "./api";
 import { ChapterEditor } from "./ChapterEditor";
+import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
 import { StoryBeatPanel } from "./StoryBeatPanel";
 import { StoryboardWorkbench } from "./StoryboardWorkbench";
@@ -40,6 +41,7 @@ export function App() {
   const [actionError, setActionError] = useState("");
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [adaptationRefreshKey, setAdaptationRefreshKey] = useState(0);
+  const [bibleRefreshKey, setBibleRefreshKey] = useState(0);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
@@ -316,6 +318,13 @@ export function App() {
                 vaultStatus={vaultStatus}
                 onError={setActionError}
                 refreshKey={adaptationRefreshKey}
+                onChanged={() => setBibleRefreshKey((current) => current + 1)}
+              />
+              <BibleWorkbench
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                onError={setActionError}
+                refreshKey={bibleRefreshKey}
               />
             </section>
           )}

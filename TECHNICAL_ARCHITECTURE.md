@@ -9,7 +9,7 @@
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器和结构化分镜版本/审批工作台；以上模型链路仅通过 Mock 验收，尚未执行真实模型调用。NovelAI 集成、图像生产与完整导出尚未实现。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器、结构化分镜版本/审批，以及 CharacterBible、StyleBible、参考图和审批失效工作台；模型链路仅通过 Mock 验收，尚未执行真实模型调用。NovelAI 集成、图像生产与完整导出尚未实现。
 
 ## 1. 架构结论
 
@@ -304,6 +304,11 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 | `POST /api/v1/projects/{id}/adaptation/storyboards/generate` | 用户触发所选章节的结构化改编 |
 | `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/revisions` | 将人工修改保存为不可变新版本 |
 | `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/approve` | 对固定内容哈希进行分镜审批 |
+| `POST /api/v1/projects/{id}/bibles/generate` | 从当前已审批分镜在本机确定性草拟角色表与风格板 |
+| `POST /api/v1/projects/{id}/bibles/characters/{version_id}/revisions` | 保存不可变 CharacterBible 新版本和受影响面板清单 |
+| `POST /api/v1/projects/{id}/bibles/styles/{version_id}/revisions` | 保存不可变 StyleBible 新版本并使生成就绪失效 |
+| `POST /api/v1/projects/{id}/bibles/{kind}/{version_id}/references` | 校验授权、真实图片类型/尺寸/像素/解码与哈希后绑定参考图 |
+| `POST /api/v1/projects/{id}/bibles/{kind}/{version_id}/approve` | 独立审批角色表或风格板的精确版本哈希 |
 | `POST /api/v1/bibles/{id}/approve` | 角色/风格审批 |
 | `POST /api/v1/generation-jobs/estimate` | 编译 exact specs 与成本估算，不生成 |
 | `POST /api/v1/generation-jobs` | 固化有界 Job 和用户动作 |

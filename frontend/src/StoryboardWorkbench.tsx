@@ -28,6 +28,7 @@ interface StoryboardWorkbenchProps {
   vaultStatus: VaultStatus | null;
   onError: (message: string) => void;
   refreshKey: number;
+  onChanged?: () => void;
 }
 
 export function StoryboardWorkbench({
@@ -36,6 +37,7 @@ export function StoryboardWorkbench({
   vaultStatus,
   onError,
   refreshKey,
+  onChanged,
 }: StoryboardWorkbenchProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [beatSet, setBeatSet] = useState<StoryBeatSet | null>(null);
@@ -169,6 +171,7 @@ export function StoryboardWorkbench({
       setDraft(cloneDocument(generated.document));
       setConfirmedDataSend(false);
       setConnectionMessage("结构化分镜已生成并保存为不可变版本。");
+      onChanged?.();
     });
   }
 
@@ -183,6 +186,7 @@ export function StoryboardWorkbench({
       setStoryboard(revised);
       setDraft(cloneDocument(revised.document));
       setConnectionMessage(`人工修改已保存为分镜版本 ${revised.version}。`);
+      onChanged?.();
     });
   }
 
@@ -193,6 +197,7 @@ export function StoryboardWorkbench({
       setStoryboard(approved);
       setDraft(cloneDocument(approved.document));
       setConnectionMessage("分镜已审批；角色表和风格板仍需在下一阶段单独确认。");
+      onChanged?.();
     });
   }
 

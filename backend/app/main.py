@@ -11,9 +11,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .adaptation.service import AdaptationService
 from .api.adaptation import router as adaptation_router
+from .api.bibles import router as bibles_router
 from .api.health import router as health_router
 from .api.projects import router as projects_router
 from .api.vault import router as vault_router
+from .bibles.service import BibleService
 from .config import Settings, get_settings
 from .database import Database
 from .errors import install_error_handlers
@@ -32,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     projects = ProjectService(database, resolved_settings.projects_dir)
     ingestion = TxtIngestionService(database, projects)
     adaptation = AdaptationService(database, ingestion, vault)
+    bibles = BibleService(database, projects)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -53,6 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.projects = projects
     app.state.ingestion = ingestion
     app.state.adaptation = adaptation
+    app.state.bibles = bibles
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -62,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(vault_router)
     app.include_router(projects_router)
     app.include_router(adaptation_router)
+    app.include_router(bibles_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 

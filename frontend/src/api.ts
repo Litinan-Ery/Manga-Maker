@@ -185,8 +185,99 @@ export interface StoryboardVersion {
   created_at: string;
 }
 
+export interface CharacterProfile {
+  character_id: string;
+  name: string;
+  aliases: string[];
+  narrative_role: string;
+  age_range: string;
+  face_shape: string;
+  hair: string;
+  body_type: string;
+  outfit: string[];
+  signature_features: string[];
+  variable_features: string[];
+  forbidden_changes: string[];
+  props: string[];
+  relationships: string[];
+  expression_range: string[];
+  positive_prompt_fragment: string;
+  negative_prompt_fragment: string;
+  reference_asset_ids: string[];
+}
+
+export interface CharacterBibleDocument {
+  schema_version: "1.0";
+  character_bible_id: string;
+  storyboard_version_id: string;
+  characters: CharacterProfile[];
+  notes: string;
+}
+
+export interface StyleBibleDocument {
+  schema_version: "1.0";
+  style_bible_id: string;
+  storyboard_version_id: string;
+  summary: string;
+  line_art: string;
+  screentone: string;
+  lighting: string;
+  background_density: string;
+  whitespace: string;
+  camera_language: string;
+  positive_prompt_fragment: string;
+  negative_prompt_fragment: string;
+  prohibited_elements: string[];
+  reference_asset_ids: string[];
+}
+
+export interface ReferenceAsset {
+  reference_asset_id: string;
+  bible_kind: "character" | "style";
+  character_id: string | null;
+  original_filename: string;
+  media_type: string;
+  byte_size: number;
+  width: number;
+  height: number;
+  sha256: string;
+  source_note: string;
+  rights_confirmed: boolean;
+  created_at: string;
+}
+
+export interface BibleVersion<TDocument> {
+  kind: "character" | "style";
+  bible_id: string;
+  version_id: string;
+  version: number;
+  storyboard_version_id: string;
+  document: TDocument;
+  provenance: Record<string, unknown>;
+  approval_status: "draft" | "approved" | "stale";
+  approval_hash: string | null;
+  approved_at: string | null;
+  approval_issues: string[];
+  reference_assets: ReferenceAsset[];
+  is_current: boolean;
+  created_at: string;
+}
+
+export interface BibleBundle {
+  project_id: string;
+  chapter_id: string;
+  character_bible: BibleVersion<CharacterBibleDocument>;
+  style_bible: BibleVersion<StyleBibleDocument>;
+  generation_readiness: {
+    ready: boolean;
+    blockers: string[];
+    character_bible_version_id: string;
+    style_bible_version_id: string;
+  };
+}
+
 interface ErrorPayload {
-  error?: { message?: string; details?: { problem?: string } };
+  error?: { message?: string; details?: { problem?: string; issues?: string[] } };
   detail?: string;
 }
 
@@ -457,6 +548,118 @@ export function approveStoryboard(
   );
 }
 
+export function getBibleBundle(projectId: string, chapterId: string): Promise<BibleBundle> {
+  return request<BibleBundle>(
+    `/api/v1/projects/${projectId}/bibles?chapter_id=${encodeURIComponent(chapterId)}`,
+    {},
+    false,
+  );
+}
+
+export function generateBibleBundle(
+  projectId: string,
+  storyboardVersionId: string,
+): Promise<BibleBundle> {
+  return request<BibleBundle>(
+    `/api/v1/projects/${projectId}/bibles/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storyboard_version_id: storyboardVersionId }),
+    },
+    true,
+  );
+}
+
+export function reviseCharacterBible(
+  projectId: string,
+  versionId: string,
+  document: CharacterBibleDocument,
+): Promise<BibleVersion<CharacterBibleDocument>> {
+  return request(
+    `/api/v1/projects/${projectId}/bibles/characters/${versionId}/revisions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document }),
+    },
+    true,
+  );
+}
+
+export function reviseStyleBible(
+  projectId: string,
+  versionId: string,
+  document: StyleBibleDocument,
+): Promise<BibleVersion<StyleBibleDocument>> {
+  return request(
+    `/api/v1/projects/${projectId}/bibles/styles/${versionId}/revisions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document }),
+    },
+    true,
+  );
+}
+
+export function approveBible<TDocument>(
+  projectId: string,
+  kind: "character" | "style",
+  versionId: string,
+): Promise<BibleVersion<TDocument>> {
+  return request(
+    `/api/v1/projects/${projectId}/bibles/${kind}/${versionId}/approve`,
+    { method: "POST" },
+    true,
+  );
+}
+
+export function attachBibleReference(
+  projectId: string,
+  kind: "character" | "style",
+  versionId: string,
+  input: {
+    file: File;
+    sourceNote: string;
+    rightsConfirmed: boolean;
+    characterId?: string;
+  },
+): Promise<{
+  bible: BibleVersion<CharacterBibleDocument> | BibleVersion<StyleBibleDocument>;
+  reference_asset: ReferenceAsset;
+}> {
+  const body = new FormData();
+  body.append("file", input.file);
+  body.append("source_note", input.sourceNote);
+  body.append("rights_confirmed", String(input.rightsConfirmed));
+  if (input.characterId) body.append("character_id", input.characterId);
+  return request(
+    `/api/v1/projects/${projectId}/bibles/${kind}/${versionId}/references`,
+    { method: "POST", body },
+    true,
+  );
+}
+
+export async function getReferenceImage(
+  projectId: string,
+  referenceAssetId: string,
+): Promise<Blob> {
+  if (!localSessionToken || !localCsrfToken) {
+    throw new ApiError("本地会话已失效，请重新运行 Manga Maker 启动器。", 401);
+  }
+  const headers = new Headers({
+    "X-Manga-Maker-Session": localSessionToken,
+    "X-CSRF-Token": localCsrfToken,
+  });
+  const response = await fetch(
+    `/api/v1/projects/${projectId}/bibles/references/${referenceAssetId}/content`,
+    { headers },
+  );
+  if (!response.ok) throw new ApiError("无法读取本地参考图。", response.status);
+  return response.blob();
+}
+
 async function request<T>(path: string, init: RequestInit, needsSession: boolean): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -483,7 +686,11 @@ async function request<T>(path: string, init: RequestInit, needsSession: boolean
       // Keep the safe generic message when a proxy or server returns non-JSON.
     }
     throw new ApiError(
-      [payload.error?.message, payload.error?.details?.problem]
+      [
+        payload.error?.message,
+        payload.error?.details?.problem,
+        payload.error?.details?.issues?.join(" "),
+      ]
         .filter((value): value is string => Boolean(value))
         .join(" ") ||
         payload.detail ||
