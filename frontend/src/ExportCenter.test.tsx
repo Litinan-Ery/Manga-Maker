@@ -65,7 +65,7 @@ it("requires confirmation for immutable export and package restore", async () =>
 
   fireEvent.click(screen.getByLabelText(/我确认以上页面版本和顺序/));
   fireEvent.click(exportButton);
-  expect(await screen.findByText(/全部校验并发布/)).toBeInTheDocument();
+  expect(await screen.findByText(/零泄露扫描/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "下载 工程包" })).toBeInTheDocument();
 
   const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
@@ -143,6 +143,13 @@ const exportRevision = {
   pages: [selectedPage],
   selection_sha256: "b".repeat(64),
   failure_code: null,
+  secret_scan: {
+    status: "passed",
+    scanned_files: 4,
+    scanned_bytes: 100,
+    credential_count: 2,
+    matches: 0,
+  },
   created_at: "2026-08-09 12:00:00",
   completed_at: "2026-08-09 12:00:01",
   files: [

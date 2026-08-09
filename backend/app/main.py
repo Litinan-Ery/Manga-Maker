@@ -18,6 +18,7 @@ from .api.health import router as health_router
 from .api.novelai import router as novelai_router
 from .api.pages import router as pages_router
 from .api.projects import router as projects_router
+from .api.recovery import router as recovery_router
 from .api.vault import router as vault_router
 from .bibles.service import BibleService
 from .config import Settings, get_settings
@@ -32,6 +33,8 @@ from .ingestion.txt import TxtIngestionService
 from .novelai.service import NovelAIService
 from .pages.service import PageService
 from .projects import ProjectService
+from .recovery import RecoveryService
+from .safety import SecretScanner
 from .security import LocalSession
 from .vault import CredentialVault
 
@@ -51,7 +54,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     asset_store = AssetStore(database, generation_queue)
     pages = PageService(database)
     revisions = RevisionService(database, generation_queue, pages)
-    exports = ExportService(database, projects)
+    secret_scanner = SecretScanner(vault)
+    exports = ExportService(database, projects, secret_scanner)
+    recovery = RecoveryService(database, projects, generation_queue, exports, vault)
     generation_executor = GenerationExecutor(
         database,
         generation_queue,
@@ -63,7 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         database.migrate()
-        generation_queue.reconcile_startup()
+        recovery.reconcile_startup()
         yield
         await generation_executor.shutdown()
         vault.lock()
@@ -90,6 +95,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.pages = pages
     app.state.revisions = revisions
     app.state.exports = exports
+    app.state.recovery = recovery
+    app.state.secret_scanner = secret_scanner
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -104,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(generation_router)
     app.include_router(pages_router)
     app.include_router(exports_router)
+    app.include_router(recovery_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 

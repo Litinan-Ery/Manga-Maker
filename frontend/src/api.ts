@@ -259,6 +259,7 @@ export interface GenerationJobItem {
   mask_asset_id: string | null;
   edit_prompt: string | null;
   inpaint_strength: number | null;
+  last_error_code: string | null;
 }
 
 export interface GenerationJob {
@@ -432,6 +433,13 @@ export interface ExportRevision {
   pages: ExportPageSelection[];
   selection_sha256: string;
   failure_code: string | null;
+  secret_scan: {
+    status: "passed";
+    scanned_files: number;
+    scanned_bytes: number;
+    credential_count: number;
+    matches: 0;
+  } | null;
   created_at: string;
   completed_at: string | null;
   files: ExportFile[];
@@ -461,6 +469,33 @@ export interface RestoreResult {
   id_conflict_remapped: boolean;
   record_counts: Record<string, number>;
   file_count: number;
+  external_requests_started: 0;
+}
+
+export interface RecoveryReport {
+  recovery_run_id?: string;
+  trigger?: "startup" | "manual";
+  status: "healthy" | "needs_attention";
+  message?: string;
+  queue_recovery?: { needs_review: number; paused: number };
+  export_recovery?: {
+    interrupted_exports_failed_closed: number;
+    partial_directories_preserved: number;
+  };
+  project_recovery?: { interrupted_workspaces_preserved: number };
+  integrity?: {
+    database_ok: boolean;
+    foreign_key_violations: number;
+    missing_files: number;
+    hash_mismatches: number;
+    staging_items: number;
+    unregistered_version_files: number;
+    forbidden_project_files: number;
+    invalid_audit_payloads: number;
+    vault_outside_projects: boolean;
+    critical_findings: number;
+  };
+  provider_requests_started?: 0;
   external_requests_started: 0;
 }
 
@@ -671,6 +706,18 @@ export function clearLocalSession(): void {
 
 export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return request<HealthResponse>("/health", { signal }, false);
+}
+
+export function getRecoveryReport(signal?: AbortSignal): Promise<RecoveryReport> {
+  return request<RecoveryReport>("/api/v1/system/recovery", { signal }, false);
+}
+
+export function runRecoveryCheck(): Promise<RecoveryReport> {
+  return request<RecoveryReport>(
+    "/api/v1/system/recovery",
+    { method: "POST" },
+    true,
+  );
 }
 
 export function getVaultStatus(): Promise<VaultStatus> {

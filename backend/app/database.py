@@ -673,6 +673,24 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON export_files(export_revision_id, kind, ordinal);
         """,
     ),
+    (
+        12,
+        """
+        ALTER TABLE export_revisions
+        ADD COLUMN secret_scan_json TEXT;
+
+        CREATE TABLE recovery_runs (
+            recovery_run_id TEXT PRIMARY KEY,
+            trigger TEXT NOT NULL CHECK(trigger IN ('startup', 'manual')),
+            status TEXT NOT NULL CHECK(status IN ('healthy', 'needs_attention')),
+            summary_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX recovery_runs_by_created_at
+        ON recovery_runs(created_at, recovery_run_id);
+        """,
+    ),
 )
 
 

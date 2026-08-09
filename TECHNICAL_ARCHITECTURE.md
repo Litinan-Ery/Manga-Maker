@@ -4,12 +4,12 @@
 |---|---|
 | 文档版本 | v0.1 |
 | 日期 | 2026-08-09 |
-| 状态 | P0 早期实施阶段；目标架构与当前实现并存 |
+| 状态 | P0 离线 Mock 闭环已实现；P1/P2 目标架构与当前实现并存 |
 | 对应产品文档 | [README.md](README.md)、[PRD.md](PRD.md) |
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已交付本地应用、TXT/来源链路、分镜/设定审批、NovelAI 固定契约与加密凭证引用、有界串行执行器、Precise Reference 预处理、不可变素材/页面登记、2048 × 3072 本地合成、单格/整页 reroll、蒙版 inpaint、历史激活，以及不可变四格式导出和工程包安全恢复。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前 P0 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
 
 ## 1. 架构结论
 
@@ -529,7 +529,9 @@ Job 状态沿用 PRD 的统一枚举。GenerationItem 使用 `queued / running /
 - `queued` 不自动开始；
 - 有 `running` attempt 的 Job 和 item 进入 `needs_review`，不猜测是否计费；
 - 其余 `running` Job 恢复为 `paused`；
-- 已有完整文件但数据库未提交的 item 通过 staging reconciliation 修复；
+- 中断的导出被标记为 `PROCESS_RESTARTED`，其 staging/final 半成品移动到 `.failed-*` 恢复边界，不发布为成功版本；
+- 中断的项目创建/恢复目录移动到 `.orphan-recovery-*`，不静默删除；
+- 素材和页面 staging、未登记版本文件、缺失文件、哈希错误、外键错误及项目内疑似凭证文件进入持久化完整性摘要；
 - 用户查看范围和已产生成本后，必须点击恢复。
 
 这样既保留断点，也不会因应用重启自动产生新的付费调用。
@@ -597,7 +599,7 @@ PageVersion JSON
 
 浏览器和后端共享坐标模型与文本测量测试，但正式导出以后端为准。前端显示“预览与正式渲染差异”警告，黄金页面测试比较像素差、文字边界和页序。
 
-当前实现固定 2048 × 3072 像素坐标、六种 1–6 格模板、10 px 黑色格框、灰度面板素材、对白椭圆、旁白圆角框、描边音效字和页码。素材以 cover-crop 加焦点与缩放参数放置；中文按字符换行，无法在边界内排下时拒绝版本而不生成不可读页面。PNG 压缩参数、渲染器版本和字体文件 SHA-256 写入 PageVersion，同一输入的回归测试比较完整文件哈希。数据库 schema 当前为 v10；`comic_pages` 保存当前指针，`page_versions` 内容只追加并可用 `source_job_id` 回溯 revision Job，`mask_assets` 固定父素材和蒙版哈希。
+当前实现固定 2048 × 3072 像素坐标、六种 1–6 格模板、10 px 黑色格框、灰度面板素材、对白椭圆、旁白圆角框、描边音效字和页码。素材以 cover-crop 加焦点与缩放参数放置；中文按字符换行，无法在边界内排下时拒绝版本而不生成不可读页面。PNG 压缩参数、渲染器版本和字体文件 SHA-256 写入 PageVersion，同一输入的回归测试比较完整文件哈希。`comic_pages` 保存当前指针，`page_versions` 内容只追加并可用 `source_job_id` 回溯 revision Job，`mask_assets` 固定父素材和蒙版哈希。
 
 ## 13. 导出与恢复
 
@@ -620,7 +622,7 @@ PageVersion JSON
 
 导出先写独立 staging 目录，全部格式通过页数、尺寸、页序、打开测试和秘密扫描后，才登记 ExportRevision。
 
-当前数据库 schema 为 v11。`export_revisions` 冻结按阅读顺序排列的 PageVersion、版本号、尺寸和渲染 SHA-256；`export_files` 逐文件登记类型、序号、大小与 SHA-256。Exporter 生成逐页 PNG、由相同 PNG 合成的 PDF、带 `ComicInfo.xml` 的 CBZ，以及含 `records.json`/文件清单的 `.manga-maker.zip`。只有四种结果全部验证后，staging 才原子移动到正式导出目录并提交 `completed`；失败版本只登记安全错误码，之前的成功目录和哈希不变。
+当前数据库 schema 为 v12。`export_revisions` 冻结按阅读顺序排列的 PageVersion、版本号、尺寸和渲染 SHA-256，并登记发布前秘密扫描摘要；`export_files` 逐文件登记类型、序号、大小与 SHA-256；`recovery_runs` 只持久化脱敏的本地完整性计数。Exporter 生成逐页 PNG、由相同 PNG 合成的 PDF、带 `ComicInfo.xml` 的 CBZ，以及含 `records.json`/文件清单的 `.manga-maker.zip`。只有四种结果和解包后的 ZIP 条目全部完成凭证字节扫描，staging 才原子移动到正式导出目录并提交 `completed`；失败版本只登记安全错误码，之前的成功目录和哈希不变。
 
 工程包导入首先只把上传内容放入应用级 import staging，并在不解压到工作区的情况下检查重复名、绝对路径、反斜杠、`..`、符号链接、文件数、单文件/总展开大小、压缩比、schema、对象计数、清单完整性、逐文件 SHA-256 和可用磁盘空间。用户第二次确认后，才在新的 project staging 解出清单允许的文件。项目 ID 冲突会为所有主键和外键生成新 UUIDv7，同时递归更新版本 JSON 引用、重算文档哈希并保留 `source_project_id`；任何失败把半成品留在 orphan 边界，不覆盖既有项目。
 
@@ -639,8 +641,10 @@ PageVersion JSON
 - 变更凭证采用临时文件、`fsync` 和原子替换；认证失败不得输出密文、明文或可用于离线猜测的额外诊断；
 - P0 不提供主密码找回或凭证自动备份。用户可重置凭证库并重新录入密钥，项目与素材不受影响；
 - 日志使用字段 allowlist，异常对象先归一化再输出；
+- 桌面启动器默认关闭 HTTP access log；持久诊断只允许安全错误码和字段级脱敏对象，不记录 URL 查询、正文、完整提示词或请求头；
 - 删除项目默认进入可恢复区域，永久清除使用独立明确操作；
 - 每次导出执行秘密模式扫描和 manifest 内容检查。
+- 若已配置凭证库但尚未解锁，导出在创建 staging 之前失败关闭；扫描在内存中读取当前凭证字节并检查普通文件及 ZIP 条目，不把命中内容写入响应或审计。
 
 NovelAI 当前条款说明用户保留其内容权利、请求内容默认不在未同意时记录，并可能对参考图、mask、img2img base image 做使用客户端提供密钥的短期加密缓存。Manga Maker 仍把任何发送到 NovelAI 的数据视为外部传输，并在首次调用前取得用户确认。
 

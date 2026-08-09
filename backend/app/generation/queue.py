@@ -279,8 +279,12 @@ class GenerationQueueService:
         with self.database.reader() as connection:
             items = connection.execute(
                 """
-                SELECT * FROM generation_job_items
-                WHERE job_id = ? ORDER BY ordinal
+                SELECT gi.*,
+                       (SELECT ga.error_code FROM generation_attempts ga
+                        WHERE ga.item_id = gi.item_id
+                        ORDER BY ga.attempt_number DESC LIMIT 1) AS last_error_code
+                FROM generation_job_items gi
+                WHERE gi.job_id = ? ORDER BY gi.ordinal
                 """,
                 (job_id,),
             ).fetchall()
@@ -1043,6 +1047,7 @@ class GenerationQueueService:
             "mask_asset_id": row["mask_asset_id"],
             "edit_prompt": row["edit_prompt"],
             "inpaint_strength": row["inpaint_strength"],
+            "last_error_code": row["last_error_code"],
         }
 
     @staticmethod

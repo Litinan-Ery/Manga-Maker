@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import hashlib
 import secrets
 import sqlite3
@@ -546,9 +547,11 @@ class GenerationExecutor:
                 spec_sha256=spec_sha256,
                 recorded_cost_anlas=None,
             )
-        except Exception:
+        except Exception as exc:
             self.queue.fail_attempt(
-                attempt_id, error_code="LOCAL_ASSET_COMMIT_FAILED", outcome_unknown=True
+                attempt_id,
+                error_code=local_asset_error_code(exc),
+                outcome_unknown=True,
             )
             return "needs_review"
         if self.revision_finalizer is not None:
@@ -632,3 +635,9 @@ def provider_error_code(exc: Exception) -> str:
     if isinstance(exc, KeyError):
         return "CREDENTIAL_PROFILE_NOT_FOUND"
     return "PROVIDER_CONFIGURATION_INVALID"
+
+
+def local_asset_error_code(exc: Exception) -> str:
+    if isinstance(exc, OSError) and exc.errno in {errno.ENOSPC, errno.EDQUOT}:
+        return "LOCAL_STORAGE_FULL"
+    return "LOCAL_ASSET_COMMIT_FAILED"

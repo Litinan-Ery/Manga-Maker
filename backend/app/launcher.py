@@ -23,7 +23,16 @@ def main() -> None:
     session = app.state.local_session
     url = f"http://{settings.bind_host}:{port}/#session={session.token}&csrf={session.csrf_token}"
     threading.Timer(0.8, webbrowser.open, args=(url,)).start()
-    uvicorn.run(app, host=settings.bind_host, port=port, log_level="info")
+    # Request paths are not needed for a single-user desktop service. Keeping the
+    # access log disabled prevents future query parameters or identifiers from
+    # becoming persistent diagnostics; application failures use redacted codes.
+    uvicorn.run(
+        app,
+        host=settings.bind_host,
+        port=port,
+        log_level="warning",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

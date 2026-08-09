@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ from ..errors import ApplicationError
 from ..generation.assets import canonical_json, fsync_directory, write_synced
 from ..ids import uuid7
 from ..projects import PROJECT_DIRECTORIES, ProjectService
+from ..safety import SecretScanner
 
 EXPORT_SCHEMA_VERSION = "1.0"
 PACKAGE_SCHEMA_VERSION = "1.0"
@@ -30,8 +32,8 @@ MAX_COMPRESSION_RATIO = 200
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 CREDENTIAL_REENTRY_PROFILE_ID = "restore-required"
 
-# Tables are listed in dependency order. Configuration profile references are retained only
-# as empty strings; the encrypted vault itself is outside every project and is never read.
+# Tables are listed in dependency order. Original credential profile references are replaced
+# by a non-secret reconfiguration marker; the encrypted vault is outside every project.
 PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
     ("projects", "SELECT * FROM projects WHERE project_id = ?"),
     ("audit_events", "SELECT * FROM audit_events WHERE project_id = ? ORDER BY created_at"),
@@ -140,9 +142,12 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
 
 
 class ExportService:
-    def __init__(self, database: Database, projects: ProjectService) -> None:
+    def __init__(
+        self, database: Database, projects: ProjectService, secret_scanner: SecretScanner
+    ) -> None:
         self.database = database
         self.projects = projects
+        self.secret_scanner = secret_scanner
         self.imports_dir = projects.projects_dir.parent / "imports"
         self.imports_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 
@@ -188,6 +193,7 @@ class ExportService:
             raise ApplicationError(
                 "EXPORT_PLAN_STALE", "页面版本已经变化，请重新预检后再导出。", 409
             )
+        self.secret_scanner.assert_ready()
 
         export_revision_id = str(uuid7())
         workspace = self.projects.workspace_path(project_id)
@@ -216,17 +222,22 @@ class ExportService:
             )
         try:
             files = self._build_export(staging, workspace, export_revision_id, plan)
-            self._validate_published_export(staging, plan, files)
+            secret_scan = self._validate_published_export(staging, plan, files)
             os.replace(staging, final)
             fsync_directory(export_root)
             with self.database.writer() as connection:
                 connection.execute(
                     """
                     UPDATE export_revisions SET status = 'completed',
-                        export_directory_relative_path = ?, completed_at = CURRENT_TIMESTAMP
+                        export_directory_relative_path = ?, secret_scan_json = ?,
+                        completed_at = CURRENT_TIMESTAMP
                     WHERE export_revision_id = ? AND status = 'staging'
                     """,
-                    (str(final.relative_to(workspace)), export_revision_id),
+                    (
+                        str(final.relative_to(workspace)),
+                        canonical_json(secret_scan),
+                        export_revision_id,
+                    ),
                 )
                 for item in files:
                     connection.execute(
@@ -259,6 +270,7 @@ class ExportService:
                                 "chapter_id": chapter_id,
                                 "page_count": plan["page_count"],
                                 "selection_sha256": plan_fingerprint,
+                                "secret_scan_matches": 0,
                             }
                         ),
                     ),
@@ -317,6 +329,11 @@ class ExportService:
             "pages": json.loads(str(row["page_selection_json"])),
             "selection_sha256": str(row["selection_sha256"]),
             "failure_code": row["failure_code"],
+            "secret_scan": (
+                json.loads(str(row["secret_scan_json"]))
+                if row["secret_scan_json"] is not None
+                else None
+            ),
             "created_at": str(row["created_at"]),
             "completed_at": row["completed_at"],
             "files": [
@@ -799,7 +816,7 @@ class ExportService:
 
     def _validate_published_export(
         self, staging: Path, plan: dict[str, Any], files: list[dict[str, Any]]
-    ) -> None:
+    ) -> dict[str, int | str]:
         pngs = sorted(staging.joinpath("png").glob("*.png"))
         if len(pngs) != plan["page_count"]:
             raise ApplicationError("EXPORT_VALIDATION_FAILED", "PNG 页数不匹配。", 500)
@@ -830,6 +847,46 @@ class ExportService:
             target = staging / item["path"]
             if _sha256_file(target) != item["sha256"]:
                 raise ApplicationError("EXPORT_VALIDATION_FAILED", "导出文件哈希不匹配。", 500)
+        return self.secret_scanner.assert_files_safe([staging / item["path"] for item in files])
+
+    def reconcile_startup(self) -> dict[str, int]:
+        """Fail closed for interrupted exports without publishing partial output."""
+        with self.database.reader() as connection:
+            rows = connection.execute(
+                """SELECT er.export_revision_id, p.workspace_path
+                   FROM export_revisions er JOIN projects p ON p.project_id = er.project_id
+                   WHERE er.status = 'staging'"""
+            ).fetchall()
+        failed = 0
+        preserved_directories = 0
+        for row in rows:
+            export_revision_id = str(row["export_revision_id"])
+            workspace = Path(str(row["workspace_path"])).resolve()
+            export_root = (workspace / "exports").resolve()
+            candidates = (
+                export_root / f".staging-{export_revision_id}",
+                export_root / export_revision_id,
+            )
+            for candidate in candidates:
+                if not candidate.exists():
+                    continue
+                target = export_root / f".failed-{export_revision_id}"
+                if target.exists():
+                    target = export_root / f".failed-{export_revision_id}-{uuid7()}"
+                os.replace(candidate, target)
+                preserved_directories += 1
+            with self.database.writer() as connection:
+                connection.execute(
+                    """UPDATE export_revisions
+                       SET status = 'failed', failure_code = 'PROCESS_RESTARTED'
+                       WHERE export_revision_id = ? AND status = 'staging'""",
+                    (export_revision_id,),
+                )
+            failed += 1
+        return {
+            "interrupted_exports_failed_closed": failed,
+            "partial_directories_preserved": preserved_directories,
+        }
 
     def _validate_package(self, package_path: Path) -> dict[str, Any]:
         try:
@@ -1326,6 +1383,8 @@ class ExportService:
 
     @staticmethod
     def _safe_failure_code(exc: Exception) -> str:
+        if isinstance(exc, OSError) and exc.errno in {errno.ENOSPC, errno.EDQUOT}:
+            return "LOCAL_STORAGE_FULL"
         return exc.code if isinstance(exc, ApplicationError) else type(exc).__name__[:64]
 
     @staticmethod

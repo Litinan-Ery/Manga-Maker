@@ -23,6 +23,7 @@ import { GenerationConsole } from "./GenerationConsole";
 import { ExportCenter } from "./ExportCenter";
 import { NovelAISettings } from "./NovelAISettings";
 import { PageComposer } from "./PageComposer";
+import { RecoveryStatus } from "./RecoveryStatus";
 import { StoryBeatPanel } from "./StoryBeatPanel";
 import { StoryboardWorkbench } from "./StoryboardWorkbench";
 import "./styles.css";
@@ -198,6 +199,8 @@ export function App() {
       {state.kind === "ready" && hasSession && (
         <CredentialPanel status={vaultStatus} onStatusChange={setVaultStatus} />
       )}
+
+      {state.kind === "ready" && hasSession && <RecoveryStatus onError={setActionError} />}
 
       {state.kind === "ready" && hasSession && (
         <section className="workspace" aria-label="漫画项目工作区">

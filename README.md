@@ -2,9 +2,9 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**P0 早期开发阶段。** 本地应用、TXT/来源链路、结构化分镜、角色/风格审批、NovelAI 固定契约、有界串行队列、逐格图像执行器、本地页面合成、单格/整页 reroll、蒙版 inpaint、不可变版本恢复，以及工程包/PNG/PDF/CBZ 导出与安全恢复已通过离线 Mock 验收。真实付费图像调用和代表性授权章节的完整验收尚未经用户单独批准或完成。
+> 当前状态：**P0 的离线 Mock 单章闭环已完成，真实服务验收仍未执行。** 本地应用、TXT/来源链路、结构化分镜、角色/风格审批、有界生成、页面编辑、reroll/inpaint、版本恢复、四格式导出、启动恢复、磁盘故障处理和凭证零泄露扫描均已有自动化证据。真实 NovelAI 付费 smoke 与代表性授权章节的真实生产仍需用户单独批准，不能由 Mock 结果替代。
 
-完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)。
+完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
 ## 当前可用范围
 
@@ -24,6 +24,8 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | reroll、inpaint 与历史恢复 | 已实现（离线 Mock 验收） | 单格/整页冻结父版本与成本，PNG 蒙版局部重绘，结果创建 AssetVersion + PageVersion；两层人工确认后才可执行；恢复不调用外部服务 |
 | 工程包、PNG、PDF、CBZ 导出 | 已实现 | 导出冻结完整 PageVersion 清单；先在 staging 生成并校验全部格式，再一次性登记成功版本；失败不改旧导出 |
 | 工程包 dry-run 与恢复 | 已实现 | 校验 schema、SHA-256、文件数/大小/压缩比、磁盘空间，拒绝绝对路径、`..`、Zip Slip 和符号链接；确认后恢复到新工作区，ID 冲突整体重映射 |
+| 崩溃恢复与本地完整性检查 | 已实现 | 启动时只做本地 reconciliation；未知计费转人工审阅，半成品保留在恢复边界，不会自动重放付费任务 |
+| 导出凭证零泄露扫描 | 已实现 | 解锁后以内存中的真实凭证字节扫描普通文件与 ZIP 条目；命中即失败关闭，旧成功导出不受影响 |
 
 ## 本地启动
 

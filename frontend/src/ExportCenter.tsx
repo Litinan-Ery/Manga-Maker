@@ -63,7 +63,11 @@ export function ExportCenter({ projectId, chapterSet, onError }: ExportCenterPro
       setExports((current) => [result, ...current]);
       setPlan(null);
       setConfirmed(false);
-      setMessage("工程包、PNG、PDF 和 CBZ 已全部校验并发布为新的不可变导出。");
+      setMessage(
+        result.secret_scan?.matches === 0
+          ? "四种格式已校验并通过凭证零泄露扫描，现已发布为新的不可变导出。"
+          : "工程包、PNG、PDF 和 CBZ 已全部校验并发布为新的不可变导出。",
+      );
     });
   }
 

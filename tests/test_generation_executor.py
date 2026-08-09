@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 from io import BytesIO
 from pathlib import Path
@@ -205,6 +206,36 @@ def test_unknown_provider_outcome_stops_without_replay(
     assert job["calls_completed"] == 0
     assert job["items"][0]["status"] == "needs_review"
     assert provider.generation_calls == 1
+    assert client.app.state.asset_store.current_assets(prepared["project_id"]) == []
+
+
+def test_disk_full_after_provider_response_stops_without_replay(
+    client: TestClient,
+    session_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="生成磁盘不足")
+    started = transition(
+        client, session_headers, prepared["project_id"], prepared["job"], "start"
+    )
+    provider = MockNovelAIClient()
+    install_image_provider(client, provider)
+
+    def disk_full(_path: Path, _payload: bytes) -> None:
+        raise OSError(errno.ENOSPC, "synthetic disk full")
+
+    monkeypatch.setattr("backend.app.generation.assets.write_synced", disk_full)
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    job = client.app.state.generation_queue.get_job(
+        prepared["project_id"], started["job_id"]
+    )
+    assert job["status"] == "needs_review"
+    assert job["calls_started"] == 1
+    assert job["calls_completed"] == 0
+    assert job["items"][0]["last_error_code"] == "LOCAL_STORAGE_FULL"
+    assert provider.generation_calls == 1
+    assert client.app.state.generation_queue.claim_next(started["job_id"]) is None
     assert client.app.state.asset_store.current_assets(prepared["project_id"]) == []
 
 
