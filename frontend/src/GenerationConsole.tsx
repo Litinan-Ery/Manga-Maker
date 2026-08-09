@@ -3,10 +3,15 @@ import { useEffect, useState } from "react";
 import {
   ApiError,
   type ChapterSet,
+  type GenerationAsset,
   type GenerationEstimate,
   type GenerationJob,
   createGenerationJob,
   estimateGeneration,
+  executeGenerationJob,
+  getGenerationAssetImage,
+  getGenerationJob,
+  listGenerationAssets,
   listGenerationJobs,
   transitionGenerationJob,
 } from "./api";
@@ -24,7 +29,10 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
   const [maxCalls, setMaxCalls] = useState(1);
   const [maxCost, setMaxCost] = useState(10);
   const [confirmed, setConfirmed] = useState(false);
+  const [executeConfirmed, setExecuteConfirmed] = useState(false);
   const [job, setJob] = useState<GenerationJob | null>(null);
+  const [assets, setAssets] = useState<GenerationAsset[]>([]);
+  const [executionScheduled, setExecutionScheduled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -32,9 +40,12 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
     let active = true;
     setEstimate(null);
     setConfirmed(false);
-    listGenerationJobs(projectId)
-      .then((jobs) => {
-        if (active) setJob(jobs[0] ?? null);
+    Promise.all([listGenerationJobs(projectId), listGenerationAssets(projectId)])
+      .then(([jobs, currentAssets]) => {
+        if (active) {
+          setJob(jobs[0] ?? null);
+          setAssets(currentAssets);
+        }
       })
       .catch((error: unknown) => {
         if (active) onError(errorMessage(error));
@@ -43,6 +54,35 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
       active = false;
     };
   }, [projectId, onError]);
+
+  useEffect(() => {
+    if (!job || job.status !== "running") {
+      setExecutionScheduled(false);
+      return;
+    }
+    if (!executionScheduled && job.calls_started === job.calls_completed) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const [updated, currentAssets] = await Promise.all([
+          getGenerationJob(projectId, job.job_id),
+          listGenerationAssets(projectId),
+        ]);
+        if (active) {
+          setJob(updated);
+          setAssets(currentAssets);
+        }
+      } catch (error) {
+        if (active) onError(errorMessage(error));
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 750);
+    void refresh();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [executionScheduled, job?.calls_completed, job?.calls_started, job?.job_id, job?.status, onError, projectId]);
 
   useEffect(() => {
     if (!chapterSet.chapters.some((chapter) => chapter.chapter_id === chapterId)) {
@@ -67,6 +107,7 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
     await run(async () => {
       const created = await createGenerationJob(projectId, estimate, maxCalls, maxCost);
       setJob(created);
+      setExecuteConfirmed(false);
       setMessage("有界队列已创建，面板清单和上限已冻结；尚未启动外部请求。 ");
     });
   }
@@ -81,7 +122,22 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
         job.revision,
       );
       setJob(updated);
+      setExecuteConfirmed(false);
       setMessage(transitionMessage(action));
+    });
+  }
+
+  async function handleExecute() {
+    if (!job || !executeConfirmed || job.status !== "running") return;
+    await run(async () => {
+      const result = await executeGenerationJob(projectId, job.job_id, job.revision);
+      setExecuteConfirmed(false);
+      setExecutionScheduled(true);
+      setMessage(
+        result.status === "scheduled"
+          ? "已由你确认执行。队列将严格串行处理，可随时暂停领取新面板。"
+          : "该队列已在执行，未启动重复请求。",
+      );
     });
   }
 
@@ -107,7 +163,7 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
         <span>{job ? statusLabel(job.status) : "尚未创建"}</span>
       </div>
       <p className="panel-description">
-        当前工单只建立安全的串行队列状态机，不会调用 NovelAI 出图。下一阶段接入执行器后，仍须由你点击启动。
+        先冻结面板范围与上限，再由你单独确认执行。每次只处理一格；网络结果不明时会停下等待人工审阅，不会自动重复付费请求。
       </p>
 
       <div className="settings-form generation-plan-form">
@@ -201,8 +257,11 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
             <strong>{statusLabel(job.status)}</strong>
             <span>
               已开始 {job.calls_started}/{job.max_calls} 次 · 已完成 {job.calls_completed}/{job.panel_count} 格 ·
-              已记录 {job.recorded_cost_anlas}/{job.max_cost_anlas} Anlas
+              已分配 {job.allocated_cost_anlas}/{job.max_cost_anlas} Anlas
             </span>
+            {job.unverified_cost_calls > 0 && (
+              <small>{job.unverified_cost_calls} 次请求的实际费用未由接口回传，保留为未核实记录。</small>
+            )}
           </div>
           <div className="button-row">
             {job.status === "queued" && (
@@ -211,9 +270,22 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
               </button>
             )}
             {job.status === "running" && (
-              <button type="button" disabled={busy} onClick={() => void handleTransition("pause")}>
-                暂停领取新面板
-              </button>
+              <>
+                <label className="confirmation-row execution-confirmation">
+                  <input
+                    type="checkbox"
+                    checked={executeConfirmed}
+                    onChange={(event) => setExecuteConfirmed(event.target.checked)}
+                  />
+                  <span>我确认现在执行已冻结队列，这可能产生 NovelAI 费用</span>
+                </label>
+                <button type="button" disabled={busy || !executeConfirmed} onClick={() => void handleExecute()}>
+                  执行冻结队列（将调用 NovelAI）
+                </button>
+                <button type="button" disabled={busy} onClick={() => void handleTransition("pause")}>
+                  暂停领取新面板
+                </button>
+              </>
             )}
             {job.status === "paused" && (
               <button type="button" disabled={busy} onClick={() => void handleTransition("resume")}>
@@ -230,6 +302,16 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
                 取消未开始面板
               </button>
             )}
+          </div>
+        </div>
+      )}
+      {assets.length > 0 && (
+        <div className="generation-assets" aria-label="已生成面板">
+          <h3>已生成面板</h3>
+          <div>
+            {assets.map((asset) => (
+              <GeneratedPanel key={asset.asset_version_id} projectId={projectId} asset={asset} />
+            ))}
           </div>
         </div>
       )}
@@ -263,11 +345,38 @@ function statusLabel(status: GenerationJob["status"]): string {
 
 function transitionMessage(action: "start" | "pause" | "resume" | "cancel"): string {
   return {
-    start: "队列已由你启动；当前版本没有图像执行器，因此不会发出 NovelAI 请求。",
+    start: "队列已进入可执行状态；尚未发出 NovelAI 请求，请再完成一次明确确认。",
     pause: "已暂停，当前在途项可收尾，但不会领取新面板。",
-    resume: "队列已由你恢复；应用重启不会自动执行付费请求。",
+    resume: "队列已恢复为可执行状态；仍需再次明确确认，应用重启也不会自动请求。",
     cancel: "已取消所有尚未开始的面板；历史和在途结算记录仍保留。",
   }[action];
+}
+
+function GeneratedPanel({ projectId, asset }: { projectId: string; asset: GenerationAsset }) {
+  const [source, setSource] = useState("");
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    getGenerationAssetImage(projectId, asset.asset_version_id)
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSource(objectUrl);
+      })
+      .catch(() => setSource(""));
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [asset.asset_version_id, projectId]);
+  return (
+    <article>
+      {source ? <img src={source} alt={`面板 ${asset.panel_id}`} /> : <div className="asset-placeholder">本地素材</div>}
+      <strong>面板 {asset.panel_id.slice(0, 8)}</strong>
+      <span>v{asset.version} · {asset.width} × {asset.height} · seed {asset.seed}</span>
+      <code>{asset.image_sha256.slice(0, 12)}</code>
+    </article>
+  );
 }
 
 function errorMessage(error: unknown): string {

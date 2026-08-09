@@ -9,7 +9,7 @@
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器、结构化分镜版本/审批、CharacterBible、StyleBible、参考图和审批失效工作台，NovelAI 固定契约、能力 profile、项目配置、错误归一化、本地 Mock 与用户点击的无出图连接测试，以及有界串行生成队列状态机。所有云模型链路仍只通过 Mock 验收，尚未执行真实模型调用；付费图像执行器、页面合成与完整导出尚未实现。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已交付本地应用、TXT/来源链路、分镜/设定审批、NovelAI 固定契约与加密凭证引用、有界串行执行器、Precise Reference 预处理、严格响应校验和不可变素材登记。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用；页面合成、reroll/inpaint 和完整导出尚未实现。
 
 ## 1. 架构结论
 
@@ -321,10 +321,13 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 | `POST /api/v1/projects/{id}/novelai/connection-test` | 用户点击触发一次标签建议查询；不出图、不自动重试 |
 | `POST /api/v1/projects/{id}/generation/estimate` | 固定版本和 panel 清单，计算用户保守预留，不生成 |
 | `POST /api/v1/projects/{id}/generation/jobs` | 用户确认后固化有界 Job、调用/成本上限和用户动作 |
-| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/start` | 明确启动任务；MM-012 尚无图像执行器 |
+| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/start` | 使固定 Job 进入可执行状态；此操作本身不请求图像 |
+| `POST /api/v1/projects/{id}/generation/jobs/{job_id}/execute` | 校验精确 revision 与二次确认字面量，显式调度冻结队列 |
 | `POST /api/v1/projects/{id}/generation/jobs/{job_id}/pause` | 当前在途项可收尾，停止领取新项 |
 | `POST /api/v1/projects/{id}/generation/jobs/{job_id}/resume` | 新的人类操作，恢复领取资格 |
 | `POST /api/v1/projects/{id}/generation/jobs/{job_id}/cancel` | 取消 queued 项并保留在途结算记录 |
+| `GET /api/v1/projects/{id}/generation/assets` | 列出当前不可变面板素材元数据 |
+| `GET /api/v1/projects/{id}/generation/assets/{asset_version_id}/content` | 经本地会话保护读取原始 PNG |
 | `POST /api/v1/panels/{id}/reroll` | 创建单格新 seed 任务 |
 | `POST /api/v1/panels/{id}/inpaint` | 固化父素材、蒙版和局部重绘任务 |
 | `POST /api/v1/pages/{id}/reroll` | 为当前页所有面板创建有界任务 |
@@ -505,7 +508,7 @@ stateDiagram-v2
     paused --> canceled: 取消
 ```
 
-Job 状态沿用 PRD 的统一枚举。MM-012 的 GenerationItem 使用 `queued / running / needs_review / failed / completed / canceled`；重试等待由独立 attempt 记录承载，不用 Job 总状态推测单格结果。数据库的 partial unique index 与单写者事务共同保证全应用最多一个 `running` attempt。
+Job 状态沿用 PRD 的统一枚举。GenerationItem 使用 `queued / running / needs_review / failed / completed / canceled`；重试等待由独立 attempt 记录承载，不用 Job 总状态推测单格结果。数据库的 partial unique index 与单写者事务共同保证全应用最多一个 `running` attempt；用户在发送前暂停时，预备 attempt 退回 queued 且不消耗请求计数。
 
 ### 9.3 崩溃恢复
 
@@ -530,13 +533,13 @@ Job 状态沿用 PRD 的统一枚举。MM-012 的 GenerationItem 使用 `queued 
 | 明确余额/额度不足 | `PROVIDER_QUOTA` | 暂停，不重试，重新估算 |
 | 400/422 或内容参数错误 | `PROVIDER_REJECTED` | 不重试 |
 | 429 | `PROVIDER_RATE_LIMITED` | 默认暂停；只有当前官方 Image 契约明确给出可用 Retry-After 时才允许一次有界等待 |
-| 建连前网络失败 | `NETWORK_PRE_SEND` | 最多重试两次，指数退避和抖动 |
+| 建连前网络失败 | `NETWORK_PRE_SEND` | 最多重试两次，有界指数退避 |
 | 已发送请求后超时/断线 | `UNKNOWN_PROVIDER_OUTCOME` | `needs_review`，不自动重发 |
 | 明确 5xx 响应 | `PROVIDER_TEMPORARY` | 最多重试两次；保留每次 correlation ID |
 | 响应损坏/图片不可解码 | `INVALID_PROVIDER_RESPONSE` | 不登记版本；若可能已计费则人工审阅 |
 | 磁盘不足/写入失败 | `LOCAL_STORAGE_FAILURE` | 阻止下一请求，不更新当前指针 |
 
-每次请求生成六位字母数字 `x-correlation-id`，同时记录本地 `attempt_id`。日志不得记录 Authorization、完整 prompt、base64、小说正文或图片字节。
+每次请求生成 UUIDv7 `X-Correlation-ID`，同时记录本地 `attempt_id`。日志不得记录 Authorization、完整 prompt、base64、小说正文或图片字节。
 
 ## 11. 成本模型
 
@@ -546,7 +549,7 @@ Job 状态沿用 PRD 的统一枚举。MM-012 的 GenerationItem 使用 `queued 
 2. `CostEstimate`：每格区间、Job 上限、参考图附加成本和风险说明；
 3. `CostRecord`：实际请求数、成功/失败/重试、供应商可验证的扣费值，或明确标记为 `estimated_only`。
 
-MM-012 尚未引入可能漂移的供应商定价公式。界面要求用户输入“每格保守预留上限”，把 panel 数量乘以该值作为队列分配上限，并明确它不是实际扣费预测。MM-013 只有在取得可审计价格规则或供应商可验证数据后，才能新增自动估算，不得把保守预留改名为实际成本。
+当前未引入可能漂移的供应商定价公式。界面要求用户输入“每格保守预留上限”，每次实际发送前累加分配值，超限则不发请求。Image API 成功响应当前不回传可验证的逐次成本，因此结果显示为 `not_reported`，不得把保守预留改名为实际成本。
 
 Swagger 没有为所有模型暴露稳定的实时价格和单次扣费响应。系统不得把本地成本表计算值伪装成账户实际扣费，也不为查询余额而扩大 Primary API 账户权限。用户看到的“实际”只包含供应商响应或官方可验证数据；否则显示“按规则估算”。
 
@@ -670,7 +673,7 @@ MM-011 已保存经审阅的官方 Swagger 快照元数据：URL、抓取时间�
 |---|---|
 | 单元 | Prompt Compiler、参考图 padding、蒙版、状态机、预算、版本指针、TXT/SourceAnchor |
 | Schema | Storyboard、Bible、GenerationSpec、PageVersion、工程包 |
-| NovelAI mock | 无出图连接成功、401、403、余额、429、5xx、超时和异常 JSON 已实现；图片 201、断流、损坏 base64、错误尺寸随 MM-013 完成 |
+| NovelAI mock | 连接和图像 201、401/403/余额/429/5xx、发送前网络失败、发送后结果不明、异常 JSON/base64/尺寸、Precise Reference 和有界重试已实现 |
 | 恢复 | 每个两阶段提交断点、在途请求崩溃、staging reconciliation、取消/暂停 |
 | 渲染 | 1–6 格模板、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
 | E2E mock | TXT 到四类导出、单格/整页 reroll、inpaint、历史恢复 |

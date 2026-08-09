@@ -57,6 +57,8 @@ class GenerationPlan:
     provider_model_id: str
     mapping_version: str
     contract_sha256: str
+    credential_profile_id: str
+    timeout_seconds: float
     panels: tuple[PlannedPanel, ...]
     page_count: int
     per_panel_cost_ceiling_anlas: int
@@ -81,6 +83,8 @@ class GenerationPlan:
             "provider_model_id": self.provider_model_id,
             "mapping_version": self.mapping_version,
             "contract_sha256": self.contract_sha256,
+            "credential_profile_id": self.credential_profile_id,
+            "timeout_seconds": self.timeout_seconds,
             "page_count": self.page_count,
             "panel_count": self.panel_count,
             "estimated_calls": self.panel_count,
@@ -172,11 +176,11 @@ class GenerationQueueService:
                         job_id, project_id, chapter_id, storyboard_version_id,
                         character_bible_version_id, style_bible_version_id,
                         novelai_config_revision, provider_model_id, mapping_version,
-                        contract_sha256,
+                        contract_sha256, credential_profile_id, timeout_seconds,
                         plan_fingerprint, status, user_action_id, page_count,
                         panel_count, max_calls, max_cost_anlas,
                         estimated_cost_upper_anlas, cost_basis
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -189,6 +193,8 @@ class GenerationQueueService:
                         plan.provider_model_id,
                         plan.mapping_version,
                         plan.contract_sha256,
+                        plan.credential_profile_id,
+                        plan.timeout_seconds,
                         plan.fingerprint,
                         user_action_id,
                         plan.page_count,
@@ -273,6 +279,8 @@ class GenerationQueueService:
             "provider_model_id": str(row["provider_model_id"]),
             "mapping_version": str(row["mapping_version"]),
             "contract_sha256": str(row["contract_sha256"]),
+            "credential_profile_id": str(row["credential_profile_id"]),
+            "timeout_seconds": float(row["timeout_seconds"]),
             "plan_fingerprint": str(row["plan_fingerprint"]),
             "status": str(row["status"]),
             "user_action_id": str(row["user_action_id"]),
@@ -283,8 +291,11 @@ class GenerationQueueService:
             "estimated_cost_upper_anlas": int(row["estimated_cost_upper_anlas"]),
             "cost_basis": str(row["cost_basis"]),
             "calls_started": int(row["calls_started"]),
+            "items_claimed": int(row["items_claimed"]),
             "calls_completed": int(row["calls_completed"]),
             "recorded_cost_anlas": int(row["recorded_cost_anlas"]),
+            "allocated_cost_anlas": int(row["allocated_cost_anlas"]),
+            "unverified_cost_calls": int(row["unverified_cost_calls"]),
             "revision": int(row["revision"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
@@ -395,15 +406,6 @@ class GenerationQueueService:
             if item is None:
                 self._finish_if_empty(connection, job_id)
                 return None
-            if int(job["calls_started"]) >= int(job["max_calls"]):
-                self._mark_job_needs_review(connection, job_id, "CALL_LIMIT_REACHED")
-                return None
-            projected_cost = int(job["recorded_cost_anlas"]) + int(
-                item["cost_ceiling_anlas"]
-            )
-            if projected_cost > int(job["max_cost_anlas"]):
-                self._mark_job_needs_review(connection, job_id, "COST_LIMIT_REACHED")
-                return None
             attempt_id = str(uuid7())
             attempt_number = int(item["attempt_count"]) + 1
             connection.execute(
@@ -431,7 +433,7 @@ class GenerationQueueService:
             connection.execute(
                 """
                 UPDATE generation_jobs
-                SET calls_started = calls_started + 1, revision = revision + 1,
+                SET items_claimed = items_claimed + 1, revision = revision + 1,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE job_id = ?
                 """,
@@ -459,60 +461,155 @@ class GenerationQueueService:
                 "cost_ceiling_anlas": int(item["cost_ceiling_anlas"]),
             }
 
-    def complete_attempt(self, attempt_id: str, *, recorded_cost_anlas: int) -> None:
-        if recorded_cost_anlas < 0:
-            raise ValueError("recorded cost must not be negative")
+    def mark_provider_request_started(self, attempt_id: str) -> bool:
+        """Consume one call/cost allocation immediately before the HTTP request."""
         with self.database.writer() as connection:
-            row = self._attempt_row(connection, attempt_id)
-            if str(row["attempt_status"]) != "running":
+            row = connection.execute(
+                """
+                SELECT ga.status AS attempt_status, ga.provider_request_started,
+                       ga.item_id, gi.job_id, gi.cost_ceiling_anlas,
+                       gj.project_id, gj.status AS job_status, gj.calls_started,
+                       gj.max_calls, gj.allocated_cost_anlas, gj.max_cost_anlas
+                FROM generation_attempts ga
+                JOIN generation_job_items gi ON gi.item_id = ga.item_id
+                JOIN generation_jobs gj ON gj.job_id = gi.job_id
+                WHERE ga.attempt_id = ?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
                 raise ApplicationError(
-                    "GENERATION_ATTEMPT_NOT_RUNNING", "该生成尝试已经结束。", 409
+                    "GENERATION_ATTEMPT_NOT_FOUND", "没有找到该生成尝试。", 404
                 )
+            if str(row["attempt_status"]) != "running":
+                return False
+            if bool(row["provider_request_started"]):
+                return True
+            if str(row["job_status"]) != "running":
+                self._stop_prepared_attempt_for_job_state(connection, row, attempt_id)
+                return False
+            projected_cost = int(row["allocated_cost_anlas"]) + int(
+                row["cost_ceiling_anlas"]
+            )
+            if int(row["calls_started"]) >= int(row["max_calls"]):
+                self._stop_prepared_attempt_for_limit(
+                    connection, row, attempt_id, "CALL_LIMIT_REACHED"
+                )
+                return False
+            if projected_cost > int(row["max_cost_anlas"]):
+                self._stop_prepared_attempt_for_limit(
+                    connection, row, attempt_id, "COST_LIMIT_REACHED"
+                )
+                return False
             connection.execute(
                 """
                 UPDATE generation_attempts
-                SET status = 'completed', recorded_cost_anlas = ?,
-                    completed_at = CURRENT_TIMESTAMP
+                SET provider_request_started = 1, provider_started_at = CURRENT_TIMESTAMP
                 WHERE attempt_id = ?
                 """,
-                (recorded_cost_anlas, attempt_id),
-            )
-            connection.execute(
-                """
-                UPDATE generation_job_items
-                SET status = 'completed', recorded_cost_anlas = recorded_cost_anlas + ?,
-                    active_attempt_id = NULL, updated_at = CURRENT_TIMESTAMP
-                WHERE item_id = ?
-                """,
-                (recorded_cost_anlas, str(row["item_id"])),
+                (attempt_id,),
             )
             connection.execute(
                 """
                 UPDATE generation_jobs
-                SET calls_completed = calls_completed + 1,
-                    recorded_cost_anlas = recorded_cost_anlas + ?,
+                SET calls_started = calls_started + 1,
+                    allocated_cost_anlas = allocated_cost_anlas + ?,
                     revision = revision + 1, updated_at = CURRENT_TIMESTAMP
                 WHERE job_id = ?
                 """,
-                (recorded_cost_anlas, str(row["job_id"])),
+                (int(row["cost_ceiling_anlas"]), str(row["job_id"])),
             )
-            refreshed = connection.execute(
-                """
-                SELECT status, max_cost_anlas, recorded_cost_anlas
-                FROM generation_jobs WHERE job_id = ?
-                """,
-                (str(row["job_id"]),),
-            ).fetchone()
-            if (
-                refreshed is not None
-                and str(refreshed["status"]) not in {"canceled", "paused"}
-                and int(refreshed["recorded_cost_anlas"]) > int(refreshed["max_cost_anlas"])
-            ):
-                self._mark_job_needs_review(
-                    connection, str(row["job_id"]), "RECORDED_COST_EXCEEDED_LIMIT"
-                )
-            else:
-                self._finish_if_empty(connection, str(row["job_id"]))
+            self._audit(
+                connection,
+                str(row["project_id"]),
+                "generation.provider_request_started",
+                {"job_id": str(row["job_id"]), "attempt_id": attempt_id},
+            )
+            return True
+
+    def complete_attempt(
+        self, attempt_id: str, *, recorded_cost_anlas: int | None
+    ) -> None:
+        if recorded_cost_anlas is not None and recorded_cost_anlas < 0:
+            raise ValueError("recorded cost must not be negative")
+        with self.database.writer() as connection:
+            self.complete_attempt_in_transaction(
+                connection,
+                attempt_id,
+                recorded_cost_anlas=recorded_cost_anlas,
+            )
+
+    def complete_attempt_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        attempt_id: str,
+        *,
+        recorded_cost_anlas: int | None,
+        asset_version_id: str | None = None,
+    ) -> None:
+        """Finalize an attempt inside an existing asset registration transaction."""
+        if recorded_cost_anlas is not None and recorded_cost_anlas < 0:
+            raise ValueError("recorded cost must not be negative")
+        recorded_cost = recorded_cost_anlas or 0
+        unverified = int(recorded_cost_anlas is None)
+        row = self._attempt_row(connection, attempt_id)
+        if str(row["attempt_status"]) != "running":
+            raise ApplicationError(
+                "GENERATION_ATTEMPT_NOT_RUNNING", "该生成尝试已经结束。", 409
+            )
+        if not bool(row["provider_request_started"]):
+            raise ApplicationError(
+                "GENERATION_PROVIDER_REQUEST_NOT_STARTED",
+                "供应商请求尚未开始，不能登记完成。",
+                409,
+            )
+        connection.execute(
+            """
+            UPDATE generation_attempts
+            SET status = 'completed', recorded_cost_anlas = ?,
+                completed_at = CURRENT_TIMESTAMP
+            WHERE attempt_id = ?
+            """,
+            (recorded_cost_anlas, attempt_id),
+        )
+        connection.execute(
+            """
+            UPDATE generation_job_items
+            SET status = 'completed', recorded_cost_anlas = recorded_cost_anlas + ?,
+                active_attempt_id = NULL, asset_version_id = COALESCE(?, asset_version_id),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE item_id = ?
+            """,
+            (recorded_cost, asset_version_id, str(row["item_id"])),
+        )
+        connection.execute(
+            """
+            UPDATE generation_jobs
+            SET calls_completed = calls_completed + 1,
+                recorded_cost_anlas = recorded_cost_anlas + ?,
+                unverified_cost_calls = unverified_cost_calls + ?,
+                revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE job_id = ?
+            """,
+            (recorded_cost, unverified, str(row["job_id"])),
+        )
+        refreshed = connection.execute(
+            """
+            SELECT status, max_cost_anlas, recorded_cost_anlas
+            FROM generation_jobs WHERE job_id = ?
+            """,
+            (str(row["job_id"]),),
+        ).fetchone()
+        if (
+            refreshed is not None
+            and str(refreshed["status"]) not in {"canceled", "paused"}
+            and int(refreshed["recorded_cost_anlas"]) > int(refreshed["max_cost_anlas"])
+        ):
+            self._mark_job_needs_review(
+                connection, str(row["job_id"]), "RECORDED_COST_EXCEEDED_LIMIT"
+            )
+        else:
+            self._finish_if_empty(connection, str(row["job_id"]))
 
     def fail_attempt(
         self, attempt_id: str, *, error_code: str, outcome_unknown: bool
@@ -547,6 +644,43 @@ class GenerationQueueService:
                 WHERE job_id = ? AND status != 'canceled'
                 """,
                 (target, str(row["job_id"])),
+            )
+
+    def requeue_attempt(self, attempt_id: str, *, error_code: str) -> None:
+        """Record a definite temporary failure and return its item to the same bounded job."""
+        with self.database.writer() as connection:
+            row = self._attempt_row(connection, attempt_id)
+            if str(row["attempt_status"]) != "running":
+                raise ApplicationError(
+                    "GENERATION_ATTEMPT_NOT_RUNNING", "该生成尝试已经结束。", 409
+                )
+            connection.execute(
+                """
+                UPDATE generation_attempts
+                SET status = 'failed', error_code = ?, completed_at = CURRENT_TIMESTAMP
+                WHERE attempt_id = ?
+                """,
+                (error_code[:100], attempt_id),
+            )
+            item_status = (
+                "canceled" if str(row["job_status"]) == "canceled" else "queued"
+            )
+            connection.execute(
+                """
+                UPDATE generation_job_items
+                SET status = ?, active_attempt_id = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE item_id = ?
+                """,
+                (item_status, str(row["item_id"])),
+            )
+            connection.execute(
+                """
+                UPDATE generation_jobs
+                SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+                """,
+                (str(row["job_id"]),),
             )
 
     def reconcile_startup(self) -> dict[str, int]:
@@ -652,7 +786,7 @@ class GenerationQueueService:
             novelai_row = connection.execute(
                 """
                 SELECT provider_model_id, mapping_version, contract_sha256, revision,
-                       last_connection_status
+                       credential_profile_id, timeout_seconds, last_connection_status
                 FROM novelai_configs WHERE project_id = ?
                 """,
                 (project_id,),
@@ -714,6 +848,8 @@ class GenerationQueueService:
             "provider_model_id": str(novelai_row["provider_model_id"]),
             "mapping_version": str(novelai_row["mapping_version"]),
             "contract_sha256": str(novelai_row["contract_sha256"]),
+            "credential_profile_id": str(novelai_row["credential_profile_id"]),
+            "timeout_seconds": float(novelai_row["timeout_seconds"]),
             "per_panel_cost_ceiling_anlas": per_panel_cost_ceiling_anlas,
             "panels": [panel.payload() for panel in panels],
         }
@@ -735,6 +871,8 @@ class GenerationQueueService:
             provider_model_id=str(novelai_row["provider_model_id"]),
             mapping_version=str(novelai_row["mapping_version"]),
             contract_sha256=str(novelai_row["contract_sha256"]),
+            credential_profile_id=str(novelai_row["credential_profile_id"]),
+            timeout_seconds=float(novelai_row["timeout_seconds"]),
             panels=tuple(panels),
             page_count=len(document.pages),
             per_panel_cost_ceiling_anlas=per_panel_cost_ceiling_anlas,
@@ -835,9 +973,11 @@ class GenerationQueueService:
     def _attempt_row(connection: sqlite3.Connection, attempt_id: str) -> sqlite3.Row:
         row = connection.execute(
             """
-            SELECT ga.status AS attempt_status, ga.item_id, gi.job_id
+            SELECT ga.status AS attempt_status, ga.provider_request_started,
+                   ga.item_id, gi.job_id, gj.status AS job_status
             FROM generation_attempts ga
             JOIN generation_job_items gi ON gi.item_id = ga.item_id
+            JOIN generation_jobs gj ON gj.job_id = gi.job_id
             WHERE ga.attempt_id = ?
             """,
             (attempt_id,),
@@ -861,6 +1001,7 @@ class GenerationQueueService:
             "cost_ceiling_anlas": int(row["cost_ceiling_anlas"]),
             "recorded_cost_anlas": int(row["recorded_cost_anlas"]),
             "active_attempt_id": row["active_attempt_id"],
+            "asset_version_id": row["asset_version_id"],
         }
 
     @staticmethod
@@ -912,6 +1053,79 @@ class GenerationQueueService:
                 json.dumps({"job_id": job_id, "reason": reason}, sort_keys=True),
                 job_id,
             ),
+        )
+
+    @classmethod
+    def _stop_prepared_attempt_for_limit(
+        cls,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        attempt_id: str,
+        reason: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE generation_attempts
+            SET status = 'canceled', error_code = ?, completed_at = CURRENT_TIMESTAMP
+            WHERE attempt_id = ?
+            """,
+            (reason, attempt_id),
+        )
+        connection.execute(
+            """
+            UPDATE generation_job_items
+            SET status = 'queued', active_attempt_id = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE item_id = ?
+            """,
+            (str(row["item_id"]),),
+        )
+        cls._mark_job_needs_review(connection, str(row["job_id"]), reason)
+
+    @classmethod
+    def _stop_prepared_attempt_for_job_state(
+        cls,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        attempt_id: str,
+    ) -> None:
+        job_status = str(row["job_status"])
+        item_status = "canceled" if job_status == "canceled" else "queued"
+        reason = f"JOB_{job_status.upper()}_BEFORE_REQUEST"
+        connection.execute(
+            """
+            UPDATE generation_attempts
+            SET status = 'canceled', error_code = ?, completed_at = CURRENT_TIMESTAMP
+            WHERE attempt_id = ? AND provider_request_started = 0
+            """,
+            (reason[:100], attempt_id),
+        )
+        connection.execute(
+            """
+            UPDATE generation_job_items
+            SET status = ?, active_attempt_id = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE item_id = ?
+            """,
+            (item_status, str(row["item_id"])),
+        )
+        connection.execute(
+            """
+            UPDATE generation_jobs
+            SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE job_id = ?
+            """,
+            (str(row["job_id"]),),
+        )
+        cls._audit(
+            connection,
+            str(row["project_id"]),
+            "generation.prepared_attempt_stopped",
+            {
+                "job_id": str(row["job_id"]),
+                "attempt_id": attempt_id,
+                "job_status": job_status,
+                "external_request_created": False,
+            },
         )
 
     @staticmethod

@@ -21,6 +21,8 @@ from .bibles.service import BibleService
 from .config import Settings, get_settings
 from .database import Database
 from .errors import install_error_handlers
+from .generation.assets import AssetStore
+from .generation.executor import GenerationExecutor
 from .generation.queue import GenerationQueueService
 from .ingestion.txt import TxtIngestionService
 from .novelai.service import NovelAIService
@@ -41,12 +43,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bibles = BibleService(database, projects)
     novelai = NovelAIService(database, vault)
     generation_queue = GenerationQueueService(database, bibles)
+    asset_store = AssetStore(database, generation_queue)
+    generation_executor = GenerationExecutor(
+        database, generation_queue, vault, asset_store
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         database.migrate()
         generation_queue.reconcile_startup()
         yield
+        await generation_executor.shutdown()
         vault.lock()
 
     app = FastAPI(
@@ -66,6 +73,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.bibles = bibles
     app.state.novelai = novelai
     app.state.generation_queue = generation_queue
+    app.state.asset_store = asset_store
+    app.state.generation_executor = generation_executor
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],

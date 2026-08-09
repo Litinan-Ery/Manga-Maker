@@ -218,6 +218,65 @@ h1 {
   width: auto;
 }
 
+.execution-confirmation {
+  flex-basis: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f6e3d8;
+  color: #7d3829;
+}
+
+.queue-status-card small {
+  color: #7d5c32;
+  line-height: 1.5;
+}
+
+.generation-assets {
+  margin-top: 18px;
+}
+
+.generation-assets h3 {
+  margin: 0 0 12px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 500;
+}
+
+.generation-assets > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.generation-assets article {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgb(25 24 21 / 12%);
+  border-radius: 12px;
+  background: #fffdf8;
+}
+
+.generation-assets img,
+.asset-placeholder {
+  width: 100%;
+  aspect-ratio: 832 / 1216;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #e9e3d8;
+}
+
+.asset-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.generation-assets span,
+.generation-assets code {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .contract-note,
 .field-note {
   color: var(--muted);

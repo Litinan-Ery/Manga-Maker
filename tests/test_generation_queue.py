@@ -138,6 +138,7 @@ def test_worker_claim_is_globally_serial_and_pause_stops_new_claims(
     )
     first_attempt = service.claim_next(first_started["job_id"])
     assert first_attempt is not None
+    assert service.mark_provider_request_started(first_attempt["attempt_id"]) is True
     assert service.claim_next(second_started["job_id"]) is None
 
     paused = transition(
@@ -156,11 +157,61 @@ def test_worker_claim_is_globally_serial_and_pause_stops_new_claims(
 
     second_attempt = service.claim_next(second_started["job_id"])
     assert second_attempt is not None
+    assert service.mark_provider_request_started(second_attempt["attempt_id"]) is True
     service.complete_attempt(second_attempt["attempt_id"], recorded_cost_anlas=3)
     completed = service.get_job(second["project_id"], second_started["job_id"])
     assert completed["status"] == "completed"
     assert completed["calls_started"] == 1
     assert completed["recorded_cost_anlas"] == 3
+
+
+def test_pause_between_claim_and_send_releases_prepared_attempt_without_a_call(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="发送前暂停")
+    service = client.app.state.generation_queue
+    started = transition(
+        client, session_headers, prepared["project_id"], prepared["job"], "start"
+    )
+    attempt = service.claim_next(started["job_id"])
+    assert attempt is not None
+    current = service.get_job(prepared["project_id"], started["job_id"])
+    paused = transition(
+        client, session_headers, prepared["project_id"], current, "pause"
+    )
+
+    assert service.mark_provider_request_started(attempt["attempt_id"]) is False
+    released = service.get_job(prepared["project_id"], started["job_id"])
+    assert released["status"] == "paused"
+    assert released["items"][0]["status"] == "queued"
+    assert released["items"][0]["active_attempt_id"] is None
+    assert released["calls_started"] == 0
+    assert released["allocated_cost_anlas"] == 0
+    assert paused["revision"] < released["revision"]
+
+
+def test_cancel_during_definite_temporary_failure_does_not_requeue_item(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="在途取消")
+    service = client.app.state.generation_queue
+    started = transition(
+        client, session_headers, prepared["project_id"], prepared["job"], "start"
+    )
+    attempt = service.claim_next(started["job_id"])
+    assert attempt is not None
+    assert service.mark_provider_request_started(attempt["attempt_id"]) is True
+    current = service.get_job(prepared["project_id"], started["job_id"])
+    canceled = transition(
+        client, session_headers, prepared["project_id"], current, "cancel"
+    )
+
+    service.requeue_attempt(attempt["attempt_id"], error_code="PROVIDER_TEMPORARY")
+    settled = service.get_job(prepared["project_id"], started["job_id"])
+    assert canceled["status"] == "canceled"
+    assert settled["status"] == "canceled"
+    assert settled["items"][0]["status"] == "canceled"
+    assert settled["items"][0]["active_attempt_id"] is None
 
 
 def test_cancel_preserves_in_flight_settlement_and_restart_requires_review(
@@ -173,6 +224,7 @@ def test_cancel_preserves_in_flight_settlement_and_restart_requires_review(
     )
     attempt = service.claim_next(started["job_id"])
     assert attempt is not None
+    assert service.mark_provider_request_started(attempt["attempt_id"]) is True
 
     reconciliation = service.reconcile_startup()
     assert reconciliation == {"needs_review": 1, "paused": 0}
@@ -198,6 +250,7 @@ def test_recorded_cost_overrun_stops_queue_for_review(
     )
     attempt = service.claim_next(started["job_id"])
     assert attempt is not None
+    assert service.mark_provider_request_started(attempt["attempt_id"]) is True
     service.complete_attempt(attempt["attempt_id"], recorded_cost_anlas=11)
 
     job = service.get_job(prepared["project_id"], started["job_id"])

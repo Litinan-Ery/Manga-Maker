@@ -34,7 +34,7 @@
 | 10 | MM-010 角色表、风格板与审批门禁 | P1 | Done | MM-009 |
 | 11 | MM-011 NovelAI 契约、Mock 与连接测试 | P1 | Done | MM-004、MM-010 |
 | 12 | MM-012 有界串行生成队列 | P1 | Done | MM-003、MM-011 |
-| 13 | MM-013 NovelAI 逐格生成与素材版本 | P1 | Todo | MM-012 |
+| 13 | MM-013 NovelAI 逐格生成与素材版本 | P1 | Done | MM-012 |
 | 14 | MM-014 页面编辑与确定性合成 | P1 | Todo | MM-013、MM-005 |
 | 15 | MM-015 reroll、inpaint 与版本恢复 | P1 | Todo | MM-014 |
 | 16 | MM-016 工程包、PNG、PDF、CBZ | P1 | Todo | MM-014、MM-015 |
@@ -149,6 +149,7 @@
 
 - 支持生成、参考图预处理、响应校验、原始 PNG 和 provenance sidecar。
 - 真实调用必须在 mock 全部通过且用户单独确认后执行。
+- 完成证据：已交付手工 allowlist 的 `POST /ai/generate-image` JSON 映射、固定 host/模型/契约、每格不可变 GenerationSpec 与 UUIDv7 correlation ID、最多一张经 EXIF 修正和黑边 padding 的 Precise Reference、严格 201/JSON/base64/PNG/尺寸/seed 校验，以及 `original.png` + provenance + AssetVersion 原子登记。发送前读取加密凭证并消耗冻结上限；明确连接失败/5xx 最多重试两次，发送后结果不明立即转人工审阅且不重放。界面要求在启动 Job 后再次勾选确认才调度，并轮询进度、预览本地素材；75 项后端测试、11 项前端测试、ruff、mypy 和生产构建通过。真实 NovelAI 付费请求为 0，尚未执行用户批准的低成本 smoke。
 
 ### MM-014 页面编辑与确定性合成
 

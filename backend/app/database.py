@@ -416,6 +416,92 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON generation_job_items(job_id, ordinal);
         """,
     ),
+    (
+        8,
+        """
+        ALTER TABLE generation_jobs
+        ADD COLUMN credential_profile_id TEXT NOT NULL DEFAULT '';
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN timeout_seconds REAL NOT NULL DEFAULT 30
+            CHECK(timeout_seconds >= 1 AND timeout_seconds <= 180);
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN allocated_cost_anlas INTEGER NOT NULL DEFAULT 0
+            CHECK(allocated_cost_anlas >= 0);
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN unverified_cost_calls INTEGER NOT NULL DEFAULT 0
+            CHECK(unverified_cost_calls >= 0);
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN items_claimed INTEGER NOT NULL DEFAULT 0
+            CHECK(items_claimed >= 0);
+
+        ALTER TABLE generation_attempts
+        ADD COLUMN provider_request_started INTEGER NOT NULL DEFAULT 0
+            CHECK(provider_request_started IN (0, 1));
+
+        ALTER TABLE generation_attempts
+        ADD COLUMN provider_started_at TEXT;
+
+        UPDATE generation_jobs
+        SET credential_profile_id = COALESCE((
+                SELECT credential_profile_id FROM novelai_configs nc
+                WHERE nc.project_id = generation_jobs.project_id
+                  AND nc.revision = generation_jobs.novelai_config_revision
+            ), ''),
+            timeout_seconds = COALESCE((
+                SELECT timeout_seconds FROM novelai_configs nc
+                WHERE nc.project_id = generation_jobs.project_id
+                  AND nc.revision = generation_jobs.novelai_config_revision
+            ), 30),
+            items_claimed = calls_started,
+            calls_started = 0;
+
+        CREATE TABLE generation_specs (
+            spec_id TEXT PRIMARY KEY,
+            attempt_id TEXT NOT NULL UNIQUE REFERENCES generation_attempts(attempt_id),
+            item_id TEXT NOT NULL REFERENCES generation_job_items(item_id),
+            schema_version TEXT NOT NULL,
+            document_json TEXT NOT NULL,
+            spec_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE asset_versions (
+            asset_version_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            panel_id TEXT NOT NULL,
+            version INTEGER NOT NULL CHECK(version >= 1),
+            parent_asset_version_id TEXT REFERENCES asset_versions(asset_version_id),
+            job_id TEXT NOT NULL REFERENCES generation_jobs(job_id),
+            item_id TEXT NOT NULL REFERENCES generation_job_items(item_id),
+            attempt_id TEXT NOT NULL UNIQUE REFERENCES generation_attempts(attempt_id),
+            spec_id TEXT NOT NULL UNIQUE REFERENCES generation_specs(spec_id),
+            status TEXT NOT NULL CHECK(status IN ('ready', 'failed')),
+            original_relative_path TEXT NOT NULL UNIQUE,
+            provenance_relative_path TEXT NOT NULL UNIQUE,
+            image_sha256 TEXT NOT NULL,
+            width INTEGER NOT NULL CHECK(width > 0),
+            height INTEGER NOT NULL CHECK(height > 0),
+            seed INTEGER NOT NULL CHECK(seed >= 0),
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, panel_id, version)
+        );
+
+        ALTER TABLE generation_job_items
+        ADD COLUMN asset_version_id TEXT REFERENCES asset_versions(asset_version_id);
+
+        CREATE UNIQUE INDEX one_current_asset_version_per_panel
+        ON asset_versions(project_id, panel_id)
+        WHERE is_current = 1 AND status = 'ready';
+
+        CREATE INDEX asset_versions_by_panel
+        ON asset_versions(project_id, panel_id, version);
+        """,
+    ),
 )
 
 

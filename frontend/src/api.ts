@@ -207,6 +207,7 @@ export interface GenerationJobItem {
   cost_ceiling_anlas: number;
   recorded_cost_anlas: number;
   active_attempt_id: string | null;
+  asset_version_id: string | null;
 }
 
 export interface GenerationJob {
@@ -220,6 +221,8 @@ export interface GenerationJob {
   provider_model_id: string;
   mapping_version: string;
   contract_sha256: string;
+  credential_profile_id: string;
+  timeout_seconds: number;
   plan_fingerprint: string;
   status: GenerationJobStatus;
   user_action_id: string;
@@ -231,7 +234,10 @@ export interface GenerationJob {
   cost_basis: string;
   calls_started: number;
   calls_completed: number;
+  items_claimed: number;
+  allocated_cost_anlas: number;
   recorded_cost_anlas: number;
+  unverified_cost_calls: number;
   revision: number;
   created_at: string;
   updated_at: string;
@@ -240,6 +246,25 @@ export interface GenerationJob {
   completed_at: string | null;
   items: GenerationJobItem[];
   external_requests_started: number;
+}
+
+export interface GenerationAsset {
+  asset_version_id: string;
+  project_id: string;
+  panel_id: string;
+  version: number;
+  parent_asset_version_id: string | null;
+  job_id: string;
+  item_id: string;
+  attempt_id: string;
+  spec_id: string;
+  status: "ready" | "failed";
+  image_sha256: string;
+  width: number;
+  height: number;
+  seed: number;
+  is_current: boolean;
+  created_at: string;
 }
 
 export interface DialogueLine {
@@ -720,6 +745,17 @@ export function listGenerationJobs(projectId: string): Promise<GenerationJob[]> 
   );
 }
 
+export function getGenerationJob(
+  projectId: string,
+  jobId: string,
+): Promise<GenerationJob> {
+  return request<GenerationJob>(
+    `/api/v1/projects/${projectId}/generation/jobs/${jobId}`,
+    {},
+    false,
+  );
+}
+
 export function transitionGenerationJob(
   projectId: string,
   jobId: string,
@@ -735,6 +771,56 @@ export function transitionGenerationJob(
     },
     true,
   );
+}
+
+export function executeGenerationJob(
+  projectId: string,
+  jobId: string,
+  expectedRevision: number,
+): Promise<{
+  status: "scheduled" | "already_running";
+  job_id: string;
+  bounded_user_action_id: string;
+}> {
+  return request(
+    `/api/v1/projects/${projectId}/generation/jobs/${jobId}/execute`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        confirmation: "I_CONFIRM_NOVELAI_IMAGE_GENERATION",
+      }),
+    },
+    true,
+  );
+}
+
+export function listGenerationAssets(projectId: string): Promise<GenerationAsset[]> {
+  return request<GenerationAsset[]>(
+    `/api/v1/projects/${projectId}/generation/assets`,
+    {},
+    false,
+  );
+}
+
+export async function getGenerationAssetImage(
+  projectId: string,
+  assetVersionId: string,
+): Promise<Blob> {
+  if (!localSessionToken || !localCsrfToken) {
+    throw new ApiError("本地会话已失效，请重新运行 Manga Maker 启动器。", 401);
+  }
+  const headers = new Headers({
+    "X-Manga-Maker-Session": localSessionToken,
+    "X-CSRF-Token": localCsrfToken,
+  });
+  const response = await fetch(
+    `/api/v1/projects/${projectId}/generation/assets/${assetVersionId}/content`,
+    { headers },
+  );
+  if (!response.ok) throw new ApiError("无法读取本地面板素材。", response.status);
+  return response.blob();
 }
 
 export function getCurrentStoryboard(
