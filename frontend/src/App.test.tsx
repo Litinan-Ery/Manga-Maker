@@ -68,6 +68,11 @@ describe("App", () => {
       if (path === "/api/v1/projects" && method === "GET") {
         return Promise.resolve(jsonResponse([]));
       }
+      if (path === "/api/v1/vault" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse({ configured: false, unlocked: false, profiles: [] }),
+        );
+      }
       if (path === "/api/v1/projects" && method === "POST") {
         return Promise.resolve(
           jsonResponse(
@@ -98,7 +103,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
 
     expect(await screen.findByText("导入 TXT 小说")).toBeInTheDocument();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
     const createCall = fetchMock.mock.calls.find(
       ([path, init]) => String(path) === "/api/v1/projects" && init?.method === "POST",
     );

@@ -6,16 +6,20 @@ import {
   type HealthResponse,
   type Project,
   type SourcePreflight,
+  type VaultStatus,
   confirmSource,
   consumeLocalSession,
   createProject,
   getChapters,
   getHealth,
+  getVaultStatus,
   listProjects,
   preflightSource,
 } from "./api";
 import { ChapterEditor } from "./ChapterEditor";
+import { CredentialPanel } from "./CredentialPanel";
 import { StoryBeatPanel } from "./StoryBeatPanel";
+import { StoryboardWorkbench } from "./StoryboardWorkbench";
 import "./styles.css";
 
 type LoadState =
@@ -34,6 +38,8 @@ export function App() {
   const [chapterSet, setChapterSet] = useState<ChapterSet | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
+  const [adaptationRefreshKey, setAdaptationRefreshKey] = useState(0);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
@@ -65,6 +71,13 @@ export function App() {
         }
       });
     return () => controller.abort();
+  }, [hasSession]);
+
+  useEffect(() => {
+    if (!hasSession) return;
+    getVaultStatus()
+      .then(setVaultStatus)
+      .catch((error: unknown) => setActionError(errorMessage(error)));
   }, [hasSession]);
 
   useEffect(() => {
@@ -158,7 +171,13 @@ export function App() {
           <Fact label="本地数据库" value={state.health.database === "ok" ? "正常" : "异常"} />
           <Fact
             label="加密凭证库"
-            value={state.health.vault_configured ? "已配置" : "尚未配置"}
+            value={
+              vaultStatus?.unlocked
+                ? "已解锁"
+                : vaultStatus?.configured || state.health.vault_configured
+                  ? "已配置"
+                  : "尚未配置"
+            }
           />
         </section>
       )}
@@ -168,6 +187,10 @@ export function App() {
           <strong>请从 Manga Maker 启动器打开此页面</strong>
           <p>当前页面没有本地写入权限。关闭此页后重新运行启动命令即可。</p>
         </section>
+      )}
+
+      {state.kind === "ready" && hasSession && (
+        <CredentialPanel status={vaultStatus} onStatusChange={setVaultStatus} />
       )}
 
       {state.kind === "ready" && hasSession && (
@@ -285,6 +308,14 @@ export function App() {
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}
                 onError={setActionError}
+                onChanged={() => setAdaptationRefreshKey((current) => current + 1)}
+              />
+              <StoryboardWorkbench
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                vaultStatus={vaultStatus}
+                onError={setActionError}
+                refreshKey={adaptationRefreshKey}
               />
             </section>
           )}

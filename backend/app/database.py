@@ -142,6 +142,64 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON story_beats(beat_set_id, ordinal);
         """,
     ),
+    (
+        4,
+        """
+        CREATE TABLE text_model_configs (
+            project_id TEXT PRIMARY KEY REFERENCES projects(project_id),
+            provider TEXT NOT NULL DEFAULT 'openai-compatible',
+            base_url TEXT NOT NULL,
+            model TEXT NOT NULL,
+            credential_profile_id TEXT NOT NULL,
+            timeout_seconds REAL NOT NULL CHECK(timeout_seconds >= 1 AND timeout_seconds <= 180),
+            temperature REAL NOT NULL CHECK(temperature >= 0 AND temperature <= 2),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE storyboards (
+            storyboard_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, chapter_id)
+        );
+
+        CREATE TABLE storyboard_versions (
+            storyboard_version_id TEXT PRIMARY KEY,
+            storyboard_id TEXT NOT NULL REFERENCES storyboards(storyboard_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            beat_set_id TEXT NOT NULL REFERENCES story_beat_sets(beat_set_id),
+            chapter_version INTEGER NOT NULL CHECK(chapter_version >= 1),
+            page_budget INTEGER NOT NULL CHECK(page_budget >= 1 AND page_budget <= 64),
+            source_fingerprint TEXT NOT NULL,
+            document_json TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(storyboard_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_storyboard_version
+        ON storyboard_versions(storyboard_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE storyboard_approvals (
+            approval_id TEXT PRIMARY KEY,
+            storyboard_version_id TEXT NOT NULL UNIQUE
+                REFERENCES storyboard_versions(storyboard_version_id),
+            approval_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX storyboards_by_project
+        ON storyboards(project_id, chapter_id);
+
+        CREATE INDEX storyboard_versions_by_storyboard
+        ON storyboard_versions(storyboard_id, version);
+        """,
+    ),
 )
 
 

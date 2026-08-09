@@ -30,7 +30,7 @@
 | 6 | MM-006 项目创建与工作区 | P1 | Done | MM-003 |
 | 7 | MM-007 TXT 预检与编码确认 | P1 | Done | MM-006 |
 | 8 | MM-008 章节修正、SourceAnchor 与 StoryBeat | P1 | Done | MM-007 |
-| 9 | MM-009 文本模型适配与结构化分镜 | P1 | In Progress | MM-008、MM-004 |
+| 9 | MM-009 文本模型适配与结构化分镜 | P1 | Done | MM-008、MM-004 |
 | 10 | MM-010 角色表、风格板与审批门禁 | P1 | Todo | MM-009 |
 | 11 | MM-011 NovelAI 契约、Mock 与连接测试 | P1 | Todo | MM-004、MM-010 |
 | 12 | MM-012 有界串行生成队列 | P1 | Todo | MM-003、MM-011 |
@@ -99,7 +99,7 @@
   - 前端不保存模型 Token；
   - 后端不可用时显示可操作错误；
   - build 和测试通过。
-- 完成证据：本地健康页、离线错误状态、TypeScript build 和 2 项前端测试通过。
+- 完成证据：本地健康页、离线错误状态、TypeScript build 和 6 项前端测试通过。
 
 ## P1 / High 工单
 
@@ -125,7 +125,7 @@
 
 - 实现 OpenAI-compatible adapter、Storyboard JSON Schema 和最多两次结构修复。
 - StoryBeat 处理率必须 100%，`unresolved` 阻止审批。
-- 当前：已完成版本化 Pydantic 契约、页/格顺序与来源语义校验、HTTPS/loopback 端点约束、错误归类、响应哈希/token/耗时记录和最多两次修复的 Mock 测试；持久化、配置界面、改编工作台与审批门禁待完成。
+- 完成证据：已交付 OpenAI-compatible 配置与显式连接测试、只读取所选章节和 StoryBeat 的适配链路、场景→页→格版本化契约、100% 来源覆盖与最多两次修复、不可变分镜版本、可视化编辑工作台、过期来源/未解决节拍审批门禁，以及模型/参数/hash/token/耗时等非秘密 provenance。32 项后端测试、6 项前端测试、ruff、mypy 和生产构建通过；仅使用 Mock，未执行真实模型调用。
 
 ### MM-010 角色表、风格板与审批门禁
 

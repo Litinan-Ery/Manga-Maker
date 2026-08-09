@@ -9,7 +9,7 @@
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库、TXT/来源链路和文本适配器基础；NovelAI 集成、真实模型配置、图像生产与完整导出尚未实现。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前已有本地应用、SQLite、加密凭证库与设置界面、TXT/来源链路、可配置文本适配器和结构化分镜版本/审批工作台；以上模型链路仅通过 Mock 验收，尚未执行真实模型调用。NovelAI 集成、图像生产与完整导出尚未实现。
 
 ## 1. 架构结论
 
@@ -292,15 +292,18 @@ SQLite 事务与文件重命名无法形成真正的跨资源原子事务，因�
 
 ### 7.1 本地 HTTP API
 
-所有写接口需要启动会话令牌、同源检查、CSRF token、`Idempotency-Key` 和 `expected_revision`。
+下表是 P0 完整目标契约。当前写接口均要求启动会话令牌和 CSRF token；涉及付费生成与任务控制的后续接口还必须加入 `Idempotency-Key` 和 `expected_revision`。
 
 | 方法与路径 | 用途 |
 |---|---|
 | `POST /api/v1/projects` | 创建本地项目，不调用云模型 |
 | `POST /api/v1/projects/{id}/source/preflight` | TXT 编码和章节预检 |
 | `POST /api/v1/projects/{id}/source/confirm` | 固化 SourceChapter 版本 |
-| `POST /api/v1/projects/{id}/storyboards/draft` | 用户触发结构化改编 |
-| `POST /api/v1/storyboards/{id}/approve` | 分镜审批 |
+| `PUT /api/v1/projects/{id}/adaptation/text-model` | 保存非敏感模型配置；凭证仅引用本地 vault profile |
+| `POST /api/v1/projects/{id}/adaptation/text-model/test` | 用户明确触发连接测试 |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/generate` | 用户触发所选章节的结构化改编 |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/revisions` | 将人工修改保存为不可变新版本 |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/approve` | 对固定内容哈希进行分镜审批 |
 | `POST /api/v1/bibles/{id}/approve` | 角色/风格审批 |
 | `POST /api/v1/generation-jobs/estimate` | 编译 exact specs 与成本估算，不生成 |
 | `POST /api/v1/generation-jobs` | 固化有界 Job 和用户动作 |

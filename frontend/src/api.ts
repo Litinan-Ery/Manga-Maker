@@ -53,6 +53,7 @@ export interface ChapterSet {
 
 export interface ChapterText {
   chapter_id: string;
+  chapter_version: number;
   title: string;
   start_offset: number;
   end_offset: number;
@@ -85,8 +86,107 @@ export interface StoryBeatSet {
   beats: StoryBeat[];
 }
 
+export interface CredentialProfile {
+  profile_id: string;
+  provider: string;
+  label: string;
+  fingerprint: string;
+}
+
+export interface VaultStatus {
+  configured: boolean;
+  unlocked: boolean;
+  profiles: CredentialProfile[];
+}
+
+export interface TextModelConfiguration {
+  project_id: string;
+  provider: "openai-compatible";
+  base_url: string;
+  endpoint_host: string;
+  model: string;
+  credential_profile_id: string;
+  credential_fingerprint: string | null;
+  credential_status: "available" | "locked" | "missing";
+  timeout_seconds: number;
+  temperature: number;
+  revision: number;
+}
+
+export interface DialogueLine {
+  speaker: string;
+  text: string;
+}
+
+export interface StoryboardPanel {
+  panel_id: string;
+  order: number;
+  purpose: string;
+  shot: string;
+  characters: string[];
+  dialogue: DialogueLine[];
+  narration: string[];
+  sfx: string[];
+  visual_prompt: string;
+  negative_prompt: string;
+  source_anchor_ids: string[];
+}
+
+export interface StoryboardScene {
+  scene_id: string;
+  order: number;
+  title: string;
+  location: string;
+  time_of_day: string;
+  summary: string;
+  beat_ids: string[];
+}
+
+export interface StoryboardPage {
+  page_id: string;
+  page_number: number;
+  turning_point: string;
+  scene_ids: string[];
+  panels: StoryboardPanel[];
+}
+
+export interface BeatResolution {
+  beat_id: string;
+  status: "represented" | "condensed" | "omitted" | "unresolved";
+  reason: string | null;
+  page_numbers: number[];
+}
+
+export interface StoryboardDocument {
+  schema_version: "1.0";
+  storyboard_id: string;
+  chapter_version: number;
+  beat_resolutions: BeatResolution[];
+  scenes: StoryboardScene[];
+  pages: StoryboardPage[];
+}
+
+export interface StoryboardVersion {
+  storyboard_id: string;
+  storyboard_version_id: string;
+  version: number;
+  chapter_id: string;
+  chapter_version: number;
+  beat_set_id: string;
+  page_budget: number;
+  source_fingerprint: string;
+  document: StoryboardDocument;
+  provenance: Record<string, unknown>;
+  approval_status: "draft" | "approved" | "stale";
+  approval_hash: string | null;
+  approved_at: string | null;
+  unresolved_count: number;
+  is_current: boolean;
+  created_at: string;
+}
+
 interface ErrorPayload {
-  error?: { message?: string };
+  error?: { message?: string; details?: { problem?: string } };
   detail?: string;
 }
 
@@ -122,6 +222,55 @@ export function clearLocalSession(): void {
 
 export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
   return request<HealthResponse>("/health", { signal }, false);
+}
+
+export function getVaultStatus(): Promise<VaultStatus> {
+  return request<VaultStatus>("/api/v1/vault", {}, false);
+}
+
+export function createVault(masterPassword: string): Promise<VaultStatus> {
+  return request<VaultStatus>(
+    "/api/v1/vault",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ master_password: masterPassword }),
+    },
+    true,
+  );
+}
+
+export function unlockVault(masterPassword: string): Promise<VaultStatus> {
+  return request<VaultStatus>(
+    "/api/v1/vault/unlock",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ master_password: masterPassword }),
+    },
+    true,
+  );
+}
+
+export function lockVault(): Promise<VaultStatus> {
+  return request<VaultStatus>("/api/v1/vault/lock", { method: "POST" }, true);
+}
+
+export function saveCredential(
+  profileId: string,
+  provider: string,
+  label: string,
+  secret: string,
+): Promise<CredentialProfile> {
+  return request<CredentialProfile>(
+    `/api/v1/vault/profiles/${encodeURIComponent(profileId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, label, secret }),
+    },
+    true,
+  );
 }
 
 export function listProjects(signal?: AbortSignal): Promise<Project[]> {
@@ -210,6 +359,104 @@ export function draftStoryBeats(projectId: string, chapterId: string): Promise<S
   );
 }
 
+export function getTextModelConfiguration(projectId: string): Promise<TextModelConfiguration> {
+  return request<TextModelConfiguration>(
+    `/api/v1/projects/${projectId}/adaptation/text-model`,
+    {},
+    false,
+  );
+}
+
+export function saveTextModelConfiguration(
+  projectId: string,
+  configuration: {
+    base_url: string;
+    model: string;
+    credential_profile_id: string;
+    timeout_seconds: number;
+    temperature: number;
+  },
+): Promise<TextModelConfiguration> {
+  return request<TextModelConfiguration>(
+    `/api/v1/projects/${projectId}/adaptation/text-model`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(configuration),
+    },
+    true,
+  );
+}
+
+export function testTextModelConfiguration(
+  projectId: string,
+): Promise<{ status: "ok"; endpoint_host: string; model: string; config_revision: number }> {
+  return request(
+    `/api/v1/projects/${projectId}/adaptation/text-model/test`,
+    { method: "POST" },
+    true,
+  );
+}
+
+export function getCurrentStoryboard(
+  projectId: string,
+  chapterId: string,
+): Promise<StoryboardVersion> {
+  return request<StoryboardVersion>(
+    `/api/v1/projects/${projectId}/adaptation/storyboards/current?chapter_id=${encodeURIComponent(chapterId)}`,
+    {},
+    false,
+  );
+}
+
+export function generateStoryboard(
+  projectId: string,
+  chapterId: string,
+  pageBudget: number,
+  adaptationPreferences: string[],
+): Promise<StoryboardVersion> {
+  return request<StoryboardVersion>(
+    `/api/v1/projects/${projectId}/adaptation/storyboards/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chapter_id: chapterId,
+        page_budget: pageBudget,
+        adaptation_preferences: adaptationPreferences,
+      }),
+    },
+    true,
+  );
+}
+
+export function reviseStoryboard(
+  projectId: string,
+  storyboardVersionId: string,
+  document: StoryboardDocument,
+): Promise<StoryboardVersion> {
+  return request<StoryboardVersion>(
+    `/api/v1/projects/${projectId}/adaptation/storyboards/${storyboardVersionId}/revisions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document }),
+    },
+    true,
+  );
+}
+
+export function approveStoryboard(
+  projectId: string,
+  storyboardVersionId: string,
+): Promise<StoryboardVersion> {
+  return request<StoryboardVersion>(
+    `/api/v1/projects/${projectId}/adaptation/storyboards/${storyboardVersionId}/approve`,
+    { method: "POST" },
+    true,
+  );
+}
+
 async function request<T>(path: string, init: RequestInit, needsSession: boolean): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -236,7 +483,11 @@ async function request<T>(path: string, init: RequestInit, needsSession: boolean
       // Keep the safe generic message when a proxy or server returns non-JSON.
     }
     throw new ApiError(
-      payload.error?.message ?? payload.detail ?? "本地服务暂时无法完成该操作。",
+      [payload.error?.message, payload.error?.details?.problem]
+        .filter((value): value is string => Boolean(value))
+        .join(" ") ||
+        payload.detail ||
+        "本地服务暂时无法完成该操作。",
       response.status,
     );
   }

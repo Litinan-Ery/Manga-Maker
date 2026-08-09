@@ -12,9 +12,10 @@ interface StoryBeatPanelProps {
   projectId: string;
   chapterSet: ChapterSet;
   onError: (message: string) => void;
+  onChanged?: () => void;
 }
 
-export function StoryBeatPanel({ projectId, chapterSet, onError }: StoryBeatPanelProps) {
+export function StoryBeatPanel({ projectId, chapterSet, onError, onChanged }: StoryBeatPanelProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [beatSet, setBeatSet] = useState<StoryBeatSet | null>(null);
   const [busy, setBusy] = useState(false);
@@ -47,6 +48,7 @@ export function StoryBeatPanel({ projectId, chapterSet, onError }: StoryBeatPane
     setBusy(true);
     try {
       setBeatSet(await draftStoryBeats(projectId, chapterId));
+      onChanged?.();
     } catch (error) {
       onError(error instanceof Error ? error.message : "无法建立剧情节拍。");
     } finally {

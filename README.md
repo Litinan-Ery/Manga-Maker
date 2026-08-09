@@ -2,7 +2,7 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，计划调用 NovelAI 逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**P0 早期开发阶段。** 本地应用骨架、加密凭证库、项目/TXT 导入、章节修正、来源锚点与剧情节拍已实现；结构化分镜适配器正在开发。NovelAI、页面生成、排版、reroll 和导出尚未实现，也没有执行过真实模型调用。
+> 当前状态：**P0 早期开发阶段。** 本地应用骨架、加密凭证库与设置界面、项目/TXT 导入、章节修正、来源锚点、剧情节拍和结构化分镜工作台已实现并通过 Mock 验收。NovelAI、页面生成、排版、reroll 和导出尚未实现；尚未执行过真实文本模型或 NovelAI 调用。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)。
 
@@ -12,10 +12,10 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 |---|---|---|
 | 本地 FastAPI + React 应用 | 已实现 | 只监听 loopback；启动器打开一次性本地会话 |
 | SQLite 与本机项目工作区 | 已实现 | 迁移、单写者、UUIDv7、安全路径和不可变来源版本 |
-| 应用本地加密凭证库 | 后端已实现 | Argon2id + XChaCha20-Poly1305；尚无完整设置界面 |
+| 应用本地加密凭证库 | 已实现 | Argon2id + XChaCha20-Poly1305；支持界面内创建、解锁、锁定和保存凭证 |
 | TXT 导入与章节修正 | 已实现 | UTF-8/BOM/GB18030/GBK 候选；支持改名、拆分、合并 |
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
-| 结构化分镜文本适配器 | 开发中 | Schema、语义校验和最多两次修复已有模拟测试；尚未接入界面或真实模型 |
+| 结构化分镜文本适配器 | 已实现（Mock 验收） | 可配置 OpenAI-compatible 端点；场景→页→格契约、来源覆盖、最多两次修复、不可变版本与审批门禁已接入界面；未做真实调用 |
 | NovelAI、排版、reroll、导出 | 未实现 | 不得把技术文档中的设计当作可用功能 |
 
 ## 本地启动
@@ -29,7 +29,7 @@ pnpm --dir frontend build
 uv run python -m backend.app.launcher
 ```
 
-启动器会选择本机端口并打开浏览器。运行数据默认写入 `~/Library/Application Support/Manga Maker/`，不会写入仓库。当前界面可以创建项目、导入 TXT、确认编码、修正章节并建立来源覆盖账本。
+启动器会选择本机端口并打开浏览器。运行数据默认写入 `~/Library/Application Support/Manga Maker/`，不会写入仓库。当前界面可以管理本地加密凭证、创建项目、导入 TXT、确认编码、修正章节、建立来源覆盖账本，以及配置文本模型并生成、编辑和审批结构化分镜。
 
 开发验收命令：
 

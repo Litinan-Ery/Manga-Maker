@@ -329,7 +329,7 @@ class TxtIngestionService:
         with self.database.reader() as connection:
             row = connection.execute(
                 """
-                SELECT c.chapter_id, c.title, c.start_offset, c.end_offset,
+                SELECT c.chapter_id, c.version, c.title, c.start_offset, c.end_offset,
                        sf.normalized_path
                 FROM source_chapters c
                 JOIN source_chapter_sets cs ON cs.chapter_set_id = c.chapter_set_id
@@ -349,6 +349,7 @@ class TxtIngestionService:
         end = int(row["end_offset"])
         return {
             "chapter_id": str(row["chapter_id"]),
+            "chapter_version": int(row["version"]),
             "title": str(row["title"]),
             "start_offset": start,
             "end_offset": end,

@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 import pytest
 
-from backend.app.adaptation.models import SourceBeatInput, StoryboardRequest
+from backend.app.adaptation.models import (
+    SourceBeatInput,
+    StoryboardDocument,
+    StoryboardRequest,
+    validate_storyboard_semantics,
+)
 from backend.app.adaptation.text_model import (
     OpenAICompatibleTextModel,
     TextModelConfiguration,
@@ -45,11 +50,23 @@ def valid_storyboard() -> dict[str, Any]:
                 "page_numbers": [1],
             }
         ],
+        "scenes": [
+            {
+                "scene_id": "018f0f65-8f2f-7e65-8000-123456789abf",
+                "order": 1,
+                "title": "进入房间",
+                "location": "旧屋房间",
+                "time_of_day": "夜晚",
+                "summary": "林夏推门进入房间。",
+                "beat_ids": ["beat-1"],
+            }
+        ],
         "pages": [
             {
                 "page_id": "018f0f65-8f2f-7e65-8000-123456789abd",
                 "page_number": 1,
                 "turning_point": "主角进入房间",
+                "scene_ids": ["018f0f65-8f2f-7e65-8000-123456789abf"],
                 "panels": [
                     {
                         "panel_id": "018f0f65-8f2f-7e65-8000-123456789abe",
@@ -154,6 +171,16 @@ def test_invalid_output_stops_after_two_repairs() -> None:
     with pytest.raises(TextModelStructuredOutputError, match="after 2 repairs"):
         asyncio.run(provider.generate_storyboard(storyboard_request()))
     assert calls == 3
+
+
+def test_scene_mapping_must_cover_each_non_omitted_story_beat() -> None:
+    document = StoryboardDocument.model_validate(valid_storyboard())
+    document = document.model_copy(
+        update={"scenes": [document.scenes[0].model_copy(update={"beat_ids": ["unknown-beat"]})]}
+    )
+
+    with pytest.raises(ValueError, match="story beats that were not supplied"):
+        validate_storyboard_semantics(document, storyboard_request())
 
 
 def test_plain_http_is_limited_to_loopback_hosts() -> None:

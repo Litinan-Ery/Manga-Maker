@@ -9,6 +9,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .adaptation.service import AdaptationService
+from .api.adaptation import router as adaptation_router
 from .api.health import router as health_router
 from .api.projects import router as projects_router
 from .api.vault import router as vault_router
@@ -29,6 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     local_session = LocalSession.create()
     projects = ProjectService(database, resolved_settings.projects_dir)
     ingestion = TxtIngestionService(database, projects)
+    adaptation = AdaptationService(database, ingestion, vault)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -49,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.local_session = local_session
     app.state.projects = projects
     app.state.ingestion = ingestion
+    app.state.adaptation = adaptation
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
@@ -57,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(vault_router)
     app.include_router(projects_router)
+    app.include_router(adaptation_router)
     install_frontend(app, resolved_settings.frontend_dist_dir)
     return app
 
