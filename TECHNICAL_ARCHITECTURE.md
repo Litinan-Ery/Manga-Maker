@@ -4,12 +4,12 @@
 |---|---|
 | 文档版本 | v0.1 |
 | 日期 | 2026-08-09 |
-| 状态 | P0 离线 Mock 闭环已实现；P1/P2 目标架构与当前实现并存 |
+| 状态 | P0 离线 Mock 闭环、P1 连续性与整本有界生产已实现；P2 开发中 |
 | 对应产品文档 | [README.md](README.md)、[PRD.md](PRD.md) |
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前 P0 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；P1 已交付跨章节连续性账本。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
+> 本文定义目标系统边界、组件、数据流、接口和验收方法。当前 P0 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；P1 已交付跨章节连续性账本与整本有界生产计划。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
 
 ## 1. 架构结论
 
@@ -536,6 +536,22 @@ Job 状态沿用 PRD 的统一枚举。GenerationItem 使用 `queued / running /
 
 这样既保留断点，也不会因应用重启自动产生新的付费调用。
 
+### 9.4 整本生产编排
+
+`BookProductionService` 是现有单章 `GenerationJob` 之上的安全编排层，不另造图像执行通道。估算要求当前章节集中的每章都能形成有效单章计划，并要求连续性账本已按顺序批准到末章。创建计划时冻结章节集、连续性版本、每章 Storyboard/CharacterBible/StyleBible、单章计划指纹、页/格数以及全书与逐章调用/成本上限。
+
+整本计划的操作边界如下：
+
+- 用户逐章批准冻结快照后，计划才从 `awaiting_approval` 进入 `ready`；
+- `start` 只激活计划，不创建图像请求；
+- 每次用户点击 `advance` 最多创建一个现有的 queued 单章 Job；同一章已有开放 Job 时幂等返回；
+- Job 仍由 Generation Console 独立执行，并继续要求启动与执行二次确认；
+- 当前章未进入终态前，下一章不可创建；失败或未知结果只能由用户显式复核并重置；
+- 暂停、恢复和取消同步到当前 Job，但恢复不会自动领取任务；
+- 启动 reconciliation 先恢复单章 Job，再把整本活动计划转为 `paused` 或 `needs_review`，绝不调用 `advance`。
+
+因此，全书上限只是若干已批准单章任务的总安全包络，不是定时任务、无限授权或后台无人值守生产。
+
 ## 10. 错误、重试与未知计费
 
 | 场景 | 分类 | 自动行为 |
@@ -622,7 +638,7 @@ PageVersion JSON
 
 导出先写独立 staging 目录，全部格式通过页数、尺寸、页序、打开测试和秘密扫描后，才登记 ExportRevision。
 
-当前数据库 schema 为 v13。`export_revisions` 冻结按阅读顺序排列的 PageVersion、版本号、尺寸和渲染 SHA-256，并登记发布前秘密扫描摘要；`export_files` 逐文件登记类型、序号、大小与 SHA-256；`recovery_runs` 只持久化脱敏的本地完整性计数。工程包 schema v1.1 增加 ContinuityLedger 版本与审批。Exporter 生成逐页 PNG、由相同 PNG 合成的 PDF、带 `ComicInfo.xml` 的 CBZ，以及含 `records.json`/文件清单的 `.manga-maker.zip`。只有四种结果和解包后的 ZIP 条目全部完成凭证字节扫描，staging 才原子移动到正式导出目录并提交 `completed`；失败版本只登记安全错误码，之前的成功目录和哈希不变。
+当前数据库 schema 为 v14。`export_revisions` 冻结按阅读顺序排列的 PageVersion、版本号、尺寸和渲染 SHA-256，并登记发布前秘密扫描摘要；`export_files` 逐文件登记类型、序号、大小与 SHA-256；`recovery_runs` 只持久化脱敏的本地完整性计数。工程包 schema v1.2 在 ContinuityLedger 版本与审批之外增加整本计划和逐章快照。Exporter 生成逐页 PNG、由相同 PNG 合成的 PDF、带 `ComicInfo.xml` 的 CBZ，以及含 `records.json`/文件清单的 `.manga-maker.zip`。只有四种结果和解包后的 ZIP 条目全部完成凭证字节扫描，staging 才原子移动到正式导出目录并提交 `completed`；失败版本只登记安全错误码，之前的成功目录和哈希不变。
 
 ### 13.3 跨章节连续性账本
 

@@ -23,7 +23,7 @@ from ..projects import PROJECT_DIRECTORIES, ProjectService
 from ..safety import SecretScanner
 
 EXPORT_SCHEMA_VERSION = "1.0"
-PACKAGE_SCHEMA_VERSION = "1.1"
+PACKAGE_SCHEMA_VERSION = "1.2"
 MAX_PACKAGE_COMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_PACKAGE_FILES = 20_000
 MAX_PACKAGE_FILE_BYTES = 512 * 1024 * 1024
@@ -122,6 +122,12 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
            ON v.continuity_version_id = a.continuity_version_id
            JOIN continuity_ledgers l
              ON l.continuity_ledger_id = v.continuity_ledger_id WHERE l.project_id = ?""",
+    ),
+    ("book_production_plans", "SELECT * FROM book_production_plans WHERE project_id = ?"),
+    (
+        "book_production_chapters",
+        """SELECT c.* FROM book_production_chapters c JOIN book_production_plans p
+           ON p.book_plan_id = c.book_plan_id WHERE p.project_id = ?""",
     ),
     ("reference_assets", "SELECT * FROM reference_assets WHERE project_id = ?"),
     ("novelai_configs", "SELECT * FROM novelai_configs WHERE project_id = ?"),

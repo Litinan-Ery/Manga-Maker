@@ -58,6 +58,8 @@ function description(report: RecoveryReport | null): string {
   if (report.status === "healthy") return "数据库、素材、导出和凭证边界均通过；没有启动外部请求。";
   const count =
     (report.queue_recovery?.needs_review ?? 0) +
+    (report.book_recovery?.book_plans_needs_review ?? 0) +
+    (report.book_recovery?.book_plans_paused ?? 0) +
     (report.integrity?.critical_findings ?? 0) +
     (report.integrity?.staging_items ?? 0);
   return `${count} 项需要处理；可恢复半成品已保留，付费任务没有自动重放。`;

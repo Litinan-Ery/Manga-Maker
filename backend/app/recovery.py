@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
+from .book.service import BookProductionService
 from .database import Database
 from .exports.service import ExportService
 from .generation.assets import canonical_json
@@ -28,22 +29,26 @@ class RecoveryService:
         queue: GenerationQueueService,
         exports: ExportService,
         vault: CredentialVault,
+        book_production: BookProductionService,
     ) -> None:
         self.database = database
         self.projects = projects
         self.queue = queue
         self.exports = exports
         self.vault = vault
+        self.book_production = book_production
 
     def reconcile_startup(self) -> dict[str, Any]:
         export_recovery = self.exports.reconcile_startup()
         queue_recovery = self.queue.reconcile_startup()
+        book_recovery = self.book_production.reconcile_startup()
         project_recovery = self._preserve_interrupted_project_directories()
         return self._record_run(
             "startup",
             queue_recovery=queue_recovery,
             export_recovery=export_recovery,
             project_recovery=project_recovery,
+            book_recovery=book_recovery,
         )
 
     def run_manual_check(self) -> dict[str, Any]:
@@ -55,6 +60,7 @@ class RecoveryService:
                 "partial_directories_preserved": 0,
             },
             project_recovery={"interrupted_workspaces_preserved": 0},
+            book_recovery={"book_plans_paused": 0, "book_plans_needs_review": 0},
         )
 
     def latest(self) -> dict[str, Any]:
@@ -86,12 +92,15 @@ class RecoveryService:
         queue_recovery: dict[str, int],
         export_recovery: dict[str, int],
         project_recovery: dict[str, int],
+        book_recovery: dict[str, int],
     ) -> dict[str, Any]:
         integrity = self._integrity_summary()
         attention_count = (
             queue_recovery["needs_review"]
             + export_recovery["interrupted_exports_failed_closed"]
             + project_recovery["interrupted_workspaces_preserved"]
+            + book_recovery["book_plans_paused"]
+            + book_recovery["book_plans_needs_review"]
             + integrity["critical_findings"]
             + integrity["staging_items"]
             + integrity["unregistered_version_files"]
@@ -101,6 +110,7 @@ class RecoveryService:
             "queue_recovery": queue_recovery,
             "export_recovery": export_recovery,
             "project_recovery": project_recovery,
+            "book_recovery": book_recovery,
             "integrity": integrity,
             "provider_requests_started": 0,
         }

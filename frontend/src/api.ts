@@ -452,7 +452,7 @@ export interface ImportPreflight {
   package_sha256: string;
   source_project_id: string;
   source_title: string;
-  schema_version: "1.0" | "1.1";
+  schema_version: "1.0" | "1.1" | "1.2";
   file_count: number;
   expanded_bytes: number;
   record_counts: Record<string, number>;
@@ -483,6 +483,10 @@ export interface RecoveryReport {
     partial_directories_preserved: number;
   };
   project_recovery?: { interrupted_workspaces_preserved: number };
+  book_recovery?: {
+    book_plans_paused: number;
+    book_plans_needs_review: number;
+  };
   integrity?: {
     database_ok: boolean;
     foreign_key_violations: number;
@@ -497,6 +501,108 @@ export interface RecoveryReport {
   };
   provider_requests_started?: 0;
   external_requests_started: 0;
+}
+
+export interface BookEstimateChapter {
+  chapter_id: string;
+  ordinal: number;
+  title: string;
+  storyboard_version_id: string;
+  character_bible_version_id: string;
+  style_bible_version_id: string;
+  generation_plan_fingerprint: string;
+  page_count: number;
+  panel_count: number;
+  estimated_calls: number;
+  estimated_cost_upper_anlas: number;
+}
+
+export interface BookEstimate {
+  schema_version: "1.0";
+  project_id: string;
+  source_chapter_set_id: string;
+  continuity_version_id: string;
+  per_panel_cost_ceiling_anlas: number;
+  chapters: BookEstimateChapter[];
+  chapter_count: number;
+  estimated_page_count: number;
+  estimated_panel_count: number;
+  estimated_calls: number;
+  estimated_cost_upper_anlas: number;
+  cost_basis: "user_confirmed_per_panel_ceiling";
+  cost_notice: string;
+  plan_fingerprint: string;
+  external_request_created: false;
+}
+
+export type BookPlanStatus =
+  | "awaiting_approval"
+  | "ready"
+  | "active"
+  | "paused"
+  | "needs_review"
+  | "completed"
+  | "canceled";
+
+export interface BookPlanChapter {
+  book_chapter_plan_id: string;
+  chapter_id: string;
+  ordinal: number;
+  title: string;
+  storyboard_version_id: string;
+  character_bible_version_id: string;
+  style_bible_version_id: string;
+  generation_plan_fingerprint: string;
+  page_count: number;
+  panel_count: number;
+  estimated_cost_upper_anlas: number;
+  max_calls: number;
+  max_cost_anlas: number;
+  status:
+    | "awaiting_approval"
+    | "approved"
+    | "job_created"
+    | "running"
+    | "paused"
+    | "needs_review"
+    | "completed"
+    | "canceled";
+  generation_job_id: string | null;
+  generation_job_status: GenerationJobStatus | null;
+  calls_started: number;
+  calls_completed: number;
+  allocated_cost_anlas: number;
+  recorded_cost_anlas: number;
+  retry_count: number;
+  approved_at: string | null;
+}
+
+export interface BookPlan {
+  book_plan_id: string;
+  project_id: string;
+  version: number;
+  source_chapter_set_id: string;
+  continuity_version_id: string;
+  status: BookPlanStatus;
+  per_panel_cost_ceiling_anlas: number;
+  estimated_page_count: number;
+  estimated_panel_count: number;
+  estimated_calls: number;
+  estimated_cost_upper_anlas: number;
+  max_calls: number;
+  max_cost_anlas: number;
+  plan_fingerprint: string;
+  revision: number;
+  is_current: boolean;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  chapters: BookPlanChapter[];
+  calls_started: number;
+  calls_completed: number;
+  allocated_cost_anlas: number;
+  recorded_cost_anlas: number;
+  external_requests_started: number;
 }
 
 export type ContinuityKind = "character" | "outfit" | "prop" | "location" | "plot";
@@ -781,6 +887,102 @@ export function runRecoveryCheck(): Promise<RecoveryReport> {
   return request<RecoveryReport>(
     "/api/v1/system/recovery",
     { method: "POST" },
+    true,
+  );
+}
+
+export function getCurrentBookPlan(projectId: string): Promise<BookPlan> {
+  return request<BookPlan>(
+    `/api/v1/projects/${projectId}/book-production/plans/current`,
+    {},
+    false,
+  );
+}
+
+export function estimateBookProduction(
+  projectId: string,
+  perPanelCostCeilingAnlas: number,
+): Promise<BookEstimate> {
+  return request<BookEstimate>(
+    `/api/v1/projects/${projectId}/book-production/estimate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        per_panel_cost_ceiling_anlas: perPanelCostCeilingAnlas,
+      }),
+    },
+    true,
+  );
+}
+
+export function createBookPlan(
+  projectId: string,
+  estimate: BookEstimate,
+  maxCalls: number,
+  maxCostAnlas: number,
+): Promise<BookPlan> {
+  return request<BookPlan>(
+    `/api/v1/projects/${projectId}/book-production/plans`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        per_panel_cost_ceiling_anlas: estimate.per_panel_cost_ceiling_anlas,
+        plan_fingerprint: estimate.plan_fingerprint,
+        max_calls: maxCalls,
+        max_cost_anlas: maxCostAnlas,
+        confirmed: true,
+      }),
+    },
+    true,
+  );
+}
+
+export function approveBookPlanChapter(
+  projectId: string,
+  plan: BookPlan,
+  bookChapterPlanId: string,
+): Promise<BookPlan> {
+  return bookPlanPost(
+    projectId,
+    plan,
+    `chapters/${bookChapterPlanId}/approve`,
+  );
+}
+
+export function retryBookPlanChapter(
+  projectId: string,
+  plan: BookPlan,
+  bookChapterPlanId: string,
+): Promise<BookPlan> {
+  return bookPlanPost(
+    projectId,
+    plan,
+    `chapters/${bookChapterPlanId}/retry`,
+  );
+}
+
+export function transitionBookPlan(
+  projectId: string,
+  plan: BookPlan,
+  action: "start" | "advance" | "pause" | "resume" | "cancel",
+): Promise<BookPlan> {
+  return bookPlanPost(projectId, plan, action);
+}
+
+function bookPlanPost(
+  projectId: string,
+  plan: BookPlan,
+  suffix: string,
+): Promise<BookPlan> {
+  return request<BookPlan>(
+    `/api/v1/projects/${projectId}/book-production/plans/${plan.book_plan_id}/${suffix}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: plan.revision }),
+    },
     true,
   );
 }

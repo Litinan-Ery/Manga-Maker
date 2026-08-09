@@ -735,6 +735,81 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON continuity_ledger_versions(continuity_ledger_id, version);
         """,
     ),
+    (
+        14,
+        """
+        CREATE TABLE book_production_plans (
+            book_plan_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            source_chapter_set_id TEXT NOT NULL REFERENCES source_chapter_sets(chapter_set_id),
+            continuity_version_id TEXT NOT NULL
+                REFERENCES continuity_ledger_versions(continuity_version_id),
+            status TEXT NOT NULL CHECK(status IN (
+                'awaiting_approval', 'ready', 'active', 'paused',
+                'needs_review', 'completed', 'canceled'
+            )),
+            per_panel_cost_ceiling_anlas INTEGER NOT NULL
+                CHECK(per_panel_cost_ceiling_anlas >= 0),
+            estimated_page_count INTEGER NOT NULL CHECK(estimated_page_count >= 1),
+            estimated_panel_count INTEGER NOT NULL CHECK(estimated_panel_count >= 1),
+            estimated_calls INTEGER NOT NULL CHECK(estimated_calls >= 1),
+            estimated_cost_upper_anlas INTEGER NOT NULL
+                CHECK(estimated_cost_upper_anlas >= 0),
+            max_calls INTEGER NOT NULL CHECK(max_calls >= 1),
+            max_cost_anlas INTEGER NOT NULL CHECK(max_cost_anlas >= 0),
+            plan_fingerprint TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT,
+            UNIQUE(project_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_book_plan_per_project
+        ON book_production_plans(project_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE book_production_chapters (
+            book_chapter_plan_id TEXT PRIMARY KEY,
+            book_plan_id TEXT NOT NULL REFERENCES book_production_plans(book_plan_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 1),
+            title TEXT NOT NULL,
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            character_bible_version_id TEXT NOT NULL
+                REFERENCES character_bible_versions(character_bible_version_id),
+            style_bible_version_id TEXT NOT NULL
+                REFERENCES style_bible_versions(style_bible_version_id),
+            generation_plan_fingerprint TEXT NOT NULL,
+            page_count INTEGER NOT NULL CHECK(page_count >= 1),
+            panel_count INTEGER NOT NULL CHECK(panel_count >= 1),
+            estimated_cost_upper_anlas INTEGER NOT NULL
+                CHECK(estimated_cost_upper_anlas >= 0),
+            max_calls INTEGER NOT NULL CHECK(max_calls >= 1),
+            max_cost_anlas INTEGER NOT NULL CHECK(max_cost_anlas >= 0),
+            status TEXT NOT NULL CHECK(status IN (
+                'awaiting_approval', 'approved', 'job_created', 'running',
+                'paused', 'needs_review', 'failed', 'completed', 'canceled'
+            )),
+            approval_hash TEXT,
+            approved_at TEXT,
+            generation_job_id TEXT REFERENCES generation_jobs(job_id),
+            retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(book_plan_id, ordinal),
+            UNIQUE(book_plan_id, chapter_id)
+        );
+
+        CREATE INDEX book_chapters_by_plan
+        ON book_production_chapters(book_plan_id, ordinal);
+        """,
+    ),
 )
 
 

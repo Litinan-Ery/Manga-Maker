@@ -170,7 +170,7 @@ def test_continuity_is_included_in_package_and_restored_with_remapped_ids(
     package = download_file(client, session_headers, project_id, exported, package_file)
     with zipfile.ZipFile(io.BytesIO(package)) as archive:
         records = json.loads(archive.read("records.json"))
-    assert records["schema_version"] == "1.1"
+    assert records["schema_version"] == "1.2"
     assert len(records["tables"]["continuity_ledger_versions"]) == 1
 
     preflight = client.post(

@@ -27,6 +27,7 @@ import { PageComposer } from "./PageComposer";
 import { RecoveryStatus } from "./RecoveryStatus";
 import { StoryBeatPanel } from "./StoryBeatPanel";
 import { StoryboardWorkbench } from "./StoryboardWorkbench";
+import { WholeBookPlanner } from "./WholeBookPlanner";
 import "./styles.css";
 
 type LoadState =
@@ -342,6 +343,10 @@ export function App() {
               <NovelAISettings
                 projectId={selectedProjectId}
                 vaultStatus={vaultStatus}
+                onError={setActionError}
+              />
+              <WholeBookPlanner
+                projectId={selectedProjectId}
                 onError={setActionError}
               />
               <GenerationConsole
