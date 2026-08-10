@@ -46,9 +46,15 @@ it("requires confirmation for immutable export and package restore", async () =>
     return Promise.reject(new Error(`unexpected request: ${method} ${path}`));
   });
   vi.stubGlobal("fetch", fetchMock);
+  const onProjectRestored = vi.fn();
 
   const { container } = render(
-    <ExportCenter projectId="project-1" chapterSet={chapterSet} onError={vi.fn()} />,
+    <ExportCenter
+      projectId="project-1"
+      chapterSet={chapterSet}
+      onError={vi.fn()}
+      onProjectRestored={onProjectRestored}
+    />,
   );
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
@@ -81,6 +87,7 @@ it("requires confirmation for immutable export and package restore", async () =>
   fireEvent.click(screen.getByLabelText(/任何 ID 冲突都不得覆盖/));
   fireEvent.click(restoreButton);
   expect(await screen.findByText(/原项目 ID 冲突已安全重映射/)).toBeInTheDocument();
+  expect(onProjectRestored).toHaveBeenCalledWith("project-restored");
 
   const mutatingCalls = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
   for (const [, init] of mutatingCalls) {

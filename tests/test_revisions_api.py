@@ -162,7 +162,7 @@ def test_inpaint_freezes_mask_and_preserves_unmasked_mock_pixels(
         ).fetchone()
     spec = json.loads(str(row["document_json"]))
     assert spec["action"] == "inpaint"
-    assert spec["schema_version"] == "1.1"
+    assert spec["schema_version"] == "1.2"
     assert spec["parent_asset_version_id"] == panel["asset_version_id"]
     assert spec["mask_asset_id"] == mask["mask_asset_id"]
     assert spec["mask_sha256"] == mask["sha256"]

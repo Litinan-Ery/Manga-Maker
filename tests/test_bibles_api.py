@@ -22,6 +22,22 @@ from backend.app.adaptation.text_model import (
     SecretReader,
     TextModelConfiguration,
 )
+from backend.app.bibles.models import (
+    BibleDraftBundle,
+    BibleDraftRequest,
+    CharacterBibleDocument,
+    CharacterProfile,
+    StyleBibleDocument,
+)
+from backend.app.prompting.models import (
+    CharacterTagDraftBundle,
+    CharacterTagGenerationRequest,
+    CharacterTagSetDraft,
+    PanelPromptDraft,
+    PromptCharacterBlockDraft,
+    PromptDraftBundleDocument,
+    PromptGenerationRequest,
+)
 
 
 class StubTextModel:
@@ -89,6 +105,134 @@ class StubTextModel:
             endpoint_host="models.example.test",
             prompt_template_version="storyboard-1.0",
             response_sha256="a" * 64,
+            input_tokens=20,
+            output_tokens=30,
+            duration_ms=5,
+            repair_attempts=0,
+        )
+
+    async def generate_bible_bundle(
+        self, request: BibleDraftRequest
+    ) -> ModelCandidate[BibleDraftBundle]:
+        names = list(
+            dict.fromkeys(
+                name
+                for page in request.storyboard.pages
+                for panel in page.panels
+                for name in panel.characters
+            )
+        )
+        document = BibleDraftBundle(
+            schema_version="1.0",
+            character_bible=CharacterBibleDocument(
+                schema_version="1.0",
+                character_bible_id=request.character_bible_id,
+                storyboard_version_id=request.storyboard_version_id,
+                characters=[
+                    CharacterProfile(
+                        character_id=uuid4(),
+                        name=name,
+                        narrative_role="待补充",
+                        age_range="待补充",
+                        face_shape="待补充",
+                        hair="待补充",
+                        body_type="待补充",
+                        outfit=["待补充"],
+                        signature_features=["待补充"],
+                        forbidden_changes=["待补充"],
+                        expression_range=["待补充"],
+                        positive_prompt_fragment="待补充",
+                        negative_prompt_fragment="待补充",
+                    )
+                    for name in names
+                ],
+                notes="文本模型草稿",
+            ),
+            style_bible=StyleBibleDocument(
+                schema_version="1.0",
+                style_bible_id=request.style_bible_id,
+                storyboard_version_id=request.storyboard_version_id,
+                summary="黑白分页漫画",
+                line_art="crisp ink line art",
+                screentone="controlled screentone",
+                lighting="high contrast lighting",
+                background_density="readable backgrounds",
+                whitespace="clean negative space",
+                camera_language="clear manga composition",
+                positive_prompt_fragment="black and white manga, crisp ink line art",
+                negative_prompt_fragment="color, text, watermark",
+                prohibited_elements=["文字", "水印", "彩色"],
+            ),
+        )
+        return self._candidate(document, "bibles-1.0")
+
+    async def generate_character_tags(
+        self, request: CharacterTagGenerationRequest
+    ) -> ModelCandidate[CharacterTagDraftBundle]:
+        document = CharacterTagDraftBundle(
+            schema_version="1.0",
+            storyboard_version_id=request.storyboard_version_id,
+            character_bible_version_id=request.character_bible_version_id,
+            style_bible_version_id=request.style_bible_version_id,
+            tag_sets=[
+                CharacterTagSetDraft(
+                    tag_set_id=request.target_tag_set_ids[str(character.character_id)],
+                    character_id=character.character_id,
+                    character_name=character.name,
+                    fixed_tags=["1girl", "shoulder-length black hair", "beauty mark"],
+                    negative_tags=["long hair", "missing beauty mark"],
+                    rationale="稳定角色身份和外观",
+                )
+                for character in request.character_bible.characters
+            ],
+        )
+        return self._candidate(document, "character-tags-1.0")
+
+    async def generate_prompt_bundle(
+        self, request: PromptGenerationRequest
+    ) -> ModelCandidate[PromptDraftBundleDocument]:
+        names = {
+            character.name.casefold(): character.character_id
+            for character in request.character_bible.characters
+        }
+        tag_ids = {
+            str(tag.character_id): tag.tag_set_id
+            for tag in request.character_tags.tag_sets
+        }
+        document = PromptDraftBundleDocument(
+            schema_version="1.0",
+            storyboard_version_id=request.storyboard_version_id,
+            character_tag_bundle_version_id=request.character_tag_bundle_version_id,
+            packages=[
+                PanelPromptDraft(
+                    prompt_package_id=request.target_prompt_package_ids[str(panel.panel_id)],
+                    panel_id=panel.panel_id,
+                    base_visual_tags=["black and white manga", panel.shot],
+                    character_blocks=[
+                        PromptCharacterBlockDraft(
+                            character_id=names[name.casefold()],
+                            tag_set_id=tag_ids[str(names[name.casefold()])],
+                            variable_tags=["alert expression"],
+                        )
+                        for name in panel.characters
+                    ],
+                    style_tags=["crisp ink line art", "controlled screentone"],
+                    negative_tags=["bad anatomy"],
+                )
+                for page in request.storyboard.pages
+                for panel in page.panels
+            ],
+        )
+        return self._candidate(document, "novelai-panel-prompts-1.0")
+
+    def _candidate(self, document: Any, template: str) -> ModelCandidate[Any]:
+        return ModelCandidate(
+            document=document,
+            provider="openai-compatible",
+            model=self.configuration.model,
+            endpoint_host="models.example.test",
+            prompt_template_version=template,
+            response_sha256="b" * 64,
             input_tokens=20,
             output_tokens=30,
             duration_ms=5,
@@ -169,7 +313,10 @@ def generate_bibles(
     response = client.post(
         f"/api/v1/projects/{project_id}/bibles/generate",
         headers=headers,
-        json={"storyboard_version_id": storyboard_version_id},
+        json={
+            "storyboard_version_id": storyboard_version_id,
+            "confirmed_data_send": True,
+        },
     )
     assert response.status_code == 201
     return response.json()

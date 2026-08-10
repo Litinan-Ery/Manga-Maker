@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..adaptation.models import StoryboardDocument
+
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -89,6 +91,21 @@ class StyleBibleDocument(ContractModel):
         if len(self.reference_asset_ids) != len(set(self.reference_asset_ids)):
             raise ValueError("reference asset ids must not contain duplicates")
         return self
+
+
+class BibleDraftRequest(ContractModel):
+    project_id: str = Field(min_length=1, max_length=64)
+    chapter_id: str = Field(min_length=1, max_length=64)
+    storyboard: StoryboardDocument
+    storyboard_version_id: UUID
+    character_bible_id: UUID
+    style_bible_id: UUID
+
+
+class BibleDraftBundle(ContractModel):
+    schema_version: str = Field(pattern=r"^1\.0$")
+    character_bible: CharacterBibleDocument
+    style_bible: StyleBibleDocument
 
 
 def character_approval_issues(document: CharacterBibleDocument) -> list[str]:

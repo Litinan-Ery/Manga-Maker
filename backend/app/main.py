@@ -21,6 +21,7 @@ from .api.library import router as library_router
 from .api.novelai import router as novelai_router
 from .api.pages import router as pages_router
 from .api.projects import router as projects_router
+from .api.prompting import router as prompting_router
 from .api.recovery import router as recovery_router
 from .api.vault import router as vault_router
 from .bibles.service import BibleService
@@ -39,6 +40,7 @@ from .library.service import AssetLibraryService
 from .novelai.service import NovelAIService
 from .pages.service import PageService
 from .projects import ProjectService
+from .prompting.service import PromptingService
 from .recovery import RecoveryService
 from .safety import SecretScanner
 from .security import LocalSession
@@ -54,10 +56,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     projects = ProjectService(database, resolved_settings.projects_dir)
     ingestion = TxtIngestionService(database, projects)
     adaptation = AdaptationService(database, ingestion, vault)
-    bibles = BibleService(database, projects)
+    bibles = BibleService(database, projects, adaptation)
+    prompting = PromptingService(database, adaptation, bibles)
     continuity = ContinuityService(database)
     novelai = NovelAIService(database, vault)
-    generation_queue = GenerationQueueService(database, bibles)
+    generation_queue = GenerationQueueService(database, bibles, prompting)
     book_production = BookProductionService(database, generation_queue)
     asset_store = AssetStore(database, generation_queue)
     pages = PageService(database)
@@ -104,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.ingestion = ingestion
     app.state.adaptation = adaptation
     app.state.bibles = bibles
+    app.state.prompting = prompting
     app.state.continuity = continuity
     app.state.novelai = novelai
     app.state.generation_queue = generation_queue
@@ -126,6 +130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects_router)
     app.include_router(adaptation_router)
     app.include_router(bibles_router)
+    app.include_router(prompting_router)
     app.include_router(book_router)
     app.include_router(continuity_router)
     app.include_router(novelai_router)

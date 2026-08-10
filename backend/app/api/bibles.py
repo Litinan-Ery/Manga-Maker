@@ -17,6 +17,7 @@ Headers = Annotated[tuple[str | None, str | None], Depends(session_headers)]
 
 class GenerateBibleBundleRequest(BaseModel):
     storyboard_version_id: str
+    confirmed_data_send: bool = False
 
 
 class ReviseCharacterBibleRequest(BaseModel):
@@ -45,14 +46,18 @@ def get_bible_bundle(
 
 
 @router.post("/generate", status_code=status.HTTP_201_CREATED)
-def generate_bible_bundle(
+async def generate_bible_bundle(
     project_id: str,
     request: Request,
     body: GenerateBibleBundleRequest,
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
-    return bible_service(request).generate_bundle(project_id, body.storyboard_version_id)
+    return await bible_service(request).generate_bundle(
+        project_id,
+        body.storyboard_version_id,
+        confirmed_data_send=body.confirmed_data_send,
+    )
 
 
 @router.post("/characters/{version_id}/revisions", status_code=status.HTTP_201_CREATED)

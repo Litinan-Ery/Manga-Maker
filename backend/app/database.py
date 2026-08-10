@@ -832,6 +832,111 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         ON asset_library_items(project_id, status, kind, created_at);
         """,
     ),
+    (
+        16,
+        """
+        CREATE TABLE character_tag_bundles (
+            character_tag_bundle_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, chapter_id)
+        );
+
+        CREATE TABLE character_tag_bundle_versions (
+            character_tag_bundle_version_id TEXT PRIMARY KEY,
+            character_tag_bundle_id TEXT NOT NULL
+                REFERENCES character_tag_bundles(character_tag_bundle_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            character_bible_version_id TEXT NOT NULL
+                REFERENCES character_bible_versions(character_bible_version_id),
+            style_bible_version_id TEXT NOT NULL
+                REFERENCES style_bible_versions(style_bible_version_id),
+            provider_model_id TEXT NOT NULL,
+            document_json TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(character_tag_bundle_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_character_tag_bundle_version
+        ON character_tag_bundle_versions(character_tag_bundle_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE character_tag_bundle_approvals (
+            approval_id TEXT PRIMARY KEY,
+            character_tag_bundle_version_id TEXT NOT NULL UNIQUE
+                REFERENCES character_tag_bundle_versions(character_tag_bundle_version_id),
+            approval_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE prompt_bundles (
+            prompt_bundle_id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(project_id),
+            chapter_id TEXT NOT NULL REFERENCES source_chapters(chapter_id),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, chapter_id)
+        );
+
+        CREATE TABLE prompt_bundle_versions (
+            prompt_bundle_version_id TEXT PRIMARY KEY,
+            prompt_bundle_id TEXT NOT NULL REFERENCES prompt_bundles(prompt_bundle_id),
+            version INTEGER NOT NULL CHECK(version >= 1),
+            storyboard_version_id TEXT NOT NULL
+                REFERENCES storyboard_versions(storyboard_version_id),
+            character_bible_version_id TEXT NOT NULL
+                REFERENCES character_bible_versions(character_bible_version_id),
+            style_bible_version_id TEXT NOT NULL
+                REFERENCES style_bible_versions(style_bible_version_id),
+            character_tag_bundle_version_id TEXT NOT NULL
+                REFERENCES character_tag_bundle_versions(character_tag_bundle_version_id),
+            text_model_profile_id TEXT NOT NULL,
+            text_model_config_revision INTEGER NOT NULL CHECK(text_model_config_revision >= 1),
+            text_model_name TEXT NOT NULL,
+            prompt_template_version TEXT NOT NULL,
+            provider_model_id TEXT NOT NULL,
+            document_json TEXT NOT NULL,
+            provenance_json TEXT NOT NULL,
+            is_current INTEGER NOT NULL CHECK(is_current IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(prompt_bundle_id, version)
+        );
+
+        CREATE UNIQUE INDEX one_current_prompt_bundle_version
+        ON prompt_bundle_versions(prompt_bundle_id)
+        WHERE is_current = 1;
+
+        CREATE TABLE prompt_bundle_approvals (
+            approval_id TEXT PRIMARY KEY,
+            prompt_bundle_version_id TEXT NOT NULL UNIQUE
+                REFERENCES prompt_bundle_versions(prompt_bundle_version_id),
+            approval_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN character_tag_bundle_version_id TEXT
+            REFERENCES character_tag_bundle_versions(character_tag_bundle_version_id);
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN prompt_bundle_version_id TEXT
+            REFERENCES prompt_bundle_versions(prompt_bundle_version_id);
+
+        ALTER TABLE generation_jobs
+        ADD COLUMN text_model_config_revision INTEGER
+            CHECK(text_model_config_revision IS NULL OR text_model_config_revision >= 1);
+
+        CREATE INDEX character_tag_versions_by_bundle
+        ON character_tag_bundle_versions(character_tag_bundle_id, version);
+
+        CREATE INDEX prompt_versions_by_bundle
+        ON prompt_bundle_versions(prompt_bundle_id, version);
+        """,
+    ),
 )
 
 

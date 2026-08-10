@@ -304,7 +304,50 @@ def prepare_generation_inputs(
         headers=headers,
     )
     assert tested.status_code == 200
+    prepare_prompting(
+        client,
+        headers,
+        project_id,
+        str(chapter["chapter_id"]),
+    )
     return project_id, chapter, ready_bundle
+
+
+def prepare_prompting(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: str,
+    chapter_id: str,
+) -> dict[str, Any]:
+    generated_tags = client.post(
+        f"/api/v1/projects/{project_id}/prompting/character-tags/generate",
+        headers=headers,
+        json={"chapter_id": chapter_id, "confirmed_data_send": True},
+    )
+    assert generated_tags.status_code == 201, generated_tags.text
+    tag_version_id = generated_tags.json()["version_id"]
+    approved_tags = client.post(
+        f"/api/v1/projects/{project_id}/prompting/character-tags/"
+        f"{tag_version_id}/approve",
+        headers=headers,
+    )
+    assert approved_tags.status_code == 200, approved_tags.text
+    generated_prompts = client.post(
+        f"/api/v1/projects/{project_id}/prompting/prompt-bundles/generate",
+        headers=headers,
+        json={"chapter_id": chapter_id, "confirmed_data_send": True},
+    )
+    assert generated_prompts.status_code == 201, generated_prompts.text
+    prompt_version_id = generated_prompts.json()["version_id"]
+    approved_prompts = client.post(
+        f"/api/v1/projects/{project_id}/prompting/prompt-bundles/"
+        f"{prompt_version_id}/approve",
+        headers=headers,
+    )
+    assert approved_prompts.status_code == 200, approved_prompts.text
+    return client.get(
+        f"/api/v1/projects/{project_id}/prompting?chapter_id={chapter_id}"
+    ).json()
 
 
 def estimate_plan(

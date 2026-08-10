@@ -24,6 +24,7 @@ interface BibleWorkbenchProps {
   chapterSet: ChapterSet;
   onError: (message: string) => void;
   refreshKey: number;
+  onChanged?: () => void;
 }
 
 export function BibleWorkbench({
@@ -31,6 +32,7 @@ export function BibleWorkbench({
   chapterSet,
   onError,
   refreshKey,
+  onChanged,
 }: BibleWorkbenchProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [storyboard, setStoryboard] = useState<StoryboardVersion | null>(null);
@@ -39,6 +41,7 @@ export function BibleWorkbench({
   const [styleDraft, setStyleDraft] = useState<StyleBibleDocument | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [confirmedDataSend, setConfirmedDataSend] = useState(false);
 
   const characterDirty = Boolean(
     bundle &&
@@ -115,7 +118,9 @@ export function BibleWorkbench({
     if (!storyboard) return;
     await run(async () => {
       applyBundle(await generateBibleBundle(projectId, storyboard.storyboard_version_id));
-      setMessage("已在本机根据当前分镜草拟角色设定和默认黑白风格，没有调用外部模型。");
+      setConfirmedDataSend(false);
+      onChanged?.();
+      setMessage("文本模型已根据当前审批分镜生成角色设定与黑白漫画风格板。");
     });
   }
 
@@ -128,6 +133,7 @@ export function BibleWorkbench({
         characterDraft,
       );
       await reloadBundle();
+      onChanged?.();
       setMessage("角色修改已保存为不可变新版本，旧审批不会沿用。");
     });
   }
@@ -137,6 +143,7 @@ export function BibleWorkbench({
     await run(async () => {
       await reviseStyleBible(projectId, bundle.style_bible.version_id, styleDraft);
       await reloadBundle();
+      onChanged?.();
       setMessage("风格修改已保存为不可变新版本，旧审批不会沿用。");
     });
   }
@@ -147,6 +154,7 @@ export function BibleWorkbench({
     await run(async () => {
       await approveBible(projectId, kind, version.version_id);
       await reloadBundle();
+      onChanged?.();
       setMessage(kind === "character" ? "角色设定已批准。" : "风格板已批准。");
     });
   }
@@ -160,6 +168,7 @@ export function BibleWorkbench({
     return run(async () => {
       await attachBibleReference(projectId, kind, version.version_id, input);
       await reloadBundle();
+      onChanged?.();
       setMessage("参考图已校验并绑定到新设定版本，当前设定需要重新批准。");
     });
   }
@@ -217,12 +226,24 @@ export function BibleWorkbench({
             ))}
           </select>
         </label>
-        <button type="button" disabled={busy || !storyboardReady} onClick={() => void generate()}>
+        <button
+          type="button"
+          disabled={busy || !storyboardReady || !confirmedDataSend}
+          onClick={() => void generate()}
+        >
           {bundle ? "重新草拟设定版本" : "从已审批分镜草拟设定"}
         </button>
       </div>
+      <label className="consent-row">
+        <input
+          type="checkbox"
+          checked={confirmedDataSend}
+          onChange={(event) => setConfirmedDataSend(event.target.checked)}
+        />
+        <span>我确认把当前已审批分镜发送到配置的文本模型以生成角色与风格设定</span>
+      </label>
       {!storyboardReady && (
-        <p className="warning-inline">请先完成当前结构化分镜审批，设定草拟不会调用外部模型。</p>
+        <p className="warning-inline">请先完成当前结构化分镜审批。</p>
       )}
       {message && <p className="success-message" role="status">{message}</p>}
 

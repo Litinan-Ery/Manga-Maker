@@ -9,7 +9,7 @@ def test_migrations_are_idempotent(tmp_path: Path) -> None:
     database.migrate()
     database.migrate()
 
-    assert database.schema_version() == 15
+    assert database.schema_version() == 16
     assert database.check() is True
     with database.reader() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1

@@ -80,7 +80,7 @@ it("edits and rerenders a page locally without starting an image request", async
   fireEvent.click(draft);
   expect(await screen.findByText(/未调用任何图像 API/)).toBeInTheDocument();
 
-  fireEvent.change(screen.getByLabelText("颜色"), { target: { value: "color" } });
+  fireEvent.change(await screen.findByLabelText("颜色"), { target: { value: "color" } });
   fireEvent.change(screen.getByLabelText("分页与条漫模板"), {
     target: { value: "strip-1" },
   });

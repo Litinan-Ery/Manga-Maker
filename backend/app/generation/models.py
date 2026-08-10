@@ -24,7 +24,7 @@ class ReferenceUse(BaseModel):
 class GenerationSpecDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
     spec_id: str = Field(min_length=1, max_length=64)
     project_id: str = Field(min_length=1, max_length=64)
     chapter_id: str = Field(min_length=1, max_length=64)
@@ -36,6 +36,16 @@ class GenerationSpecDocument(BaseModel):
     storyboard_version_id: str = Field(min_length=1, max_length=64)
     character_bible_version_id: str = Field(min_length=1, max_length=64)
     style_bible_version_id: str = Field(min_length=1, max_length=64)
+    character_tag_bundle_version_id: str | None = Field(
+        default=None, min_length=1, max_length=64
+    )
+    prompt_bundle_version_id: str | None = Field(default=None, min_length=1, max_length=64)
+    prompt_package_id: str | None = Field(default=None, min_length=1, max_length=64)
+    text_model_config_revision: int | None = Field(default=None, ge=1)
+    compiled_prompt_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    compiled_negative_prompt_sha256: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
     provider: Literal["novelai"] = "novelai"
     provider_model_id: str = Field(min_length=1, max_length=100)
     mapping_version: str = Field(min_length=1, max_length=100)
@@ -60,12 +70,26 @@ class GenerationSpecDocument(BaseModel):
     prompt_source: Literal[
         "approved_storyboard_and_bibles",
         "approved_storyboard_and_bibles_plus_user_edit",
+        "approved_prompt_package",
+        "approved_prompt_package_plus_user_edit",
     ] = (
         "approved_storyboard_and_bibles"
     )
 
     @model_validator(mode="after")
     def validate_revision_inputs(self) -> GenerationSpecDocument:
+        prompt_package_fields = (
+            self.character_tag_bundle_version_id,
+            self.prompt_bundle_version_id,
+            self.prompt_package_id,
+            self.text_model_config_revision,
+            self.compiled_prompt_sha256,
+            self.compiled_negative_prompt_sha256,
+        )
+        if self.schema_version == "1.2" and not all(
+            value is not None for value in prompt_package_fields
+        ):
+            raise ValueError("schema 1.2 requires frozen PromptPackage provenance")
         parent_fields = (self.parent_asset_version_id, self.parent_image_sha256)
         if self.action == "generate":
             if any(value is not None for value in parent_fields):

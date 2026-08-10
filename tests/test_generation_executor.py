@@ -23,6 +23,7 @@ from tests.test_generation_queue import (
     estimate_plan,
     prepare_generation_inputs,
     prepare_job,
+    prepare_prompting,
     transition,
 )
 
@@ -129,6 +130,13 @@ def test_precise_reference_is_compiled_once_with_hashes_and_padding(
         headers=session_headers,
     )
     assert approved.status_code == 200
+
+    prepare_prompting(
+        client,
+        session_headers,
+        project_id,
+        str(chapter["chapter_id"]),
+    )
 
     estimate = estimate_plan(client, session_headers, project_id, chapter["chapter_id"])
     created = create_job(

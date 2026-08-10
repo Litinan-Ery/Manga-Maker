@@ -324,13 +324,15 @@ class RevisionService:
                     INSERT INTO generation_jobs(
                         job_id, project_id, chapter_id, storyboard_version_id,
                         character_bible_version_id, style_bible_version_id,
+                        character_tag_bundle_version_id, prompt_bundle_version_id,
+                        text_model_config_revision,
                         novelai_config_revision, provider_model_id, mapping_version,
                         contract_sha256, credential_profile_id, timeout_seconds,
                         plan_fingerprint, status, user_action_id, page_count,
                         panel_count, max_calls, max_cost_anlas,
                         estimated_cost_upper_anlas, cost_basis, operation_kind,
                         target_page_id, target_page_version_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 1,
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 1,
                               ?, ?, ?, ?, 'user_confirmed_per_panel_ceiling', ?, ?, ?)
                     """,
                     (
@@ -340,6 +342,9 @@ class RevisionService:
                         plan.base.storyboard_version_id,
                         plan.base.character_bible_version_id,
                         plan.base.style_bible_version_id,
+                        plan.base.character_tag_bundle_version_id,
+                        plan.base.prompt_bundle_version_id,
+                        plan.base.text_model_config_revision,
                         plan.base.novelai_config_revision,
                         plan.provider_model_id,
                         plan.base.mapping_version,

@@ -101,9 +101,12 @@ export interface VaultStatus {
 
 export interface TextModelConfiguration {
   project_id: string;
+  text_model_profile_id: string;
   provider: "openai-compatible";
+  provider_api_url: string;
   base_url: string;
   endpoint_host: string;
+  model_name: string;
   model: string;
   credential_profile_id: string;
   credential_fingerprint: string | null;
@@ -161,6 +164,10 @@ export interface GenerationPlanPanel {
   panel_id: string;
   panel_order: number;
   cost_ceiling_anlas: number;
+  prompt_package_id: string;
+  compiled_prompt: string;
+  compiled_negative_prompt: string;
+  compiled_prompt_sha256: string;
 }
 
 export interface GenerationEstimate {
@@ -169,6 +176,9 @@ export interface GenerationEstimate {
   storyboard_version_id: string;
   character_bible_version_id: string;
   style_bible_version_id: string;
+  character_tag_bundle_version_id: string;
+  prompt_bundle_version_id: string;
+  text_model_config_revision: number;
   novelai_config_revision: number;
   provider_model_id: string;
   mapping_version: string;
@@ -269,6 +279,9 @@ export interface GenerationJob {
   storyboard_version_id: string;
   character_bible_version_id: string;
   style_bible_version_id: string;
+  character_tag_bundle_version_id: string | null;
+  prompt_bundle_version_id: string | null;
+  text_model_config_revision: number | null;
   novelai_config_revision: number;
   provider_model_id: string;
   operation_kind: "chapter_generate" | RevisionOperation;
@@ -456,7 +469,7 @@ export interface ImportPreflight {
   package_sha256: string;
   source_project_id: string;
   source_title: string;
-  schema_version: "1.0" | "1.1" | "1.2" | "1.3";
+  schema_version: "1.0" | "1.1" | "1.2" | "1.3" | "1.4";
   file_count: number;
   expanded_bytes: number;
   record_counts: Record<string, number>;
@@ -867,9 +880,89 @@ export interface BibleBundle {
   };
 }
 
+export interface CharacterTagSetDocument {
+  tag_set_id: string;
+  character_id: string;
+  character_name: string;
+  appearance_version: string;
+  fixed_tags: string[];
+  negative_tags: string[];
+  rationale: string;
+  fixed_tags_sha256: string;
+}
+
+export interface CharacterTagBundleDocument {
+  schema_version: "1.0";
+  storyboard_version_id: string;
+  character_bible_version_id: string;
+  style_bible_version_id: string;
+  tag_sets: CharacterTagSetDocument[];
+}
+
+export interface PromptCharacterBlock {
+  character_id: string;
+  tag_set_id: string;
+  fixed_tags: string[];
+  fixed_tags_sha256: string;
+  variable_tags: string[];
+}
+
+export interface PromptPackageDocument {
+  prompt_package_id: string;
+  panel_id: string;
+  base_visual_tags: string[];
+  character_blocks: PromptCharacterBlock[];
+  style_tags: string[];
+  negative_tags: string[];
+  compiled_prompt: string;
+  compiled_negative_prompt: string;
+  compiled_prompt_sha256: string;
+  compiled_negative_prompt_sha256: string;
+}
+
+export interface PromptBundleDocument {
+  schema_version: "1.0";
+  storyboard_version_id: string;
+  character_bible_version_id: string;
+  style_bible_version_id: string;
+  character_tag_bundle_version_id: string;
+  text_model_profile_id: string;
+  text_model_config_revision: number;
+  text_model_name: string;
+  prompt_template_version: string;
+  provider_model_id: string;
+  packages: PromptPackageDocument[];
+}
+
+export interface PromptArtifactVersion<TDocument> {
+  version_id: string;
+  version: number;
+  document: TDocument;
+  provenance: Record<string, unknown>;
+  approval_status: "draft" | "approved" | "stale";
+  approval_hash: string | null;
+  approved_at: string | null;
+  is_current: boolean;
+  created_at: string;
+}
+
+export interface PromptingWorkflow {
+  project_id: string;
+  chapter_id: string;
+  character_tags: PromptArtifactVersion<CharacterTagBundleDocument> | null;
+  prompt_bundle: PromptArtifactVersion<PromptBundleDocument> | null;
+  generation_readiness: {
+    ready: boolean;
+    blockers: string[];
+    character_tag_bundle_version_id: string | null;
+    prompt_bundle_version_id: string | null;
+    text_model_config_revision: number | null;
+  };
+}
+
 interface ErrorPayload {
   error?: { message?: string; details?: { problem?: string; issues?: string[] } };
-  detail?: string;
+  detail?: unknown;
 }
 
 let localSessionToken: string | null = null;
@@ -1226,11 +1319,9 @@ export function getTextModelConfiguration(projectId: string): Promise<TextModelC
 export function saveTextModelConfiguration(
   projectId: string,
   configuration: {
-    base_url: string;
-    model: string;
-    credential_profile_id: string;
-    timeout_seconds: number;
-    temperature: number;
+    provider_api_url: string;
+    model_name: string;
+    api_key: string;
   },
 ): Promise<TextModelConfiguration> {
   return request<TextModelConfiguration>(
@@ -1852,8 +1943,127 @@ export function generateBibleBundle(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storyboard_version_id: storyboardVersionId }),
+      body: JSON.stringify({
+        storyboard_version_id: storyboardVersionId,
+        confirmed_data_send: true,
+      }),
     },
+    true,
+  );
+}
+
+export function getPromptingWorkflow(
+  projectId: string,
+  chapterId: string,
+): Promise<PromptingWorkflow> {
+  return request<PromptingWorkflow>(
+    `/api/v1/projects/${projectId}/prompting?chapter_id=${encodeURIComponent(chapterId)}`,
+    {},
+    false,
+  );
+}
+
+export function generateCharacterTags(
+  projectId: string,
+  chapterId: string,
+): Promise<PromptArtifactVersion<CharacterTagBundleDocument>> {
+  return promptingGenerate(projectId, "character-tags", chapterId);
+}
+
+export function reviseCharacterTags(
+  projectId: string,
+  versionId: string,
+  document: CharacterTagBundleDocument,
+): Promise<PromptArtifactVersion<CharacterTagBundleDocument>> {
+  return request(
+    `/api/v1/projects/${projectId}/prompting/character-tags/${versionId}/revisions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document }),
+    },
+    true,
+  );
+}
+
+export function approveCharacterTags(
+  projectId: string,
+  versionId: string,
+): Promise<PromptArtifactVersion<CharacterTagBundleDocument>> {
+  return promptingApprove(projectId, "character-tags", versionId);
+}
+
+export function generatePromptBundle(
+  projectId: string,
+  chapterId: string,
+): Promise<PromptArtifactVersion<PromptBundleDocument>> {
+  return promptingGenerate(projectId, "prompt-bundles", chapterId);
+}
+
+export function revisePromptBundle(
+  projectId: string,
+  versionId: string,
+  document: PromptBundleDocument,
+): Promise<PromptArtifactVersion<PromptBundleDocument>> {
+  const draft = {
+    schema_version: "1.0",
+    storyboard_version_id: document.storyboard_version_id,
+    character_tag_bundle_version_id: document.character_tag_bundle_version_id,
+    packages: document.packages.map((item) => ({
+      prompt_package_id: item.prompt_package_id,
+      panel_id: item.panel_id,
+      base_visual_tags: item.base_visual_tags,
+      character_blocks: item.character_blocks.map((block) => ({
+        character_id: block.character_id,
+        tag_set_id: block.tag_set_id,
+        variable_tags: block.variable_tags,
+      })),
+      style_tags: item.style_tags,
+      negative_tags: item.negative_tags,
+    })),
+  };
+  return request(
+    `/api/v1/projects/${projectId}/prompting/prompt-bundles/${versionId}/revisions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: draft }),
+    },
+    true,
+  );
+}
+
+export function approvePromptBundle(
+  projectId: string,
+  versionId: string,
+): Promise<PromptArtifactVersion<PromptBundleDocument>> {
+  return promptingApprove(projectId, "prompt-bundles", versionId);
+}
+
+function promptingGenerate<T>(
+  projectId: string,
+  kind: "character-tags" | "prompt-bundles",
+  chapterId: string,
+): Promise<T> {
+  return request<T>(
+    `/api/v1/projects/${projectId}/prompting/${kind}/generate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_id: chapterId, confirmed_data_send: true }),
+    },
+    true,
+  );
+}
+
+function promptingApprove<T>(
+  projectId: string,
+  kind: "character-tags" | "prompt-bundles",
+  versionId: string,
+): Promise<T> {
+  return request<T>(
+    `/api/v1/projects/${projectId}/prompting/${kind}/${versionId}/approve`,
+    { method: "POST" },
     true,
   );
 }
@@ -1977,13 +2187,35 @@ async function request<T>(path: string, init: RequestInit, needsSession: boolean
         payload.error?.message,
         payload.error?.details?.problem,
         payload.error?.details?.issues?.join(" "),
+        formatErrorDetail(payload.detail),
       ]
         .filter((value): value is string => Boolean(value))
         .join(" ") ||
-        payload.detail ||
         "本地服务暂时无法完成该操作。",
       response.status,
     );
   }
   return (await response.json()) as T;
+}
+
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return "";
+  return detail
+    .map((issue) => {
+      if (typeof issue === "string") return issue;
+      if (!issue || typeof issue !== "object") return "";
+      const record = issue as Record<string, unknown>;
+      const message = typeof record.msg === "string" ? record.msg : "";
+      const location = Array.isArray(record.loc)
+        ? record.loc
+            .filter((part): part is string | number =>
+              typeof part === "string" || typeof part === "number",
+            )
+            .join(".")
+        : "";
+      return [location, message].filter(Boolean).join(": ");
+    })
+    .filter(Boolean)
+    .join(" ");
 }

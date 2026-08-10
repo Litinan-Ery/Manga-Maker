@@ -19,9 +19,15 @@ interface ExportCenterProps {
   projectId: string;
   chapterSet: ChapterSet;
   onError: (message: string) => void;
+  onProjectRestored?: (projectId: string) => void | Promise<void>;
 }
 
-export function ExportCenter({ projectId, chapterSet, onError }: ExportCenterProps) {
+export function ExportCenter({
+  projectId,
+  chapterSet,
+  onError,
+  onProjectRestored,
+}: ExportCenterProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [plan, setPlan] = useState<ExportPreflight | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -109,6 +115,7 @@ export function ExportCenter({ projectId, chapterSet, onError }: ExportCenterPro
       );
       setImportPlan(null);
       setRestoreConfirmed(false);
+      await onProjectRestored?.(result.project_id);
     });
   }
 

@@ -211,6 +211,19 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
             <QueueFact label="成本预留" value={`≤ ${estimate.estimated_cost_upper_anlas} Anlas`} />
           </div>
           <p className="field-note">{estimate.cost_notice}</p>
+          <div className="prompt-preview-list">
+            <h3>冻结前最终 Prompt 预览</h3>
+            {estimate.panels.map((panel) => (
+              <details key={panel.prompt_package_id}>
+                <summary>第 {panel.page_number} 页 · 面板 {panel.panel_order}</summary>
+                <strong>正向</strong>
+                <code>{panel.compiled_prompt}</code>
+                <strong>负向</strong>
+                <code>{panel.compiled_negative_prompt}</code>
+                <small>SHA-256 {panel.compiled_prompt_sha256}</small>
+              </details>
+            ))}
+          </div>
           <div className="settings-form">
             <label>
               <span>最大调用次数</span>

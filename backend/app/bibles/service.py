@@ -14,12 +14,13 @@ from uuid import UUID
 from PIL import Image, UnidentifiedImageError
 
 from ..adaptation.models import StoryboardDocument
-from ..adaptation.service import canonical_json
+from ..adaptation.service import AdaptationService, canonical_json
 from ..database import Database
 from ..errors import ApplicationError
 from ..ids import uuid7
 from ..projects import ProjectService
 from .models import (
+    BibleDraftRequest,
     CharacterBibleDocument,
     CharacterProfile,
     StyleBibleDocument,
@@ -47,14 +48,29 @@ class ReferenceImageMetadata:
 
 
 class BibleService:
-    def __init__(self, database: Database, projects: ProjectService) -> None:
+    def __init__(
+        self, database: Database, projects: ProjectService, adaptation: AdaptationService
+    ) -> None:
         self.database = database
         self.projects = projects
+        self.adaptation = adaptation
 
-    def generate_bundle(self, project_id: str, storyboard_version_id: str) -> dict[str, Any]:
+    async def generate_bundle(
+        self,
+        project_id: str,
+        storyboard_version_id: str,
+        *,
+        confirmed_data_send: bool,
+    ) -> dict[str, Any]:
         storyboard_row, storyboard = self._require_storyboard_ready(
             project_id, storyboard_version_id
         )
+        if not confirmed_data_send:
+            raise ApplicationError(
+                code="TEXT_MODEL_DATA_SEND_CONFIRMATION_REQUIRED",
+                message="请确认将已审批分镜发送到当前文本模型后再生成设定。",
+                status_code=422,
+            )
         chapter_id = str(storyboard_row["chapter_id"])
         character_names: list[str] = []
         seen_names: set[str] = set()
@@ -71,53 +87,57 @@ class BibleService:
                 connection, "character", project_id, chapter_id
             )
             style_bible_id = self._stable_bible_id(connection, "style", project_id, chapter_id)
-            character_document = CharacterBibleDocument(
-                schema_version="1.0",
-                character_bible_id=UUID(character_bible_id),
-                storyboard_version_id=UUID(storyboard_version_id),
-                characters=[self._draft_character(name) for name in character_names],
-                notes="这是根据已审批分镜在本机确定性草拟的角色清单，请补全后再审批。",
-            )
-            style_document = StyleBibleDocument(
-                schema_version="1.0",
-                style_bible_id=UUID(style_bible_id),
-                storyboard_version_id=UUID(storyboard_version_id),
-                summary="黑白分页漫画, 简体中文横排文字由本地排版, 不进入画面生成。",
-                line_art="清晰稳定的黑色墨线，主体轮廓略粗，内部细节线更轻。",
-                screentone="使用克制的灰阶网点区分材质与景深，避免大面积脏灰。",
-                lighting="高对比黑白光影，暗部保持可读轮廓。",
-                background_density="关键建立镜头使用完整背景，近景和情绪格适度留白。",
-                whitespace="对白与旁白区域预留干净负空间，但图像内不生成气泡或文字。",
-                camera_language="以中景建立动作关系，关键情绪使用近景，转折处使用明确构图重心。",
-                positive_prompt_fragment=(
-                    "black and white manga, crisp ink line art, controlled screentone, "
-                    "high contrast lighting, readable composition"
-                ),
-                negative_prompt_fragment=(
-                    "color, text, letters, speech bubble, caption, page number, watermark, logo"
-                ),
-                prohibited_elements=[
-                    "可读文字",
-                    "对白气泡",
-                    "页码",
-                    "水印",
-                    "随机标识",
-                    "彩色画面",
-                ],
-            )
+        provider, configuration, config_revision = self.adaptation.configured_provider(project_id)
+        request = BibleDraftRequest(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            storyboard=storyboard,
+            storyboard_version_id=UUID(storyboard_version_id),
+            character_bible_id=UUID(character_bible_id),
+            style_bible_id=UUID(style_bible_id),
+        )
+        try:
+            candidate = await provider.generate_bible_bundle(request)
+        except Exception as exc:
+            raise self.adaptation.provider_error(exc) from exc
+        self.adaptation.require_configuration_revision(project_id, config_revision)
+        character_document = candidate.document.character_bible
+        style_document = candidate.document.style_bible
+        self._validate_model_bundle(
+            storyboard_version_id,
+            character_bible_id,
+            style_bible_id,
+            character_document,
+            style_document,
+            expected_character_names=character_names,
+        )
+        provenance = {
+            "change_type": "model_generation",
+            "provider": candidate.provider,
+            "model": candidate.model,
+            "endpoint_host": candidate.endpoint_host,
+            "prompt_template_version": candidate.prompt_template_version,
+            "response_sha256": candidate.response_sha256,
+            "input_tokens": candidate.input_tokens,
+            "output_tokens": candidate.output_tokens,
+            "duration_ms": candidate.duration_ms,
+            "repair_attempts": candidate.repair_attempts,
+            "config_revision": config_revision,
+        }
+        with self.database.writer() as connection:
             character_version_id = self._insert_character_version(
                 connection,
                 character_bible_id,
                 storyboard_version_id,
                 character_document,
-                {"change_type": "local_storyboard_draft"},
+                provenance,
             )
             style_version_id = self._insert_style_version(
                 connection,
                 style_bible_id,
                 storyboard_version_id,
                 style_document,
-                {"change_type": "local_default_draft"},
+                provenance,
             )
             self._audit(
                 connection,
@@ -128,10 +148,43 @@ class BibleService:
                     "character_bible_version_id": character_version_id,
                     "style_bible_version_id": style_version_id,
                     "character_count": len(character_names),
-                    "external_model_called": False,
+                    "external_model_called": True,
+                    "text_model_config_revision": config_revision,
+                    "text_model_name": configuration.model,
                 },
             )
         return self.get_bundle(project_id, chapter_id)
+
+    @staticmethod
+    def _validate_model_bundle(
+        storyboard_version_id: str,
+        character_bible_id: str,
+        style_bible_id: str,
+        character_document: CharacterBibleDocument,
+        style_document: StyleBibleDocument,
+        *,
+        expected_character_names: list[str],
+    ) -> None:
+        if (
+            str(character_document.character_bible_id) != character_bible_id
+            or str(style_document.style_bible_id) != style_bible_id
+            or str(character_document.storyboard_version_id) != storyboard_version_id
+            or str(style_document.storyboard_version_id) != storyboard_version_id
+        ):
+            raise ApplicationError(
+                code="INVALID_MODEL_BIBLE_IDS",
+                message="文本模型返回的设定版本标识与请求不一致。",
+                status_code=422,
+            )
+        expected = {name.casefold() for name in expected_character_names}
+        actual = {character.name.casefold() for character in character_document.characters}
+        if actual != expected:
+            raise ApplicationError(
+                code="INVALID_MODEL_BIBLE_CHARACTERS",
+                message="文本模型返回的角色集合与已审批分镜不一致。",
+                status_code=422,
+                details={"expected": sorted(expected), "actual": sorted(actual)},
+            )
 
     def get_bundle(self, project_id: str, chapter_id: str) -> dict[str, Any]:
         character_row = self._current_bible_row(project_id, chapter_id, "character")

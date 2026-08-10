@@ -44,8 +44,7 @@ export function StoryboardWorkbench({
   const [configuration, setConfiguration] = useState<TextModelConfiguration | null>(null);
   const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
   const [model, setModel] = useState("");
-  const [profileId, setProfileId] = useState("");
-  const [temperature, setTemperature] = useState(0.2);
+  const [apiKey, setApiKey] = useState("");
   const [pageBudget, setPageBudget] = useState(8);
   const [preferences, setPreferences] = useState("");
   const [confirmedDataSend, setConfirmedDataSend] = useState(false);
@@ -64,7 +63,6 @@ export function StoryboardWorkbench({
     () => new Map(beatSet?.beats.map((beat) => [beat.beat_id, beat.source_excerpt]) ?? []),
     [beatSet],
   );
-
   useEffect(() => {
     const firstChapter = chapterSet.chapters[0]?.chapter_id ?? "";
     setChapterId(firstChapter);
@@ -74,21 +72,14 @@ export function StoryboardWorkbench({
   }, [chapterSet]);
 
   useEffect(() => {
-    if (profileId || !vaultStatus?.profiles[0]) return;
-    setProfileId(vaultStatus.profiles[0].profile_id);
-  }, [profileId, vaultStatus]);
-
-  useEffect(() => {
     let active = true;
     setConfiguration(null);
     getTextModelConfiguration(projectId)
       .then((result) => {
         if (!active) return;
         setConfiguration(result);
-        setBaseUrl(result.base_url);
-        setModel(result.model);
-        setProfileId(result.credential_profile_id);
-        setTemperature(result.temperature);
+        setBaseUrl(result.provider_api_url);
+        setModel(result.model_name);
       })
       .catch((error: unknown) => {
         if (error instanceof ApiError && error.status === 404) return;
@@ -131,19 +122,18 @@ export function StoryboardWorkbench({
   }, [chapterId, onError, projectId, refreshKey]);
 
   async function saveConfiguration() {
-    if (!profileId) {
-      onError("请先在本地凭证库保存一个文本模型凭证。");
+    if (!apiKey) {
+      onError("请输入文本模型密钥。密钥保存后不会回显。");
       return;
     }
     await run(async () => {
       const saved = await saveTextModelConfiguration(projectId, {
-        base_url: baseUrl,
-        model,
-        credential_profile_id: profileId,
-        timeout_seconds: 60,
-        temperature,
+        provider_api_url: baseUrl,
+        model_name: model,
+        api_key: apiKey,
       });
       setConfiguration(saved);
+      setApiKey("");
       setConnectionMessage("配置已保存在本机，尚未发出网络请求。");
     });
   }
@@ -322,7 +312,7 @@ export function StoryboardWorkbench({
         <h3>文本模型</h3>
         <div className="model-settings-grid">
           <label>
-            <span>OpenAI-compatible 地址</span>
+            <span>服务商 API 链接</span>
             <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
           </label>
           <label>
@@ -333,31 +323,23 @@ export function StoryboardWorkbench({
               placeholder="例如：gpt-4.1-mini"
             />
           </label>
-          <label>
-            <span>本地凭证</span>
-            <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
-              <option value="">请选择</option>
-              {vaultStatus?.profiles.map((profile) => (
-                <option key={profile.profile_id} value={profile.profile_id}>
-                  {profile.label} · {profile.fingerprint}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>创作温度 {temperature.toFixed(1)}</span>
+          <label className="secret-field">
+            <span>密钥</span>
             <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={temperature}
-              onChange={(event) => setTemperature(Number(event.target.value))}
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              placeholder={configuration ? "重新输入以更新配置" : "仅加密保存在本机"}
+              onChange={(event) => setApiKey(event.target.value)}
             />
           </label>
         </div>
         <div className="button-row">
-          <button type="button" disabled={busy || !model || !vaultStatus?.unlocked} onClick={() => void saveConfiguration()}>
+          <button
+            type="button"
+            disabled={busy || !baseUrl || !model || !apiKey || !vaultStatus?.unlocked}
+            onClick={() => void saveConfiguration()}
+          >
             保存模型配置
           </button>
           <button
@@ -371,7 +353,7 @@ export function StoryboardWorkbench({
         </div>
         {configuration && (
           <p className="configuration-summary">
-            当前：{configuration.endpoint_host} · {configuration.model} · 配置版本 {configuration.revision}
+            当前：{configuration.endpoint_host} · {configuration.model_name} · 密钥 {configuration.credential_fingerprint ?? "已保存"} · 配置版本 {configuration.revision}
           </p>
         )}
       </div>

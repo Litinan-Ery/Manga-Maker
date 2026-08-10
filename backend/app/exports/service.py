@@ -24,7 +24,7 @@ from ..projects import PROJECT_DIRECTORIES, ProjectService
 from ..safety import SecretScanner
 
 EXPORT_SCHEMA_VERSION = "1.1"
-PACKAGE_SCHEMA_VERSION = "1.3"
+PACKAGE_SCHEMA_VERSION = "1.4"
 MAX_PACKAGE_COMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_PACKAGE_FILES = 20_000
 MAX_PACKAGE_FILE_BYTES = 512 * 1024 * 1024
@@ -110,6 +110,40 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
         """SELECT a.* FROM style_bible_approvals a JOIN style_bible_versions v
            ON v.style_bible_version_id = a.style_bible_version_id JOIN style_bibles b
            ON b.style_bible_id = v.style_bible_id WHERE b.project_id = ?""",
+    ),
+    (
+        "character_tag_bundles",
+        "SELECT * FROM character_tag_bundles WHERE project_id = ?",
+    ),
+    (
+        "character_tag_bundle_versions",
+        """SELECT v.* FROM character_tag_bundle_versions v
+           JOIN character_tag_bundles b
+             ON b.character_tag_bundle_id = v.character_tag_bundle_id
+           WHERE b.project_id = ?""",
+    ),
+    (
+        "character_tag_bundle_approvals",
+        """SELECT a.* FROM character_tag_bundle_approvals a
+           JOIN character_tag_bundle_versions v
+             ON v.character_tag_bundle_version_id = a.character_tag_bundle_version_id
+           JOIN character_tag_bundles b
+             ON b.character_tag_bundle_id = v.character_tag_bundle_id
+           WHERE b.project_id = ?""",
+    ),
+    ("prompt_bundles", "SELECT * FROM prompt_bundles WHERE project_id = ?"),
+    (
+        "prompt_bundle_versions",
+        """SELECT v.* FROM prompt_bundle_versions v JOIN prompt_bundles b
+           ON b.prompt_bundle_id = v.prompt_bundle_id WHERE b.project_id = ?""",
+    ),
+    (
+        "prompt_bundle_approvals",
+        """SELECT a.* FROM prompt_bundle_approvals a
+           JOIN prompt_bundle_versions v
+             ON v.prompt_bundle_version_id = a.prompt_bundle_version_id
+           JOIN prompt_bundles b ON b.prompt_bundle_id = v.prompt_bundle_id
+           WHERE b.project_id = ?""",
     ),
     ("continuity_ledgers", "SELECT * FROM continuity_ledgers WHERE project_id = ?"),
     (
@@ -764,7 +798,7 @@ class ExportService:
         ]
         manifest = {
             "schema_version": PACKAGE_SCHEMA_VERSION,
-            "minimum_database_schema": 15,
+            "minimum_database_schema": 16,
             "source_project_id": plan["project_id"],
             "source_title": plan["project_title"],
             "export_revision_id": export_revision_id,

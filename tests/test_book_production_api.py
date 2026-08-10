@@ -10,7 +10,7 @@ from backend.app.config import Settings
 from backend.app.main import create_app
 from backend.app.novelai.mock import MockNovelAIClient
 from tests.test_continuity_api import prepare_two_approved_chapters
-from tests.test_generation_queue import transition
+from tests.test_generation_queue import prepare_prompting, transition
 
 
 def test_whole_book_budget_requires_per_chapter_approval_and_runs_one_job_at_a_time(
@@ -219,6 +219,13 @@ def prepare_book_project(
         headers=headers,
     )
     assert tested.status_code == 200
+    for chapter in chapters:
+        prepare_prompting(
+            client,
+            headers,
+            project_id,
+            str(chapter["chapter_id"]),
+        )
     return project_id, chapters
 
 

@@ -74,62 +74,110 @@ class AdaptationService:
         *,
         base_url: str,
         model: str,
-        credential_profile_id: str,
-        timeout_seconds: float,
-        temperature: float,
+        api_key: str | None = None,
+        credential_profile_id: str | None = None,
+        timeout_seconds: float = 60,
+        temperature: float = 0.2,
     ) -> dict[str, Any]:
+        self._require_project(project_id)
+        profile_id = (
+            f"text-model-{project_id}"
+            if api_key is not None
+            else (credential_profile_id or "")
+        )
         configuration = self._validated_configuration(
             base_url=base_url,
             model=model,
-            credential_profile_id=credential_profile_id,
+            credential_profile_id=profile_id,
             timeout_seconds=timeout_seconds,
             temperature=temperature,
         )
-        self._require_project(project_id)
-        profile = self._require_credential_profile(credential_profile_id)
-        with self.database.writer() as connection:
-            existing = connection.execute(
-                "SELECT revision FROM text_model_configs WHERE project_id = ?", (project_id,)
-            ).fetchone()
-            revision = int(existing["revision"]) + 1 if existing is not None else 1
-            connection.execute(
-                """
-                INSERT INTO text_model_configs(
-                    project_id, provider, base_url, model, credential_profile_id,
-                    timeout_seconds, temperature, revision
-                ) VALUES (?, 'openai-compatible', ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_id) DO UPDATE SET
-                    provider = excluded.provider,
-                    base_url = excluded.base_url,
-                    model = excluded.model,
-                    credential_profile_id = excluded.credential_profile_id,
-                    timeout_seconds = excluded.timeout_seconds,
-                    temperature = excluded.temperature,
-                    revision = excluded.revision,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
+        previous_secret: str | None = None
+        created_profile = False
+        if api_key is not None:
+            try:
+                try:
+                    previous_secret = self.vault.get_secret(profile_id)
+                except KeyError:
+                    created_profile = True
+                profile = self.vault.upsert_secret(
+                    profile_id,
+                    provider="openai-compatible",
+                    label="文本模型",
+                    secret=api_key,
+                )
+            except VaultLockedError as exc:
+                raise ApplicationError(
+                    code="VAULT_LOCKED",
+                    message="请先解锁本地凭证库，再保存文本模型密钥。",
+                    status_code=423,
+                ) from exc
+            except ValueError as exc:
+                raise ApplicationError(
+                    code="INVALID_TEXT_MODEL_CREDENTIAL",
+                    message="文本模型密钥不能为空。",
+                    status_code=422,
+                ) from exc
+        else:
+            profile = self._require_credential_profile(profile_id)
+
+        try:
+            with self.database.writer() as connection:
+                existing = connection.execute(
+                    "SELECT revision FROM text_model_configs WHERE project_id = ?", (project_id,)
+                ).fetchone()
+                revision = int(existing["revision"]) + 1 if existing is not None else 1
+                connection.execute(
+                    """
+                    INSERT INTO text_model_configs(
+                        project_id, provider, base_url, model, credential_profile_id,
+                        timeout_seconds, temperature, revision
+                    ) VALUES (?, 'openai-compatible', ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id) DO UPDATE SET
+                        provider = excluded.provider,
+                        base_url = excluded.base_url,
+                        model = excluded.model,
+                        credential_profile_id = excluded.credential_profile_id,
+                        timeout_seconds = excluded.timeout_seconds,
+                        temperature = excluded.temperature,
+                        revision = excluded.revision,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        project_id,
+                        configuration.base_url,
+                        configuration.model,
+                        configuration.credential_profile_id,
+                        configuration.timeout_seconds,
+                        configuration.temperature,
+                        revision,
+                    ),
+                )
+                self._audit(
+                    connection,
                     project_id,
-                    configuration.base_url,
-                    configuration.model,
-                    configuration.credential_profile_id,
-                    configuration.timeout_seconds,
-                    configuration.temperature,
-                    revision,
-                ),
-            )
-            self._audit(
-                connection,
-                project_id,
-                "text_model.configuration_saved",
-                {
-                    "provider": "openai-compatible",
-                    "endpoint_host": urlparse(configuration.base_url).hostname,
-                    "model": configuration.model,
-                    "credential_profile_id": configuration.credential_profile_id,
-                    "revision": revision,
-                },
-            )
+                    "text_model.configuration_saved",
+                    {
+                        "provider": "openai-compatible",
+                        "endpoint_host": urlparse(configuration.base_url).hostname,
+                        "model": configuration.model,
+                        "credential_profile_id": configuration.credential_profile_id,
+                        "revision": revision,
+                        "secret_persisted_locally": True,
+                    },
+                )
+        except Exception:
+            if api_key is not None:
+                if previous_secret is not None:
+                    self.vault.upsert_secret(
+                        profile_id,
+                        provider="openai-compatible",
+                        label="文本模型",
+                        secret=previous_secret,
+                    )
+                elif created_profile:
+                    self.vault.delete_secret(profile_id)
+            raise
         return self._configuration_payload(
             project_id,
             configuration,
@@ -197,6 +245,22 @@ class AdaptationService:
             "config_revision": revision,
         }
 
+    def configured_provider(
+        self, project_id: str
+    ) -> tuple[TextModelProvider, TextModelConfiguration, int]:
+        configuration, revision = self._load_configuration(project_id)
+        return (
+            self.provider_factory(configuration, self.vault.get_secret),
+            configuration,
+            revision,
+        )
+
+    def require_configuration_revision(self, project_id: str, expected_revision: int) -> None:
+        self._require_configuration_revision(project_id, expected_revision)
+
+    def provider_error(self, error: Exception) -> ApplicationError:
+        return self._provider_error(error)
+
     async def generate_storyboard(
         self,
         project_id: str,
@@ -217,6 +281,8 @@ class AdaptationService:
             candidate = await provider.generate_storyboard(source.request)
         except Exception as exc:
             raise self._provider_error(exc) from exc
+
+        self._require_configuration_revision(project_id, config_revision)
 
         refreshed_source = self._source_context(
             project_id,
@@ -663,7 +729,25 @@ class AdaptationService:
                 message="没有找到所选文本模型凭证。",
                 status_code=422,
             )
+        if matching["provider"] != "openai-compatible":
+            raise ApplicationError(
+                code="CREDENTIAL_PROVIDER_MISMATCH",
+                message="所选密钥不是文本模型凭证。",
+                status_code=422,
+            )
         return matching
+
+    def _require_configuration_revision(self, project_id: str, expected_revision: int) -> None:
+        with self.database.reader() as connection:
+            row = connection.execute(
+                "SELECT revision FROM text_model_configs WHERE project_id = ?", (project_id,)
+            ).fetchone()
+        if row is None or int(row["revision"]) != expected_revision:
+            raise ApplicationError(
+                code="TEXT_MODEL_CONFIGURATION_CHANGED",
+                message="文本模型配置在任务执行期间发生变化，结果未写入。请重新生成。",
+                status_code=409,
+            )
 
     @staticmethod
     def _configuration_payload(
@@ -676,9 +760,12 @@ class AdaptationService:
     ) -> dict[str, Any]:
         return {
             "project_id": project_id,
+            "text_model_profile_id": project_id,
             "provider": "openai-compatible",
+            "provider_api_url": configuration.base_url,
             "base_url": configuration.base_url,
             "endpoint_host": urlparse(configuration.base_url).hostname,
+            "model_name": configuration.model,
             "model": configuration.model,
             "credential_profile_id": configuration.credential_profile_id,
             "credential_fingerprint": credential_fingerprint,

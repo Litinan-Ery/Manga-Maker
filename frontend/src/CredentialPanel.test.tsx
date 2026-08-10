@@ -93,6 +93,44 @@ it("saves a NovelAI token under the dedicated local provider type", async () => 
   expect(document.body.textContent).not.toContain("unit-local-secret");
 });
 
+it("renders structured FastAPI validation errors as readable text", async () => {
+  window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
+  consumeLocalSession();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve(
+        jsonResponse(
+          {
+            detail: [
+              {
+                type: "string_too_short",
+                loc: ["body", "master_password"],
+                msg: "String should have at least 10 characters",
+              },
+            ],
+          },
+          422,
+        ),
+      ),
+    ),
+  );
+
+  render(<VaultHarness />);
+  fireEvent.change(screen.getByLabelText("设置主密码（至少 10 个字符）"), {
+    target: { value: "long-enough-password" },
+  });
+  fireEvent.change(screen.getByLabelText("再次输入主密码"), {
+    target: { value: "long-enough-password" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "创建本地凭证库" }));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("body.master_password");
+  expect(alert).toHaveTextContent("String should have at least 10 characters");
+  expect(alert).not.toHaveTextContent("[object Object]");
+});
+
 function VaultHarness() {
   const [status, setStatus] = useState<VaultStatus>({
     configured: false,

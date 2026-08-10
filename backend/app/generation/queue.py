@@ -12,6 +12,7 @@ from ..database import Database
 from ..errors import ApplicationError
 from ..ids import uuid7
 from ..novelai.contracts import CONTRACT_SHA256, MAPPING_VERSION
+from ..prompting.service import PromptingService
 
 JobStatus = Literal[
     "draft",
@@ -34,6 +35,10 @@ class PlannedPanel:
     panel_id: str
     panel_order: int
     cost_ceiling_anlas: int
+    prompt_package_id: str
+    compiled_prompt: str
+    compiled_negative_prompt: str
+    compiled_prompt_sha256: str
 
     def payload(self) -> dict[str, int | str]:
         return {
@@ -43,6 +48,10 @@ class PlannedPanel:
             "panel_id": self.panel_id,
             "panel_order": self.panel_order,
             "cost_ceiling_anlas": self.cost_ceiling_anlas,
+            "prompt_package_id": self.prompt_package_id,
+            "compiled_prompt": self.compiled_prompt,
+            "compiled_negative_prompt": self.compiled_negative_prompt,
+            "compiled_prompt_sha256": self.compiled_prompt_sha256,
         }
 
 
@@ -53,6 +62,9 @@ class GenerationPlan:
     storyboard_version_id: str
     character_bible_version_id: str
     style_bible_version_id: str
+    character_tag_bundle_version_id: str
+    prompt_bundle_version_id: str
+    text_model_config_revision: int
     novelai_config_revision: int
     provider_model_id: str
     inpaint_model_id: str
@@ -80,6 +92,9 @@ class GenerationPlan:
             "storyboard_version_id": self.storyboard_version_id,
             "character_bible_version_id": self.character_bible_version_id,
             "style_bible_version_id": self.style_bible_version_id,
+            "character_tag_bundle_version_id": self.character_tag_bundle_version_id,
+            "prompt_bundle_version_id": self.prompt_bundle_version_id,
+            "text_model_config_revision": self.text_model_config_revision,
             "novelai_config_revision": self.novelai_config_revision,
             "provider_model_id": self.provider_model_id,
             "inpaint_model_id": self.inpaint_model_id,
@@ -104,9 +119,12 @@ class GenerationPlan:
 
 
 class GenerationQueueService:
-    def __init__(self, database: Database, bibles: BibleService) -> None:
+    def __init__(
+        self, database: Database, bibles: BibleService, prompting: PromptingService
+    ) -> None:
         self.database = database
         self.bibles = bibles
+        self.prompting = prompting
 
     def estimate(
         self,
@@ -191,12 +209,17 @@ class GenerationQueueService:
                     INSERT INTO generation_jobs(
                         job_id, project_id, chapter_id, storyboard_version_id,
                         character_bible_version_id, style_bible_version_id,
+                        character_tag_bundle_version_id, prompt_bundle_version_id,
+                        text_model_config_revision,
                         novelai_config_revision, provider_model_id, mapping_version,
                         contract_sha256, credential_profile_id, timeout_seconds,
                         plan_fingerprint, status, user_action_id, page_count,
                         panel_count, max_calls, max_cost_anlas,
                         estimated_cost_upper_anlas, cost_basis
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        'queued', ?, ?, ?, ?, ?, ?, ?
+                    )
                     """,
                     (
                         job_id,
@@ -205,6 +228,9 @@ class GenerationQueueService:
                         plan.storyboard_version_id,
                         plan.character_bible_version_id,
                         plan.style_bible_version_id,
+                        plan.character_tag_bundle_version_id,
+                        plan.prompt_bundle_version_id,
+                        plan.text_model_config_revision,
                         plan.novelai_config_revision,
                         plan.provider_model_id,
                         plan.mapping_version,
@@ -295,6 +321,9 @@ class GenerationQueueService:
             "storyboard_version_id": str(row["storyboard_version_id"]),
             "character_bible_version_id": str(row["character_bible_version_id"]),
             "style_bible_version_id": str(row["style_bible_version_id"]),
+            "character_tag_bundle_version_id": row["character_tag_bundle_version_id"],
+            "prompt_bundle_version_id": row["prompt_bundle_version_id"],
+            "text_model_config_revision": row["text_model_config_revision"],
             "novelai_config_revision": int(row["novelai_config_revision"]),
             "provider_model_id": str(row["provider_model_id"]),
             "operation_kind": str(row["operation_kind"]),
@@ -807,6 +836,25 @@ class GenerationQueueService:
                 "角色设定与风格板没有绑定同一个分镜版本。",
                 409,
             )
+        prompt_workflow = self.prompting.get_workflow(project_id, chapter_id)
+        prompt_readiness = cast(dict[str, Any], prompt_workflow["generation_readiness"])
+        if not bool(prompt_readiness["ready"]):
+            raise ApplicationError(
+                "GENERATION_PROMPTS_NOT_APPROVED",
+                "角色固定 tags 和逐格 PromptPackage 尚未全部批准。",
+                409,
+                {"blockers": prompt_readiness["blockers"]},
+            )
+        character_tag_version_id = str(
+            prompt_readiness["character_tag_bundle_version_id"]
+        )
+        prompt_bundle_version_id = str(prompt_readiness["prompt_bundle_version_id"])
+        text_model_config_revision = int(prompt_readiness["text_model_config_revision"])
+        prompt_document = cast(dict[str, Any], prompt_workflow["prompt_bundle"])["document"]
+        prompt_packages = {
+            str(item["panel_id"]): item
+            for item in cast(list[dict[str, Any]], prompt_document["packages"])
+        }
         with self.database.reader() as connection:
             storyboard_row = connection.execute(
                 """
@@ -862,6 +910,13 @@ class GenerationQueueService:
         for page in document.pages:
             for panel in page.panels:
                 ordinal += 1
+                package = prompt_packages.get(str(panel.panel_id))
+                if package is None:
+                    raise ApplicationError(
+                        "GENERATION_PROMPT_PACKAGE_NOT_FOUND",
+                        "已审批 PromptPackage 未覆盖全部分镜格。",
+                        409,
+                    )
                 panels.append(
                     PlannedPanel(
                         ordinal=ordinal,
@@ -870,6 +925,10 @@ class GenerationQueueService:
                         panel_id=str(panel.panel_id),
                         panel_order=panel.order,
                         cost_ceiling_anlas=per_panel_cost_ceiling_anlas,
+                        prompt_package_id=str(package["prompt_package_id"]),
+                        compiled_prompt=str(package["compiled_prompt"]),
+                        compiled_negative_prompt=str(package["compiled_negative_prompt"]),
+                        compiled_prompt_sha256=str(package["compiled_prompt_sha256"]),
                     )
                 )
         if not panels:
@@ -882,6 +941,9 @@ class GenerationQueueService:
             "storyboard_version_id": storyboard_version_id,
             "character_bible_version_id": character_version_id,
             "style_bible_version_id": style_version_id,
+            "character_tag_bundle_version_id": character_tag_version_id,
+            "prompt_bundle_version_id": prompt_bundle_version_id,
+            "text_model_config_revision": text_model_config_revision,
             "novelai_config_revision": int(novelai_row["revision"]),
             "provider_model_id": str(novelai_row["provider_model_id"]),
             "inpaint_model_id": str(novelai_row["inpaint_model_id"]),
@@ -906,6 +968,9 @@ class GenerationQueueService:
             storyboard_version_id=storyboard_version_id,
             character_bible_version_id=character_version_id,
             style_bible_version_id=style_version_id,
+            character_tag_bundle_version_id=character_tag_version_id,
+            prompt_bundle_version_id=prompt_bundle_version_id,
+            text_model_config_revision=text_model_config_revision,
             novelai_config_revision=int(novelai_row["revision"]),
             provider_model_id=str(novelai_row["provider_model_id"]),
             inpaint_model_id=str(novelai_row["inpaint_model_id"]),

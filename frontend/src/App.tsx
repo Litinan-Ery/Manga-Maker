@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
@@ -24,6 +24,7 @@ import { GenerationConsole } from "./GenerationConsole";
 import { ExportCenter } from "./ExportCenter";
 import { NovelAISettings } from "./NovelAISettings";
 import { PageComposer } from "./PageComposer";
+import { PromptWorkbench } from "./PromptWorkbench";
 import { RecoveryStatus } from "./RecoveryStatus";
 import { StoryBeatPanel } from "./StoryBeatPanel";
 import { StoryboardWorkbench } from "./StoryboardWorkbench";
@@ -49,10 +50,26 @@ export function App() {
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [adaptationRefreshKey, setAdaptationRefreshKey] = useState(0);
   const [bibleRefreshKey, setBibleRefreshKey] = useState(0);
+  const [promptRefreshKey, setPromptRefreshKey] = useState(0);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
     [projects, selectedProjectId],
+  );
+
+  const refreshProjects = useCallback(
+    async (preferredProjectId?: string, signal?: AbortSignal) => {
+      const items = await listProjects(signal);
+      setProjects(items);
+      setSelectedProjectId((current) => {
+        if (preferredProjectId && items.some((item) => item.project_id === preferredProjectId)) {
+          return preferredProjectId;
+        }
+        if (items.some((item) => item.project_id === current)) return current;
+        return items[0]?.project_id ?? "";
+      });
+    },
+    [],
   );
 
   useEffect(() => {
@@ -69,18 +86,14 @@ export function App() {
   useEffect(() => {
     if (!hasSession) return;
     const controller = new AbortController();
-    listProjects(controller.signal)
-      .then((items) => {
-        setProjects(items);
-        if (items.length > 0) setSelectedProjectId(items[0].project_id);
-      })
+    refreshProjects(undefined, controller.signal)
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setActionError(errorMessage(error));
         }
       });
     return () => controller.abort();
-  }, [hasSession]);
+  }, [hasSession, refreshProjects]);
 
   useEffect(() => {
     if (!hasSession) return;
@@ -334,6 +347,7 @@ export function App() {
                 chapterSet={chapterSet}
                 onError={setActionError}
                 refreshKey={bibleRefreshKey}
+                onChanged={() => setPromptRefreshKey((current) => current + 1)}
               />
               <ContinuityWorkbench
                 projectId={selectedProjectId}
@@ -343,6 +357,12 @@ export function App() {
               <NovelAISettings
                 projectId={selectedProjectId}
                 vaultStatus={vaultStatus}
+                onError={setActionError}
+              />
+              <PromptWorkbench
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                refreshKey={promptRefreshKey}
                 onError={setActionError}
               />
               <WholeBookPlanner
@@ -363,6 +383,7 @@ export function App() {
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}
                 onError={setActionError}
+                onProjectRestored={(projectId) => refreshProjects(projectId)}
               />
             </section>
           )}

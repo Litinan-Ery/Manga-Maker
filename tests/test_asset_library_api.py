@@ -118,7 +118,7 @@ def test_reusable_asset_library_versions_metadata_and_archives_without_generatio
     )
     with zipfile.ZipFile(io.BytesIO(package)) as archive:
         records = json.loads(archive.read("records.json"))
-    assert records["schema_version"] == "1.3"
+    assert records["schema_version"] == "1.4"
     assert len(records["tables"]["asset_library_items"]) == 1
 
     dry_run = client.post(

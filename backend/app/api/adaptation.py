@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, SecretStr, model_validator
 
 from ..adaptation.models import StoryboardDocument
 from ..adaptation.service import AdaptationService
@@ -14,11 +14,26 @@ Headers = Annotated[tuple[str | None, str | None], Depends(session_headers)]
 
 
 class TextModelConfigurationRequest(BaseModel):
-    base_url: str = Field(min_length=1, max_length=2048)
-    model: str = Field(min_length=1, max_length=200)
-    credential_profile_id: str = Field(min_length=1, max_length=64)
+    provider_api_url: str = Field(
+        min_length=1,
+        max_length=2048,
+        validation_alias=AliasChoices("provider_api_url", "base_url"),
+    )
+    model_name: str = Field(
+        min_length=1,
+        max_length=200,
+        validation_alias=AliasChoices("model_name", "model"),
+    )
+    api_key: SecretStr | None = Field(default=None, min_length=1, max_length=8192)
+    credential_profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     timeout_seconds: float = Field(default=60, ge=1, le=180)
     temperature: float = Field(default=0.2, ge=0, le=2)
+
+    @model_validator(mode="after")
+    def require_secret_input(self) -> TextModelConfigurationRequest:
+        if self.api_key is None and self.credential_profile_id is None:
+            raise ValueError("api_key is required")
+        return self
 
 
 class GenerateStoryboardRequest(BaseModel):
@@ -54,8 +69,9 @@ def save_text_model_configuration(
     verify_session(request, headers)
     return adaptation_service(request).save_configuration(
         project_id,
-        base_url=body.base_url,
-        model=body.model,
+        base_url=body.provider_api_url,
+        model=body.model_name,
+        api_key=body.api_key.get_secret_value() if body.api_key is not None else None,
         credential_profile_id=body.credential_profile_id,
         timeout_seconds=body.timeout_seconds,
         temperature=body.temperature,

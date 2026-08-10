@@ -33,6 +33,7 @@ from ..novelai.client import (
     SecretReader,
 )
 from ..novelai.contracts import require_model_profile
+from ..prompting.models import CharacterTagBundleDocument, PromptBundleDocument
 from ..vault import CredentialVault, VaultLockedError
 from .assets import AssetStore
 from .models import CompiledGenerationSpec, GenerationSpecDocument, ReferenceUse
@@ -68,6 +69,10 @@ class GenerationSpecCompiler:
         storyboard = StoryboardDocument.model_validate_json(str(context["storyboard_json"]))
         characters = CharacterBibleDocument.model_validate_json(str(context["character_json"]))
         style = StyleBibleDocument.model_validate_json(str(context["style_json"]))
+        tags = CharacterTagBundleDocument.model_validate_json(str(context["tag_bundle_json"]))
+        prompt_bundle = PromptBundleDocument.model_validate_json(
+            str(context["prompt_bundle_json"])
+        )
         panel = next(
             (
                 panel
@@ -84,24 +89,25 @@ class GenerationSpecCompiler:
                 409,
             )
         matched_characters = match_characters(panel.characters, characters.characters)
-        prompt = joined_prompt(
-            [
-                "black and white manga",
-                style.positive_prompt_fragment,
-                *(character.positive_prompt_fragment for character in matched_characters),
-                panel.visual_prompt,
-                str(context["edit_prompt"] or "") if operation == "inpaint" else "",
-                "no text, no letters, no speech bubbles, no watermark, no logo",
-            ]
+        package = next(
+            (
+                item
+                for item in prompt_bundle.packages
+                if str(item.panel_id) == str(context["panel_id"])
+            ),
+            None,
         )
-        negative_prompt = joined_prompt(
-            [
-                style.negative_prompt_fragment,
-                *(character.negative_prompt_fragment for character in matched_characters),
-                panel.negative_prompt,
-                "color, text, letters, speech bubble, caption, page number, watermark, logo",
-            ]
-        )
+        if package is None:
+            raise ApplicationError(
+                "GENERATION_PROMPT_PACKAGE_NOT_FOUND",
+                "冻结 PromptPackage 中没有找到目标面板。",
+                409,
+            )
+        self._verify_prompt_package(package, tags)
+        prompt = package.compiled_prompt
+        if operation == "inpaint":
+            prompt = joined_prompt([prompt, str(context["edit_prompt"] or "")])
+        negative_prompt = package.compiled_negative_prompt
         if len(prompt) > 12_000 or len(negative_prompt) > 12_000:
             raise ApplicationError(
                 "GENERATION_PROMPT_TOO_LONG",
@@ -169,7 +175,7 @@ class GenerationSpecCompiler:
                 "GENERATION_OPERATION_INVALID", "生成任务操作类型无效。", 409
             )
         document = GenerationSpecDocument(
-            schema_version="1.0" if operation == "chapter_generate" else "1.1",
+            schema_version="1.2",
             spec_id=spec_id,
             project_id=str(context["project_id"]),
             chapter_id=str(context["chapter_id"]),
@@ -181,6 +187,14 @@ class GenerationSpecCompiler:
             storyboard_version_id=str(context["storyboard_version_id"]),
             character_bible_version_id=str(context["character_bible_version_id"]),
             style_bible_version_id=str(context["style_bible_version_id"]),
+            character_tag_bundle_version_id=str(
+                context["character_tag_bundle_version_id"]
+            ),
+            prompt_bundle_version_id=str(context["prompt_bundle_version_id"]),
+            prompt_package_id=str(package.prompt_package_id),
+            text_model_config_revision=int(context["text_model_config_revision"]),
+            compiled_prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            compiled_negative_prompt_sha256=package.compiled_negative_prompt_sha256,
             provider_model_id=str(context["provider_model_id"]),
             mapping_version=str(context["mapping_version"]),
             contract_sha256=str(context["contract_sha256"]),
@@ -208,9 +222,9 @@ class GenerationSpecCompiler:
                 else None
             ),
             prompt_source=(
-                "approved_storyboard_and_bibles_plus_user_edit"
+                "approved_prompt_package_plus_user_edit"
                 if operation == "inpaint"
-                else "approved_storyboard_and_bibles"
+                else "approved_prompt_package"
             ),
         )
         return CompiledGenerationSpec(
@@ -238,6 +252,34 @@ class GenerationSpecCompiler:
             timeout_seconds=float(context["timeout_seconds"]),
         )
 
+    @staticmethod
+    def _verify_prompt_package(package: Any, tags: CharacterTagBundleDocument) -> None:
+        tags_by_id = {str(item.tag_set_id): item for item in tags.tag_sets}
+        for block in package.character_blocks:
+            tag_set = tags_by_id.get(str(block.tag_set_id))
+            if tag_set is None or block.fixed_tags_sha256 != tag_set.fixed_tags_sha256:
+                raise ApplicationError(
+                    "GENERATION_FIXED_TAGS_MISMATCH",
+                    "PromptPackage 中的固定角色 tags 与冻结 TagSet 不一致。",
+                    409,
+                )
+            if block.fixed_tags != tag_set.fixed_tags:
+                raise ApplicationError(
+                    "GENERATION_FIXED_TAGS_MISMATCH",
+                    "PromptPackage 中的固定角色 tags 已被修改。",
+                    409,
+                )
+        if hashlib.sha256(package.compiled_prompt.encode("utf-8")).hexdigest() != (
+            package.compiled_prompt_sha256
+        ) or hashlib.sha256(package.compiled_negative_prompt.encode("utf-8")).hexdigest() != (
+            package.compiled_negative_prompt_sha256
+        ):
+            raise ApplicationError(
+                "GENERATION_PROMPT_HASH_MISMATCH",
+                "冻结 PromptPackage 的提示词哈希不一致。",
+                409,
+            )
+
     def _context(self, attempt_id: str) -> sqlite3.Row:
         with self.database.reader() as connection:
             row = connection.execute(
@@ -248,11 +290,15 @@ class GenerationSpecCompiler:
                        gj.job_id,
                        gj.project_id, gj.chapter_id, gj.storyboard_version_id,
                        gj.character_bible_version_id, gj.style_bible_version_id,
+                       gj.character_tag_bundle_version_id, gj.prompt_bundle_version_id,
+                       gj.text_model_config_revision,
                        gj.provider_model_id, gj.mapping_version, gj.contract_sha256,
                        gj.credential_profile_id, gj.timeout_seconds,
                        sv.document_json AS storyboard_json,
                        cbv.document_json AS character_json,
                        sbv.document_json AS style_json,
+                       ctv.document_json AS tag_bundle_json,
+                       pbv.document_json AS prompt_bundle_json,
                        p.workspace_path
                 FROM generation_attempts ga
                 JOIN generation_job_items gi ON gi.item_id = ga.item_id
@@ -263,6 +309,10 @@ class GenerationSpecCompiler:
                   ON cbv.character_bible_version_id = gj.character_bible_version_id
                 JOIN style_bible_versions sbv
                   ON sbv.style_bible_version_id = gj.style_bible_version_id
+                JOIN character_tag_bundle_versions ctv
+                  ON ctv.character_tag_bundle_version_id = gj.character_tag_bundle_version_id
+                JOIN prompt_bundle_versions pbv
+                  ON pbv.prompt_bundle_version_id = gj.prompt_bundle_version_id
                 JOIN projects p ON p.project_id = gj.project_id
                 WHERE ga.attempt_id = ? AND ga.status = 'running'
                 """,

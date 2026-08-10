@@ -8,8 +8,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.test_adaptation_api import configure_vault_and_model, install_stub
-from tests.test_bibles_api import approve_complete_bibles, generate_bibles
+from tests.test_adaptation_api import configure_vault_and_model
+from tests.test_bibles_api import StubTextModel, approve_complete_bibles, generate_bibles
 from tests.test_exports_api import download_file, export_preflight, export_request
 from tests.test_pages_api import prepare_page
 
@@ -170,7 +170,7 @@ def test_continuity_is_included_in_package_and_restored_with_remapped_ids(
     package = download_file(client, session_headers, project_id, exported, package_file)
     with zipfile.ZipFile(io.BytesIO(package)) as archive:
         records = json.loads(archive.read("records.json"))
-    assert records["schema_version"] == "1.3"
+    assert records["schema_version"] == "1.4"
     assert len(records["tables"]["continuity_ledger_versions"]) == 1
 
     preflight = client.post(
@@ -218,7 +218,9 @@ def prepare_two_approved_chapters(
     chapters = source["chapters"]
     assert len(chapters) == 2
     configure_vault_and_model(client, headers, project_id)
-    install_stub(client)
+    client.app.state.adaptation.provider_factory = lambda configuration, secret_reader: (
+        StubTextModel(configuration, secret_reader)
+    )
     for chapter in chapters:
         client.post(
             f"/api/v1/projects/{project_id}/source/chapters/"
