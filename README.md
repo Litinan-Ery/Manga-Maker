@@ -2,7 +2,7 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**P0 离线 Mock 单章闭环、P1 整本规划与 P2 高级版式均已完成，真实服务验收仍未执行。** 本地应用、TXT/来源链路、结构化分镜、角色/风格审批、有界生成、页面编辑、reroll/inpaint、版本恢复、四格式导出、跨章连续性、整本预算/逐章队列、彩色/RTL/条漫、可复用素材库、启动恢复、磁盘故障处理和凭证零泄露扫描均已有自动化证据。真实 NovelAI 付费 smoke 与代表性授权章节的真实生产仍需用户单独批准，不能由 Mock 结果替代。
+> 当前状态：**v0.2 离线 Mock 闭环已完成，真实服务验收仍未执行。** 三字段文本模型配置、模型化分镜与设定、角色固定 Tags、逐格 NovelAI PromptPackage、本地确定性编译、有界生成、页面编辑、版本恢复、整本规划和凭证零泄露均已有自动化证据。真实文本模型、NovelAI 付费 smoke 与代表性授权章节的真实生产仍需用户单独批准，不能由 Mock 结果替代。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
@@ -15,8 +15,9 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | 应用本地加密凭证库 | 已实现 | Argon2id + XChaCha20-Poly1305；支持界面内创建、解锁、锁定和保存凭证 |
 | TXT 导入与章节修正 | 已实现 | UTF-8/BOM/GB18030/GBK 候选；支持改名、拆分、合并 |
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
-| 结构化分镜文本适配器 | 已实现（Mock 验收） | 可配置 OpenAI-compatible 端点；场景→页→格契约、来源覆盖、最多两次修复、不可变版本与审批门禁已接入界面；未做真实调用 |
-| CharacterBible、StyleBible 与参考图 | 已实现 | 从已审批分镜本地草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
+| 文本模型与结构化改编 | 已实现（Mock 验收） | 界面只需 API 链接、模型名称、密钥三项；密钥本地加密保存，同一配置生成分镜、角色/风格设定、固定 Tags 和逐格 Prompt；未做真实调用 |
+| CharacterBible、StyleBible 与参考图 | 已实现（Mock 验收） | 从已审批分镜调用当前文本模型草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
+| CharacterTagSet 与 PromptPackage | 已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；逐格 Prompt 组件可编辑预览，本地编译器原样注入固定 Tags 并冻结 SHA-256，执行期不再调用文本模型 |
 | NovelAI 契约、配置与连接测试 | 已实现（Mock 验收） | 固定官方 Swagger 哈希与模型能力；Token 在应用本地加密保存；连接测试须点击触发且只查标签、不出图；未做真实调用 |
 | 有界串行生成队列 | 已实现 | 冻结面板、上游版本、凭证引用、契约和调用/成本上限；全局单在途、暂停/取消和重启转人工审阅 |
 | NovelAI 逐格执行与素材版本 | 已实现（离线 Mock 验收） | 二次明确确认后才执行；固定 host/字段、最多一张 Precise Reference、严格 201 JSON/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；未做真实付费 smoke |
@@ -77,8 +78,10 @@ pnpm --dir frontend build
   → 选择一个章节并确认改编页数预算
   → LLM 生成剧情节拍、场景和分页分格脚本
   → 用户审阅分镜与来源覆盖
-  → 自动草拟角色设定表和风格板
+  → 文本模型生成角色设定表和风格板
   → 用户编辑、上传参考图并确认设定
+  → 文本模型生成角色固定 Tags 与逐格 PromptPackage
+  → 本地编译器注入固定 Tags，用户预览并审批最终 Prompt
   → 展示页数、调用数和预计成本
   → 用户明确启动有界生成队列
   → NovelAI 逐格生成画面

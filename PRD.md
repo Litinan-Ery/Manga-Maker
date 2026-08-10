@@ -2,13 +2,14 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v0.1 |
+| 文档版本 | v0.2 |
 | 日期 | 2026-08-09 |
-| 产品状态 | P0 离线 Mock 单章闭环、P1 整本有界生产、P2 彩色/RTL/条漫与可复用素材库已实现；真实 NovelAI 付费调用与代表性授权章节的真实生产仍未验收 |
+| 产品状态 | P0 离线 Mock 单章闭环、P1 整本有界生产、P2 彩色/RTL/条漫与可复用素材库已实现；v0.2 文本模型三项一体配置、NovelAI Prompt 生成和角色固定 Tags 闭环已通过 Mock/Stub 自动化验收；真实文本模型、NovelAI 付费调用与代表性授权章节的真实生产仍未验收 |
 | 产品形态 | 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 | 默认成品 | 黑白分页漫画，2:3 竖版，左到右、从上到下，简体中文横排 |
-| 文本改编 | 可配置的结构化输出 LLM |
+| 文本模型配置 | 服务商 API 链接、模型名称、密钥三项；配置仅在本机保存 |
+| 文本模型职责 | 结构化改编、NovelAI 输入 Prompt、角色固定 Tags 及相关结构化文本任务 |
 | 图像生成 | NovelAI Image Generation API |
 
 项目入口和简明范围见 [README.md](README.md)，技术实现边界见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，分层验收证据见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
@@ -17,7 +18,7 @@
 
 Manga Maker 把“把小说交给模型生成几张图”改造成一个可审阅、可修改、可恢复的漫画生产流程。
 
-P0 从一个 TXT 章节开始。系统先保留原文结构和字符位置，再让可配置 LLM 生成带来源锚点的场景、页和分格脚本。用户确认分镜、角色设定、黑白画风、页数和预计成本后，系统才调用 NovelAI 逐格生成无文字画面。本地排版器负责格框、对白、旁白、音效和页码。任意页面可以修改，整页、单格或局部区域可以重新生成，旧版本始终可恢复。
+P0 从一个 TXT 章节开始。用户先在一个本地设置表单中填写服务商 API 链接、模型名称和密钥。系统使用这一已保存的文本大模型配置生成带来源锚点的场景、页和分格脚本，草拟角色固定 Tags，并为每一格生成 NovelAI 可消费的结构化 Prompt。用户批准角色 Tags 后，本地 Prompt 编译器必须逐字注入已批准的固定 Tags，不允许模型在不同格中自行改写。用户确认分镜、角色设定、黑白画风、Prompt、页数和预计成本后，系统才调用 NovelAI 逐格生成无文字画面。本地排版器负责格框、对白、旁白、音效和页码。任意页面可以修改，整页、单格或局部区域可以重新生成，旧版本始终可恢复。
 
 P0 的核心不是“一次生成看起来像漫画的图片”，而是建立以下可验证闭环：
 
@@ -27,6 +28,7 @@ P0 的核心不是“一次生成看起来像漫画的图片”，而是建立�
 4. 修改局部内容不会破坏已经确认的其他页面。
 5. 中断、失败或误操作不会覆盖已接受的版本。
 6. 最终成果既能继续编辑，也能以通用漫画格式离开 Manga Maker。
+7. 同一角色在所有相关 NovelAI Prompt 中使用同一组已批准 Tags，除非用户显式创建并批准新版本。
 
 本 PRD 定义产品目标和验收基线，不代表所有功能已经交付。实际完成范围以 [README.md](README.md) 的“当前可用范围”和 [WORK_ITEMS.md](WORK_ITEMS.md) 为准。
 
@@ -58,17 +60,18 @@ P0 的核心不是“一次生成看起来像漫画的图片”，而是建立�
 6. **来源可追溯**：每个剧情节拍和页面都能回到原文章节及字符范围。
 7. **成本可见**：调用前显示预计次数和成本上限，完成后记录实际调用与失败重试。
 8. **用户动作可追溯**：所有外部生成请求必须来自可审计的用户操作，不运行无人值守生成计划。
-9. **供应商可替换**：文本改编通过适配层接入；NovelAI 具体参数不污染核心分镜模型。
+9. **供应商可替换但配置唯一**：文本任务通过适配层接入，并统一使用当前激活的本地文本模型配置；不得在任务之间静默切换服务商、模型或密钥。
 10. **不伪装交付**：文档、模拟测试和真实 API 验收分别报告，不能把其中一项替代另一项。
+11. **角色 Tags 确定性注入**：文本模型可以提出 Tags 草案，但审批后的固定 Tags 由本地编译器原样注入，不依赖模型重复生成来维持一致性。
 
 ## 4. 目标与非目标
 
 ### 4.1 P0 产品目标
 
 1. 导入 TXT 小说，可靠识别或手工修正章节。
-2. 选择一个章节，生成结构化、可编辑、有来源锚点的漫画分镜。
-3. 自动草拟角色设定表和黑白漫画风格板，并允许用户上传参考图。
-4. 用户确认分镜、设定、页数和成本后，调用 NovelAI 逐格生成。
+2. 选择一个章节，使用本地配置的文本大模型生成结构化、可编辑、有来源锚点的漫画分镜。
+3. 使用同一文本大模型自动草拟角色设定表、角色固定 Tags、黑白漫画风格板和逐格 NovelAI Prompt，并允许用户编辑和上传参考图。
+4. 用户确认分镜、设定、固定 Tags、Prompt、页数和成本后，调用 NovelAI 逐格生成。
 5. 将面板画面与本地文字、格框合成为完整漫画页。
 6. 支持修改任意页面的分镜、提示词、对白、旁白、音效和布局。
 7. 支持整页 reroll、单格 reroll 和蒙版局部重绘。
@@ -120,8 +123,11 @@ P0 仅服务一名本机创作者。用户：
 | SourceAnchor | 指向源章节版本、起止字符和摘录哈希的来源锚点 |
 | StoryBeat | 必须在改编中处理的剧情信息单位，例如动作、发现、转折或关键对白 |
 | Storyboard | 一个章节的场景、页面、分格、对白和视觉要求集合 |
+| TextModelProfile | 一个本地文本模型配置版本；用户输入仅包含服务商 API 链接、模型名称和密钥，持久化时密钥与非敏感字段分离保存 |
 | CharacterBible | 角色身份、外观、服装、道具、关系、表情范围和参考图集合 |
+| CharacterTagSet | CharacterBible 中某一角色或已批准造型版本的固定 NovelAI Tags，包含有序正向 Tags、必要负向 Tags、版本和哈希 |
 | StyleBible | 线条、网点、光影、背景、镜头、禁用元素和负面提示词规则 |
+| PromptPackage | 文本大模型为一个 Panel 生成、经 Schema 校验并由本地编译器注入固定角色 Tags 后形成的 NovelAI 输入 Prompt 版本 |
 | Page | 一张逻辑漫画页，由布局、面板和文字图层组成 |
 | Panel | 页面中的一格，包含剧情目的、镜头、角色、提示词和当前素材版本 |
 | GenerationSpec | 一次图像生成所需的模型、参数、提示词、参考图、seed 和目标尺寸 |
@@ -140,21 +146,23 @@ P0 仅服务一名本机创作者。用户：
 flowchart TD
     A["导入 TXT"] --> B["编码与章节预检"]
     B --> C["用户选择并确认章节"]
-    C --> D["提取 StoryBeat 与 SourceAnchor"]
-    D --> E["LLM 生成结构化 Storyboard"]
+    C --> D["本地建立 SourceAnchor 与待处理 StoryBeat"]
+    D --> E["用户确认外发后，配置的文本大模型生成结构化 Storyboard"]
     E --> F["Schema 与来源覆盖校验"]
     F --> G["用户编辑并批准分镜"]
-    G --> H["生成 CharacterBible 与 StyleBible 草案"]
-    H --> I["用户编辑、上传参考图并批准设定"]
-    I --> J["估算页数、调用数与成本"]
-    J --> K{"用户明确启动？"}
-    K -- 否 --> G
-    K -- 是 --> L["顺序执行 NovelAI 逐格生成"]
-    L --> M["本地页面合成"]
-    M --> N["逐页审阅与版本修改"]
-    N --> O{"验收通过？"}
-    O -- 否 --> N
-    O -- 是 --> P["导出工程包、PNG、PDF、CBZ"]
+    G --> H["配置的文本大模型生成 CharacterBible、固定角色 Tags 与 StyleBible 草案"]
+    H --> I["用户编辑、上传参考图并批准设定与 Tags"]
+    I --> J["同一文本模型生成逐格 PromptPackage 草案"]
+    J --> K["确定性注入已批准角色 Tags"]
+    K --> L["用户审阅 Prompt 并确认调用数与成本"]
+    L --> M{"用户明确启动？"}
+    M -- 否 --> G
+    M -- 是 --> N["冻结 PromptPackage 并顺序执行 NovelAI 逐格生成"]
+    N --> O["本地页面合成"]
+    O --> P["逐页审阅与版本修改"]
+    P --> Q{"验收通过？"}
+    Q -- 否 --> P
+    Q -- 是 --> R["导出工程包、PNG、PDF、CBZ"]
 ```
 
 ### 7.2 审批门禁
@@ -162,10 +170,10 @@ flowchart TD
 以下三项审批互相独立，后续变更会使相关审批失效：
 
 1. **分镜审批**：确认剧情覆盖、页数、分格、对白和镜头。
-2. **设定审批**：确认角色与画风，以及将发送给 NovelAI 的参考图。
-3. **生成审批**：确认预计调用数、成本上限、模型和任务范围。
+2. **设定审批**：确认角色、固定 Tags 与画风，以及将发送给 NovelAI 的参考图。
+3. **生成审批**：确认逐格 Prompt 预览、预计调用数、成本上限、模型和任务范围。
 
-如果用户在生成前修改分镜或设定，系统必须重新计算受影响面板、调用数和成本，并要求重新确认生成审批。
+如果用户在生成前修改分镜、角色/风格设定、CharacterTagSet 或 PromptPackage，系统必须重新计算受影响面板、调用数和成本，并要求重新确认生成审批。
 
 ### 7.3 任务状态
 
@@ -213,6 +221,8 @@ draft
 ### 8.4 角色与风格页
 
 - 角色卡展示固定特征、可变特征、禁止变化、服装、道具和参考图。
+- 每张角色卡展示由当前文本模型生成的固定正向/负向 Tags、适用造型版本、审批状态和实际注入预览。
+- 固定 Tags 与姿势、动作、表情、镜头等逐格可变 Tags 分区显示；固定 Tags 的任何修改都会创建新版本并使相关审批失效。
 - 风格板展示黑白线条、网点、背景密度、光影、镜头习惯和负面提示词。
 - 上传参考图时记录本地路径、哈希、来源说明和用户授权确认。
 - 每个设定版本有独立批准状态；修改后不得沿用旧批准。
@@ -237,6 +247,14 @@ draft
 - 在导出前报告缺页、未验收页、低分辨率素材、溢出文字和断裂阅读顺序。
 - 分别导出工程包、PNG、PDF 和 CBZ；失败不会污染上一次成功导出。
 
+### 8.8 文本模型设置
+
+- 使用一个设置表单展示且只要求三项：`服务商 API 链接`、`模型名称`、`密钥`。
+- 三项均由用户在本机填写并保存；服务商 API 链接与模型名称保存在应用本地设置中，密钥写入应用本地加密凭证库。
+- 密钥输入为只写字段；保存后仅展示“已配置”和脱敏指纹，不回显、复制或写入浏览器持久存储。
+- “保存配置”只执行本地写入；“测试连接”是独立的显式动作，并清楚提示会向所填服务商发出最小测试请求。
+- 页面展示当前配置版本、最后一次连接测试结果，以及该配置将承担的任务：结构化改编、角色 Tags 草拟、NovelAI Prompt 生成和结构修复。
+
 ## 9. 概念数据模型
 
 ### 9.1 核心对象
@@ -244,9 +262,12 @@ draft
 | 对象 | 稳定标识 | 关键字段 | 权威来源 |
 |---|---|---|---|
 | Project | `project_id` | 标题、创建时间、当前阶段、默认阅读方向 | SQLite |
+| TextModelProfile | `text_model_profile_id` + `version` | 服务商 API 链接、模型名称、凭证引用、连接状态 | 应用本地设置 + 本地加密凭证库 |
 | SourceChapter | `chapter_id` + `version` | 文件哈希、编码、起止字符、正文哈希 | SQLite + 本地文件 |
 | Storyboard | `storyboard_id` + `version` | StoryBeat、Scene、Page、Panel、审批状态 | SQLite + JSON 快照 |
-| CharacterBible | `character_bible_id` + `version` | 角色字段、参考图、审批状态 | SQLite + JSON/图片 |
+| CharacterBible | `character_bible_id` + `version` | 角色字段、CharacterTagSet、参考图、审批状态 | SQLite + JSON/图片 |
+| CharacterTagSet | `character_tag_set_id` + `version` | 角色/造型版本、有序固定 Tags、负向 Tags、哈希、审批状态 | SQLite + JSON 快照 |
+| PromptPackage | `prompt_package_id` + `version` | 分格意图、固定角色 Tags 引用、正/负 Prompt、文本模型来源、审批状态 | SQLite + JSON 快照 |
 | StyleBible | `style_bible_id` + `version` | 画风字段、负面词、参考图、审批状态 | SQLite + JSON/图片 |
 | Page | `page_id` | 序号、阅读方向、当前 PageVersion | SQLite |
 | Panel | `panel_id` | Page 归属、剧情目的、当前 AssetVersion | SQLite |
@@ -271,10 +292,11 @@ draft
 |---|---|---|
 | 源小说正文 | 项目内只读源文件 | 章节预览、来源摘录 |
 | 结构化元数据和当前指针 | SQLite | 列表、状态、统计 |
-| 分镜和设定版本 | JSON 快照 + SQLite 索引 | 编辑器视图、提示词 |
+| 分镜、设定、角色 Tags 与 Prompt 版本 | JSON 快照 + SQLite 索引 | 编辑器视图、最终 Prompt、影响范围 |
 | 生成图片 | 不可变本地素材文件 | 缩略图、合成页 |
 | 页面布局与文字 | PageVersion JSON | PNG/PDF/CBZ 页面 |
-| 密钥 | 应用本地加密凭证库 | 解锁后的运行时短期凭证 |
+| 文本模型非敏感配置 | 应用本地设置 | 当前配置、版本、端点主机和模型名称 |
+| 文本模型与 NovelAI 密钥 | 应用本地加密凭证库 | 解锁后的运行时短期凭证 |
 | 审计 | 追加式本地记录 | 成本与运行报告 |
 
 ## 10. 功能需求
@@ -305,19 +327,30 @@ draft
 
 ### FR-04：文本模型配置
 
-- P0 提供 OpenAI-compatible 文本模型适配器，配置 `base_url`、`model` 和可选参数。
-- API Key 存入 Manga Maker 应用数据目录中的本地加密凭证库；界面只显示已配置状态和末四位指纹，不回显完整密钥。
+- P0 提供 OpenAI-compatible 文本模型适配器。面向用户的配置表单只包含三项必填字段：`服务商 API 链接`（`provider_api_url`）、`模型名称`（`model_name`）和`密钥`（`api_key`）。超时、温度等运行参数使用产品定义的有界默认值，不作为首版必填配置项。
+- 三项配置全部在本机保存：服务商 API 链接、模型名称和配置版本保存在应用本地设置中；密钥存入 Manga Maker 应用数据目录中的本地加密凭证库，并以不含秘密的凭证引用关联配置。
+- 配置必须在应用重启后仍可用，且不得由 Manga Maker 自动同步或上传。服务商 API 链接与模型名称可以作为可移植来源信息进入用户显式导出的工程包；密钥不得进入工程包、成品导出、日志、崩溃报告、源码、浏览器 `localStorage` 或任何 Manga Maker 云端服务，凭证引用在恢复时必须替换为“需要重新录入”。
+- 密钥字段只写；界面只显示已配置状态和末四位指纹，不回显完整密钥。更新密钥必须显式重新输入。
+- “保存配置”只做本地校验与持久化，不发出模型请求；“测试连接”必须由用户另行点击，并在发出最小请求前展示端点主机和模型名称。
+- 当前激活的 TextModelProfile 是全部文本模型任务的唯一配置来源，至少包括：基于 StoryBeat/SourceAnchor 的结构化改编、Storyboard 生成与结构修复、CharacterBible/StyleBible 草拟、角色固定 Tags 草拟，以及 NovelAI 逐格 PromptPackage 生成。
+- 每个模型产物记录 TextModelProfile ID 与版本、端点主机、模型名称、提示词模板版本、输入/输出 token 和耗时，但不记录密钥或包含密钥的原始请求头。
+- 配置缺失、凭证库锁定、连接失败或配置版本在执行期间变化时，相关任务停止并给出可恢复错误；不得静默切换到默认模型、其他服务商或旧密钥。
+- 修改配置不会原地改写已有分镜、Tags 或 PromptPackage；用户重新生成时创建带新配置来源的新版本。
 - 测试环境可用显式环境变量注入，不读取项目目录中的明文配置。
 - 模型输入只包含所选章节、必要设定和结构化指令，不发送整本 TXT。
-- 记录模型、端点主机、提示词模板版本、输入/输出 token 和耗时，不记录完整密钥。
+
+当前实现说明：v0.2 已支持 OpenAI-compatible 服务商 API 链接、模型名称与密钥三项一体设置；非敏感配置与密钥分别保存在应用本地设置和加密凭证库中。同一配置修订用于结构化 Storyboard、CharacterBible/StyleBible、角色固定 Tags 与 NovelAI PromptPackage，并通过版本、审批、哈希和生成门禁防止静默切换。当前验收仅使用 Mock/Stub，尚未执行真实文本模型或 NovelAI 付费调用。
 
 ### FR-05：结构化改编
 
-- 模型先输出场景和 StoryBeat 映射，再输出页面和分格，避免直接生成不可审计提示词列表。
+- 当前激活的文本模型先输出场景和 StoryBeat 映射，再输出页面和分格，避免直接生成不可审计提示词列表。
 - 输出必须通过版本化 JSON Schema 校验。
 - 对可修复的格式错误最多进行两次结构修复；仍失败则保留原始错误摘要并停止。
 - 每格必须包含剧情目的、镜头、角色状态、环境、对白/旁白/音效和视觉提示词。
 - 对白必须适合气泡显示；超长文本应告警而不是自动缩小到不可读。
+- 同一文本模型必须基于已批准 Storyboard、CharacterBible 和 StyleBible 为每格生成结构化 Prompt 草案，至少区分基础画面、角色区块、场景可变 Tags、风格 Tags 和负向 Prompt。
+- Prompt 草案通过 Schema、禁用词、长度、角色覆盖和冲突校验后才能生成 PromptPackage；校验失败按同一有界结构修复规则处理。
+- 文本模型只负责提出草案。最终发送给 NovelAI 的 Prompt 由本地确定性编译器构建，并强制注入已批准 CharacterTagSet，避免跨格漂移。
 
 ### FR-06：分镜编辑与审批
 
@@ -331,9 +364,14 @@ draft
 
 - 从章节提取主要角色、次要角色和只出现一次的人物。
 - 每个主要角色至少记录：年龄段、脸型、发型、体型、服装、标志物、禁止变化、情绪范围。
+- 当前激活的文本模型必须为每个需要保持一致的角色草拟 CharacterTagSet，至少包含有序正向 Tags、必要负向 Tags、适用的角色/造型版本和自然语言说明。
+- CharacterTagSet 明确分为“固定 Tags”和“逐格可变 Tags”：身份、年龄感、脸型、发型、体型、标志物及已选服装版本属于固定 Tags；姿势、动作、表情、镜头和临时状态属于逐格可变 Tags。
+- 用户可以编辑并独立批准 CharacterTagSet。批准后其 Tags 顺序、权重和规范化文本被冻结并计算哈希；任何变更都创建新版本，不原地覆盖。
+- 本地 Prompt 编译器必须向每个相关角色区块原样注入对应的已批准固定 Tags。文本模型、分镜自由文本或逐格变量不得改写、翻译、重排、省略或加入与固定 Tags 冲突的内容。
+- 同一角色存在换装、年龄阶段或剧情形态变化时，必须显式建立并批准新的造型版本；每格引用一个明确版本，不允许模型自行猜测切换。
 - 允许上传全身、面部和服装参考图；每张图保存哈希和授权确认。
 - 自动生成角色 reference sheet 的计划必须单独计入成本并由用户触发。
-- 角色设定修改后，系统标记受影响面板并要求重新确认。
+- 角色设定或 CharacterTagSet 修改后，系统只标记引用该角色/造型版本的面板和 PromptPackage 过期，并要求重新生成和确认。
 
 ### FR-08：风格板
 
@@ -364,12 +402,16 @@ draft
 - 每个外部请求必须关联该 GenerationJob 和原始用户动作。
 - P0 不提供定时生成、应用启动后自动继续付费调用或无上限重试。
 - 实现前必须以最新 NovelAI 文档确认“一次人工确认启动有界章节队列”的允许边界；若最新规则要求逐请求操作，则降级为逐页确认，不绕过限制。
-- MM-012 已实现的边界：本地预检冻结精确 Storyboard、CharacterBible、StyleBible、NovelAI 配置版本和有序 panel 清单；用户确认每格保守成本预留、最大调用数和总成本上限后才能创建队列。预留值明确不是供应商实际扣费预测，创建和状态控制均不发出图像请求。
+- 创建图像任务前必须冻结精确 Storyboard、CharacterBible、CharacterTagSet、StyleBible、逐格 PromptPackage、文本模型来源版本、NovelAI 配置版本和有序 panel 清单。冻结的是密钥引用及配置版本，不复制任何密钥字节。
+- 用户必须能在生成审批中逐格查看最终 Prompt 预览，并确认固定角色 Tags 已注入，再确认每格保守成本预留、最大调用数和总成本上限。
+- MM-012 已实现的原有边界：本地预检已能冻结精确 Storyboard、CharacterBible、StyleBible、NovelAI 配置版本和有序 panel 清单；v0.2 仍需补齐 CharacterTagSet、PromptPackage 与文本模型来源版本。预留值明确不是供应商实际扣费预测，创建和状态控制均不发出图像请求。
 
 ### FR-11：逐格生成队列
 
 - 默认串行执行，一个请求完成并落盘后才领取下一面板。
-- 每格请求包含固定设定、当前分镜、负面提示词、参考图和明确 seed。
+- 每格请求包含已冻结 PromptPackage、已批准固定角色 Tags 的版本与哈希、当前分镜、负面提示词、参考图和明确 seed。
+- 执行器只能发送本地编译器输出并通过审批的最终 Prompt；不得在发送 NovelAI 前临时再次请求文本模型自由改写 Prompt，也不得从未批准的角色描述重新生成 Tags。
+- 若 PromptPackage 缺失、过期、角色 Tag 哈希不匹配或出现固定/可变 Tags 冲突，面板在本地预检失败，不产生 NovelAI 请求。
 - 生成结果先写临时位置，校验格式、尺寸和哈希后原子登记为 AssetVersion。
 - 暂停后不领取新任务；取消保留已经完成的素材。
 - 对网络超时和 5xx 最多自动重试两次，并使用退避；401、403、余额不足、参数错误和内容拒绝不自动重试。
@@ -381,6 +423,7 @@ draft
 - P0 优先使用 NovelAI V4.5 Precise Reference 维持单个主要角色和画风。
 - 不把多个角色参考直接合并为一个 Precise Reference 请求，以避免特征融合。
 - 多角色面板优先使用多角色提示区域；仍不稳定时允许分步生成并局部重绘。
+- 多角色 Prompt 为每个角色建立独立区块；每个区块分别原样注入对应 CharacterTagSet，不把多个角色的固定 Tags 混成一个共享列表。
 - 每格记录实际使用的参考图、Strength、Fidelity 和提示词。
 - 角色参考更新后只标记相关角色出现的面板，不使无关页面失效。
 
@@ -408,10 +451,10 @@ draft
 
 ### FR-15：不可变版本与审计
 
-- 所有 Storyboard、Bible、Asset 和 Page 版本不可原地覆盖。
+- 所有 TextModelProfile 来源记录、Storyboard、Bible、CharacterTagSet、PromptPackage、Asset 和 Page 版本不可原地覆盖。
 - 每次版本变更记录操作者、时间、父版本、原因和受影响对象。
 - 恢复旧版本不删除分支；用户可以再次切回新版本。
-- 审计记录包含请求 ID、相关版本、模型、参数摘要、耗时、结果和成本，不包含密钥或完整正文。
+- 审计记录包含请求 ID、相关版本、文本模型配置版本、PromptPackage、角色 Tag 哈希、模型、参数摘要、耗时、结果和成本，不包含密钥或完整正文。
 - 本地单写者锁保证任务登记、版本指针和成本记录不会被并发写坏。
 
 ### FR-16：工程包导出与恢复
@@ -438,7 +481,7 @@ draft
 ### FR-18：成本、进度与报告
 
 - 生成前显示估算区间，完成后显示真实请求数、成功数、失败数、重试数和墙钟时间。
-- 把文本模型 token 与 NovelAI 图像调用/Anlas 分开报告，不混为单一“AI 成本”。
+- 把结构化改编、角色 Tags、NovelAI Prompt 和结构修复各类文本模型 token 与 NovelAI 图像调用/Anlas 分开报告，不混为单一“AI 成本”。
 - 只有供应商响应或官方接口可验证的扣费才能标记为实际成本；其余本地规则计算值必须标记为估算，不得伪装成账户实际扣费。
 - 进度以完成面板数和已合成页面数为准，不使用无法核验的百分比。
 - 取消、暂停和失败后仍可查看已经产生的成本。
@@ -448,7 +491,7 @@ draft
 
 - 创建项目时要求用户确认拥有或获准处理小说和参考图。
 - 用户必须满足文本模型与 NovelAI 当前的年龄、账户、订阅和使用条款。
-- 首次调用每个云端供应商前，展示发送数据类别和官方条款链接。
+- 首次调用每个云端供应商前，展示发送数据类别和官方条款链接；文本模型任务需分别说明可能发送章节片段、分镜、角色设定、角色 Tags、风格设定和 Prompt 草案。
 - 产品不提供公共小说搜索、抓取、Cookie 导入或访问控制绕过。
 - 产品不自动发布生成内容，不替用户判断作品是否可商业发行。
 - 用户删除项目时默认使用可恢复方式；永久清除必须是独立的明确操作。
@@ -460,12 +503,30 @@ draft
 ### 11.1 文本模型适配器
 
 ```typescript
+interface TextModelConfigurationInput {
+  provider_api_url: string;
+  model_name: string;
+  api_key: string;
+}
+
+interface StoredTextModelProfile {
+  text_model_profile_id: string;
+  version: number;
+  provider_api_url: string;
+  model_name: string;
+  credential_ref: string;
+}
+
 interface TextModelProvider {
   validateConfiguration(): Promise<ProviderValidationResult>;
   generateStoryboard(input: StoryboardRequest): Promise<StoryboardCandidate>;
-  repairStructuredOutput(input: RepairRequest): Promise<StoryboardCandidate>;
+  generateCharacterTagSets(input: CharacterTagRequest): Promise<CharacterTagSetCandidate[]>;
+  generateNovelAIPromptPackage(input: NovelAIPromptRequest): Promise<PromptPackageCandidate>;
+  repairStructuredOutput(input: RepairRequest): Promise<StructuredOutputCandidate>;
 }
 ```
+
+`TextModelConfigurationInput` 对应用户看到的完整三项设置表单。保存成功后，后端必须把 `api_key` 写入本地加密凭证库，只返回 `StoredTextModelProfile` 与脱敏凭证状态；任何读取配置的接口都不得返回 `api_key`。
 
 `StoryboardRequest` 必须包含：
 
@@ -478,7 +539,11 @@ interface TextModelProvider {
 - `language`
 - 已确认的改编偏好
 
-适配器返回模型原始响应的哈希、解析结果、token 使用量和错误；原始完整响应是否落盘由本地隐私设置决定，默认只保留结构化结果与错误摘要。
+`CharacterTagRequest` 必须包含已确认的章节内角色事实、角色/造型版本、CharacterBible 字段、StyleBible 约束和目标 NovelAI 模型能力，不允许模型凭空补充与来源冲突的永久外观。
+
+`NovelAIPromptRequest` 必须包含已批准的 Storyboard、CharacterBible、CharacterTagSet 和 StyleBible 版本，以及目标 Panel、NovelAI 模型能力与 Prompt Schema 版本。适配器输出结构化 Prompt 草案，不直接发起 NovelAI 请求。
+
+适配器返回文本模型配置版本、模型原始响应的哈希、解析结果、token 使用量和错误；原始完整响应是否落盘由本地隐私设置决定，默认只保留结构化结果与错误摘要。
 
 ### 11.2 Storyboard 最小结构
 
@@ -512,9 +577,49 @@ interface TextModelProvider {
 }
 ```
 
-示例仅展示字段形态，不是可直接发送给 NovelAI 的请求，也不包含任何真实凭证。
+示例中的 `visual_prompt` 与 `negative_prompt` 只是分镜阶段的语义草案，不可直接发送给 NovelAI，也不包含任何真实凭证。最终请求必须来自已校验和批准的 PromptPackage。
 
-### 11.3 NovelAI 适配器
+### 11.3 PromptPackage 最小结构
+
+```json
+{
+  "schema_version": "1.0",
+  "prompt_package_id": "UUIDv7",
+  "version": 1,
+  "panel_id": "UUIDv7",
+  "text_model_source": {
+    "text_model_profile_id": "UUIDv7",
+    "profile_version": 3,
+    "model_name": "user-configured-model",
+    "prompt_template_version": "novelai-panel-v1"
+  },
+  "base_visual_tags": ["black and white manga", "medium shot"],
+  "character_blocks": [
+    {
+      "character_id": "UUIDv7",
+      "character_tag_set_version_id": "UUIDv7",
+      "fixed_tags": ["approved tag 1", "approved tag 2"],
+      "variable_tags": ["running", "determined expression"]
+    }
+  ],
+  "style_tags": ["approved style tag"],
+  "negative_tags": ["text", "watermark", "logo"],
+  "compiled_prompt": "deterministically compiled NovelAI prompt",
+  "compiled_negative_prompt": "text, watermark, logo",
+  "compiled_prompt_sha256": "sha256",
+  "compiled_negative_prompt_sha256": "sha256"
+}
+```
+
+约束：
+
+- `fixed_tags` 必须与引用 CharacterTagSet 的有序 Tags 和哈希完全一致；模型输出不一致时由本地编译器替换为批准值并记录校验结果。
+- `variable_tags` 不得与固定 Tags、角色禁用变化或当前连续性状态冲突。
+- 最终 `compiled_prompt`、多角色区块和 `compiled_negative_prompt` 由本地确定性编译器从该结构产生，并分别保存哈希；相同输入版本必须得到相同文本。
+- PromptPackage 不包含文本模型密钥、NovelAI Token、HTTP 请求头或完整源章节。
+- 只有状态为“已批准”且所有引用版本仍有效的 PromptPackage 才能进入 GenerationJob。
+
+### 11.4 NovelAI 适配器
 
 ```typescript
 interface ImageGenerationProvider {
@@ -534,7 +639,7 @@ interface ImageGenerationProvider {
 - 核心数据模型不保存供应商原始请求体；保存版本化 `GenerationSpec` 和映射器版本。
 - 接口模型 ID、参数范围和费用以实现时最新官方文档为准。
 
-### 11.4 GenerationSpec
+### 11.5 GenerationSpec
 
 | 字段 | 含义 |
 |---|---|
@@ -542,7 +647,10 @@ interface ImageGenerationProvider {
 | `provider` | P0 固定为 `novelai` |
 | `model_label` | 用户可读的模型名称 |
 | `provider_model_id` | 当前官方接口使用的模型 ID |
-| `prompt` / `negative_prompt` | 已合并的分镜、角色和风格提示词 |
+| `prompt_package_id` / `version` | 已批准并冻结的 PromptPackage 版本 |
+| `character_tag_sets` | 各角色/造型的 CharacterTagSet 版本与哈希 |
+| `text_model_source` | 生成 Prompt 草案所用的 TextModelProfile 版本、模型名称和模板版本，不含密钥 |
+| `prompt` / `negative_prompt` | 本地编译器合并分镜、固定角色 Tags、逐格变量和风格后得到的最终提示词 |
 | `seed` | 明确整数；reroll 默认生成新 seed |
 | `width` / `height` | 目标面板尺寸 |
 | `steps` / `scale` / `sampler` | 经适配器校验的生成参数 |
@@ -551,7 +659,7 @@ interface ImageGenerationProvider {
 | `mask_asset_id` | 仅 inpaint 使用 |
 | `mapping_version` | 内部字段到供应商请求的映射版本 |
 
-### 11.5 统一错误结构
+### 11.6 统一错误结构
 
 ```json
 {
@@ -581,6 +689,7 @@ flowchart LR
     B --> W["项目工作区与不可变素材"]
     B --> K["应用本地加密凭证库"]
     B --> L["文本模型适配器"]
+    B --> PC["确定性 Prompt 编译器"]
     B --> N["NovelAI 适配器"]
     B --> C["页面合成与导出"]
 ```
@@ -592,9 +701,10 @@ flowchart LR
 | FastAPI | loopback API、SSE 进度、输入校验、审批和任务命令 |
 | SQLite | 项目、版本指针、任务、成本、审批和审计元数据 |
 | 单写者编排器 | 顺序领取任务、状态迁移、暂停/取消、重试和崩溃恢复 |
-| React/TypeScript | 导入、分镜、设定、队列、画布编辑和版本比较 |
+| React/TypeScript | 文本模型三项设置、导入、分镜、设定、Tags/Prompt 审批、队列、画布编辑和版本比较 |
 | Canvas 编辑器 | 图层、格框、裁切、气泡、文字和蒙版交互 |
-| 文本模型适配器 | 结构化改编、修复、token 和错误归一化 |
+| 文本模型适配器 | 统一读取当前 TextModelProfile，执行结构化改编、角色 Tags 草拟、NovelAI Prompt 草拟、结构修复、token 和错误归一化 |
+| Prompt 编译器 | 校验固定/可变 Tags，确定性注入已批准 CharacterTagSet，输出并哈希最终 NovelAI Prompt |
 | NovelAI 适配器 | 请求映射、凭证读取、生成、inpaint、响应和费用记录 |
 | 合成器 | 服务器端稳定渲染 PNG/PDF/CBZ，避免只依赖浏览器截图 |
 
@@ -611,6 +721,8 @@ workspace/projects/<project_id>/
 ├── bibles/
 │   ├── characters/
 │   └── styles/
+├── prompts/
+│   └── versions/
 ├── assets/
 │   ├── references/
 │   ├── panels/<panel_id>/versions/
@@ -651,6 +763,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 ### NFR-03：安全与隐私
 
 - 真实密钥只存在于应用本地加密凭证库和解锁后的短期进程内存。
+- 服务商 API 链接、模型名称和密钥均只在本机保存；其中密钥必须与非敏感配置分离加密，任何配置读取接口都不得返回密钥原文。
 - 本地凭证库不得位于项目工作区、同步目录、工程包或版本库中；主密码不落盘。
 - 默认日志不包含正文、完整提示词、参考图内容或凭证。
 - 仅绑定 loopback，不提供关闭该限制的 P0 配置。
@@ -672,7 +785,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 ### NFR-06：兼容性
 
 - P0 支持当前 macOS 和最新版 Safari/Chrome。
-- 工程包、Storyboard 和 GenerationSpec 均有独立 schema 版本。
+- 工程包、Storyboard、CharacterTagSet、PromptPackage 和 GenerationSpec 均有独立 schema 版本。
 - 供应商字段映射版本化，NovelAI 参数变化不要求迁移旧素材。
 
 ## 14. 错误与边界处理
@@ -682,9 +795,13 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 | TXT 编码不确定 | 展示多个预览，用户选择前不继续 |
 | 未识别出章节 | 允许整篇作为一章或手工添加边界 |
 | 章节过长 | 展示 token/页数风险，要求缩小范围或分段改编 |
+| 文本模型三项配置不完整 | 保留本地编辑能力，阻止全部文本模型任务并定位缺失字段 |
+| 文本模型凭证库锁定或连接失败 | 不切换供应商或模型；停止当前文本任务，解锁或修正后由用户重试 |
+| 文本模型配置在任务期间变化 | 丢弃未登记的旧配置结果并提示按新版本重新生成，不覆盖已有版本 |
 | LLM 返回无效 JSON | 最多修复两次，仍失败则保留错误摘要并停止 |
 | 来源覆盖不完整 | 标出 unresolved StoryBeat，禁止审批 |
-| 凭证库未配置或未解锁 | 可以编辑分镜，不允许创建图像任务 |
+| CharacterTagSet 缺失、过期或冲突 | 阻止相关 PromptPackage 审批和 NovelAI 请求，列出受影响角色与面板 |
+| 凭证库未配置或未解锁 | 可以编辑已有内容，不允许创建文本或图像模型任务 |
 | NovelAI 401/403 | 立即停止队列，不自动重试，提示更新凭证/权限 |
 | 余额或成本不足 | 暂停队列，保留已完成素材并要求新预算确认 |
 | 429/限流 | 尊重服务返回的等待信息；有界退避，不提高并发 |
@@ -712,6 +829,8 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 ### 15.2 视觉一致性
 
 - 主要角色按脸型、发型、服装、年龄感、标志物五项逐格抽检。
+- 所有包含同一角色/造型版本的最终 Prompt，其固定 Tags 序列与 CharacterTagSet 哈希匹配率必须为 100%。
+- 相同批准输入版本重复编译所得 Prompt 哈希一致率必须为 100%。
 - 每页至少检查角色身份错误、左右手/道具、场景连续和随机文字。
 - 一致性是人工加规则验收，不以单一模型分数替代用户判断。
 
@@ -732,10 +851,13 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 
 ### 16.1 单元测试
 
+- 文本模型三项字段的必填、URL/模型格式校验、本地持久化、重启读取和密钥只写响应。
 - UTF-8、UTF-8 BOM、GB18030、错误字节和混合换行解析。
 - 中文章节识别、手工边界、空章和超长章。
 - SourceAnchor 偏移、哈希和版本一致性。
 - Storyboard JSON Schema、修复次数和错误分类。
+- CharacterTagSet 的固定/可变字段、版本、排序、权重、哈希和角色/造型引用。
+- PromptPackage Schema、固定 Tags 确定性注入、冲突阻断、哈希复现和审批失效规则。
 - 角色/风格审批失效规则。
 - GenerationJob 状态机、预算、暂停、取消和重试上限。
 - PageVersion/AssetVersion 创建、恢复和分支。
@@ -747,14 +869,17 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 
 - 使用本地 mock 覆盖 NovelAI 成功、401、403、余额不足、429、5xx、超时、损坏响应和不确定计费。
 - 使用 mock 验证暂停/取消后不再领取请求。
+- 使用同一 mock TextModelProfile 验证结构化改编、角色 Tags、NovelAI Prompt 和结构修复四类任务，并核对配置版本与 token 分类。
 - 验证 LLM 适配器对合法、缺字段、错类型、截断和非 JSON 输出的处理。
+- 验证 NovelAI mock 收到的每个角色区块均包含对应 CharacterTagSet 的完整有序固定 Tags，且无密钥或源章节泄漏。
 - 验证供应商字段映射不改变核心 GenerationSpec。
 
 ### 16.3 端到端测试
 
+- 在文本模型设置中填写服务商 API 链接、模型名称和测试密钥，保存后重启应用，确认非敏感配置与脱敏凭证状态仍可用且任何读取响应不含密钥原文。
 - 导入一个 3,000–8,000 中文字符的授权测试章节。
-- 生成 6–12 页、每页 1–6 格的完整 Storyboard，并达到 100% StoryBeat 处理率。
-- 审批角色、风格、分镜和成本，使用 mock 完成全章生成、暂停、重启和继续。
+- 使用该配置生成 6–12 页、每页 1–6 格的完整 Storyboard、CharacterTagSet 和逐格 PromptPackage，并达到 100% StoryBeat 处理率。
+- 审批角色、固定 Tags、风格、分镜、Prompt 和成本，使用 mock 完成全章生成、暂停、重启和继续。
 - 对一页执行文字修改、单格 reroll、整页 reroll 和蒙版重绘，验证其他页面未变化且历史可恢复。
 - 导出工程包、PNG、PDF、CBZ，检查页数、顺序、尺寸和秘密扫描。
 - 在新空工作区恢复工程包，重新导出并比较页面哈希或可解释的渲染差异。
@@ -763,11 +888,13 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 
 真实服务测试必须由用户单独确认，并控制成本：
 
-1. 使用用户 Token 触发一次最小图像生成 smoke test。
-2. 确认请求、响应、文件落盘、参数和成本记录完整。
-3. 选择一个小型真实章节完成全章生成。
-4. 记录角色一致性、失败率、P50/P95 耗时、请求数，以及可验证实际成本或明确标注的估算成本。
-5. 测试 401/余额不足等异常优先使用 mock，不故意破坏真实账户或浪费额度。
+1. 使用用户填写的三项文本模型配置完成一次最小结构化输出 smoke test，并确认服务商、模型和配置版本来源正确。
+2. 使用同一文本模型为最小面板生成角色 Tags 和 NovelAI PromptPackage，确认本地编译结果包含已批准固定 Tags。
+3. 使用用户 Token 触发一次最小 NovelAI 图像生成 smoke test。
+4. 确认请求、响应、文件落盘、参数和成本记录完整。
+5. 选择一个小型真实章节完成全章生成。
+6. 记录角色一致性、固定 Tags 命中率、失败率、P50/P95 耗时、请求数，以及可验证实际成本或明确标注的估算成本。
+7. 测试 401/余额不足等异常优先使用 mock，不故意破坏真实账户或浪费额度。
 
 模拟测试通过不能替代真实调用；一次真实调用成功也不能替代完整章节验收。
 
@@ -785,20 +912,28 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 - 每个已审批页面可回溯到 SourceAnchor。
 - StoryBeat 处理率为 100%，审批时 `unresolved = 0`。
 
-### AC-03：分镜与设定
+### AC-03：文本模型配置与职责
+
+- 设置界面只要求服务商 API 链接、模型名称和密钥三项，三项均可一次填写并保存；应用重启后配置仍可继续使用。
+- 服务商 API 链接和模型名称由本地设置持久化，密钥只存在于本地加密凭证库及解锁后的短期内存；配置读取、日志、工程包和成品导出均不含密钥原文。
+- 结构化改编、角色 Tags 草拟、NovelAI Prompt 草拟和结构修复均使用当前激活的同一 TextModelProfile，并记录一致的配置版本来源。
+- 配置缺失、凭证锁定或任务期间配置变化时失败关闭，不静默回退到其他服务商、模型或密钥。
+
+### AC-04：分镜、设定与固定 Tags
 
 - 用户能在出图前修改页面、分格、对白、镜头和提示词。
-- CharacterBible 与 StyleBible 经过独立审批。
-- 修改已审批内容会正确使生成审批失效并重算成本。
+- CharacterBible、CharacterTagSet 与 StyleBible 经过独立审批。
+- 每个相关 PromptPackage 都包含该角色/造型版本完整且顺序一致的固定 Tags；固定 Tags 注入和 Prompt 编译可由相同输入哈希复现。
+- 修改已审批分镜、设定、固定 Tags 或 Prompt 会正确使相关 PromptPackage/生成审批失效并重算成本。
 
-### AC-04：人工触发与队列
+### AC-05：人工触发与队列
 
 - 未经用户明确启动，不产生 NovelAI 图像请求。
 - 队列默认串行，暂停/取消后不领取新请求。
 - 401/403/余额/参数错误不自动重试；临时错误最多重试两次。
 - 崩溃后的不确定请求进入 `needs_review`，不自动重发。
 
-### AC-05：页面生产与修改
+### AC-06：页面生产与修改
 
 - 全章每个目标面板都有可用 AssetVersion，所有页面都能稳定合成。
 - 修改文字或布局不产生图像调用。
@@ -806,14 +941,15 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 - inpaint 保留父素材、蒙版和新版本。
 - 任一历史 PageVersion 可以恢复且不会删除新版本。
 
-### AC-06：导出与恢复
+### AC-07：导出与恢复
 
 - 工程包、PNG、PDF、CBZ 均成功导出并通过页数、顺序和哈希检查。
 - 成品导出不包含原小说、密钥、提示词或调试日志。
 - 工程包不包含凭证，并能在空工作区恢复版本和当前指针。
 
-### AC-07：真实闭环
+### AC-08：真实闭环
 
+- 完成至少一次用户确认的真实文本模型结构化改编、CharacterTagSet 和 PromptPackage 调用。
 - 完成至少一次用户确认的 NovelAI 最小真实调用。
 - 完成一个代表性章节的真实端到端生产与人工抽检。
 - 报告 token、图像调用、成本、墙钟、失败、reroll 和一致性结果。
@@ -832,21 +968,23 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 - 建立 FastAPI、SQLite、React 和本地工作区骨架。
 - 完成项目创建、编码预检、章节修正和 SourceAnchor。
 - 建立 loopback、CSRF、本地加密凭证库和日志脱敏基线。
+- 把服务商 API 链接、模型名称和密钥合并为文本模型三项设置流程，并完成本地持久化、密钥只写和重启恢复。
 
 ### Phase 2：结构化改编
 
-- 实现文本模型适配器、Storyboard Schema 和结构修复。
+- 实现统一读取当前 TextModelProfile 的文本模型适配器、Storyboard/PromptPackage Schema 和通用结构修复。
 - 完成 StoryBeat 覆盖账本、改编工作台和分镜审批。
 
 ### Phase 3：角色与风格
 
-- 实现 CharacterBible、StyleBible、参考图管理和审批失效。
-- 建立黑白漫画默认提示和多角色生成策略。
+- 实现 CharacterBible、CharacterTagSet、StyleBible、参考图管理和审批失效。
+- 使用配置的文本模型草拟角色固定 Tags 与逐格 NovelAI Prompt，并实现固定 Tags 确定性编译、冲突检查和多角色分区策略。
 
 ### Phase 4：NovelAI 与任务队列
 
 - 根据最新官方文档实现 Persistent API Token 和图像请求映射。
 - 完成预算确认、串行任务、暂停/取消、重试和崩溃恢复。
+- 在任务预检中冻结 PromptPackage、CharacterTagSet 哈希和文本模型来源版本，阻止执行期自由改写 Prompt。
 - 先通过 mock，再执行用户批准的低成本 smoke test。
 
 ### Phase 5：页面编辑与版本
@@ -869,7 +1007,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 - 变更角色设定时计算跨章节影响范围（已实现基础影响定位）。
 - 导出多章节目录、卷和整本 CBZ/PDF。
 
-整本计划不是无人值守批处理授权。创建前必须冻结当前章节集、贯穿末章的已批准连续性版本、每章分镜/角色/风格版本、预计页数/分格数和全书调用/成本硬上限；每章再独立批准。启动后一次人工推进最多创建一个已有单章有界任务，图像执行仍需生成控制台再次确认。重启只把活动计划暂停或把未知计费章节转 `needs_review`，不得自动创建下一章、重新发送未知请求或突破全书上限。
+整本计划不是无人值守批处理授权。创建前必须冻结当前章节集、贯穿末章的已批准连续性版本、每章分镜/角色/CharacterTagSet/风格/PromptPackage 版本、文本模型来源版本、预计页数/分格数和全书调用/成本硬上限；每章再独立批准。启动后一次人工推进最多创建一个已有单章有界任务，图像执行仍需生成控制台再次确认。重启只把活动计划暂停或把未知计费章节转 `needs_review`，不得自动创建下一章、重新发送未知请求或突破全书上限。
 
 ### P2：高级创作
 
@@ -885,7 +1023,8 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 小说改编丢失关键因果 | 漫画剧情不成立 | StoryBeat 覆盖账本、SourceAnchor、人工审批 |
-| 角色跨页漂移 | 阅读者无法识别角色 | CharacterBible、Precise Reference、逐页抽检、局部重绘 |
+| 角色跨页漂移 | 阅读者无法识别角色 | CharacterBible、固定 CharacterTagSet 的确定性注入、Precise Reference、逐页抽检、局部重绘 |
+| 文本模型在不同面板改写角色 Tags | 同一角色的外观词漂移或互相冲突 | 固定/可变 Tags 分层、版本与哈希、Prompt 编译器原样注入、冲突即阻断 |
 | 多角色参考融合 | 人物外观混合 | 不直接堆叠多个角色参考；多角色提示或分步生成 |
 | 图像中文字乱码 | 成品不可读 | 逐格无文字生成，本地排版中文 |
 | 成本失控 | 浪费额度 | 页数/调用/成本上限、串行队列、有界重试 |
@@ -903,12 +1042,13 @@ P0 只有同时满足以下条件才能完成：
 1. README、PRD 与技术架构文档已通过文档一致性和敏感信息检查。
 2. Phase 1–6 的代码、迁移、测试和恢复路径均完成。
 3. 自动化测试覆盖主要成功路径、错误路径、状态机和导出恢复。
-4. 用户批准的 NovelAI 最小真实调用通过。
-5. 一个代表性授权章节完成从 TXT 到工程包/PNG/PDF/CBZ 的真实闭环。
-6. 任意页的脚本、整页、单格和局部重绘均完成版本化验证。
-7. 崩溃恢复、暂停、取消和不确定计费路径有持久证据。
-8. 报告真实 token、图像调用、可验证实际成本或明确标注的估算成本、墙钟、质量和安全结果。
-9. 没有真实凭证进入项目、日志或导出。
+4. 文本模型三项配置可本地持久化，真实结构化改编、CharacterTagSet 与 PromptPackage 最小调用通过。
+5. 用户批准的 NovelAI 最小真实调用通过，且实际 Prompt 含有对应的完整固定角色 Tags。
+6. 一个代表性授权章节完成从 TXT 到工程包/PNG/PDF/CBZ 的真实闭环。
+7. 任意页的脚本、整页、单格和局部重绘均完成版本化验证。
+8. 崩溃恢复、暂停、取消和不确定计费路径有持久证据。
+9. 报告真实 token、图像调用、可验证实际成本或明确标注的估算成本、墙钟、质量和安全结果。
+10. 没有真实凭证进入项目、日志或导出。
 10. 未通过项明确列出；不得用方向性结果、短 smoke test 或文档完成代替。
 
 ## 22. 官方参考
