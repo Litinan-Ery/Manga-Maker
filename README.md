@@ -1,5 +1,7 @@
 # Manga Maker
 
+**还不能用，以下是需求**
+
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
 > 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、版式先行、PromptPlan/PromptPackage v2、NovelAI V4 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。真实文本模型、NovelAI 付费 smoke 与代表性授权章节生产仍需用户单独批准，不能由 Mock 结果替代。
