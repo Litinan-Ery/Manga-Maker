@@ -1,0 +1,1 @@
+"""Canonical external contract helpers."""

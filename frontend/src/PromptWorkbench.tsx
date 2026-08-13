@@ -13,24 +13,36 @@ import {
   reviseCharacterTags,
   revisePromptBundle,
 } from "./api";
+import {
+  type CharacterDraftPatch,
+  type PromptInspector,
+  type PromptInspectorClient,
+  PromptInspectorView,
+  createPromptInspectorHttpClient,
+} from "./features/prompting";
 
 interface PromptWorkbenchProps {
   projectId: string;
   chapterSet: ChapterSet;
   refreshKey: number;
   onError: (message: string) => void;
+  inspectorClient?: PromptInspectorClient;
 }
+
+const DEFAULT_PROMPT_INSPECTOR_CLIENT = createPromptInspectorHttpClient();
 
 export function PromptWorkbench({
   projectId,
   chapterSet,
   refreshKey,
   onError,
+  inspectorClient = DEFAULT_PROMPT_INSPECTOR_CLIENT,
 }: PromptWorkbenchProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [workflow, setWorkflow] = useState<PromptingWorkflow | null>(null);
   const [tagDraft, setTagDraft] = useState<CharacterTagBundleDocument | null>(null);
   const [promptDraft, setPromptDraft] = useState<PromptBundleDocument | null>(null);
+  const [inspector, setInspector] = useState<PromptInspector | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -64,6 +76,7 @@ export function PromptWorkbench({
     setPromptDraft(
       next.prompt_bundle ? structuredClone(next.prompt_bundle.document) : null,
     );
+    setInspector(null);
   }
 
   async function reload() {
@@ -122,6 +135,127 @@ export function PromptWorkbench({
       promptDraft &&
       JSON.stringify(workflow.prompt_bundle.document) !== JSON.stringify(promptDraft),
   );
+
+  useEffect(() => {
+    const prompt = workflow?.prompt_bundle;
+    if (!prompt || prompt.document.schema_version !== "1.2") {
+      setInspector(null);
+      return;
+    }
+    let active = true;
+    inspectorClient.inspect(projectId, prompt.version_id, prompt.snapshot_sha256)
+      .then((next) => {
+        if (active) setInspector(next);
+      })
+      .catch((error: unknown) => {
+        if (active) onError(errorMessage(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [inspectorClient, onError, projectId, workflow?.prompt_bundle]);
+
+  function updateInspectorCharacter(
+    panelId: string,
+    characterId: string,
+    patch: CharacterDraftPatch,
+  ) {
+    setPromptDraft((current) =>
+      current
+        ? {
+            ...current,
+            packages: current.packages.map((item) => {
+              if (item.panel_id !== panelId || !item.structured_package) return item;
+              const characters = item.structured_package.prompt_plan.characters.map((character) =>
+                character.character_id === characterId ? { ...character, ...patch } : character,
+              );
+              return {
+                ...item,
+                character_blocks: item.character_blocks.map((block) =>
+                  block.character_id === characterId && patch.variable_positive_tags
+                    ? { ...block, variable_tags: patch.variable_positive_tags }
+                    : block,
+                ),
+                structured_package: {
+                  ...item.structured_package,
+                  prompt_plan: { ...item.structured_package.prompt_plan, characters },
+                },
+              };
+            }),
+          }
+        : current,
+    );
+    setInspector((current) =>
+      current
+        ? {
+            ...current,
+            panels: current.panels.map((panel) =>
+              panel.panel_id === panelId
+                ? {
+                    ...panel,
+                    prompt_plan: {
+                      ...panel.prompt_plan,
+                      characters: panel.prompt_plan.characters.map((character) =>
+                        character.character_id === characterId
+                          ? { ...character, ...patch }
+                          : character,
+                      ),
+                    },
+                  }
+                : panel,
+            ),
+          }
+        : current,
+    );
+  }
+
+  function updateInspectorRelationship(panelId: string, relationshipAction: string | null) {
+    setPromptDraft((current) =>
+      current
+        ? {
+            ...current,
+            packages: current.packages.map((item) =>
+              item.panel_id === panelId && item.structured_package
+                ? {
+                    ...item,
+                    structured_package: {
+                      ...item.structured_package,
+                      prompt_plan: {
+                        ...item.structured_package.prompt_plan,
+                        base: {
+                          ...item.structured_package.prompt_plan.base,
+                          relationship_action: relationshipAction,
+                        },
+                      },
+                    },
+                  }
+                : item,
+            ),
+          }
+        : current,
+    );
+    setInspector((current) =>
+      current
+        ? {
+            ...current,
+            panels: current.panels.map((panel) =>
+              panel.panel_id === panelId
+                ? {
+                    ...panel,
+                    prompt_plan: {
+                      ...panel.prompt_plan,
+                      base: {
+                        ...panel.prompt_plan.base,
+                        relationship_action: relationshipAction,
+                      },
+                    },
+                  }
+                : panel,
+            ),
+          }
+        : current,
+    );
+  }
 
   return (
     <section className="prompt-workbench" aria-label="角色固定 tags 与逐格提示词">
@@ -308,6 +442,14 @@ export function PromptWorkbench({
               </div>
             </article>
           ))}
+          {inspector && (
+            <PromptInspectorView
+              inspector={inspector}
+              draftDirty={promptsDirty}
+              onCharacterChange={updateInspectorCharacter}
+              onRelationshipChange={updateInspectorRelationship}
+            />
+          )}
           <div className="button-row">
             <button
               type="button"
@@ -331,11 +473,28 @@ export function PromptWorkbench({
               disabled={
                 busy ||
                 promptsDirty ||
-                workflow.prompt_bundle.approval_status !== "draft"
+                workflow.prompt_bundle.approval_status !== "draft" ||
+                !inspector ||
+                inspector.panels.some((panel) =>
+                  panel.prompt_plan.characters.some((character, index) => {
+                    const mapped = panel.provider_execution_spec.character_captions[index];
+                    return (
+                      !mapped ||
+                      mapped.character_id !== character.character_id ||
+                      mapped.order !== character.order ||
+                      mapped.positive_tags.length === 0 ||
+                      mapped.negative_tags.length === 0
+                    );
+                  }),
+                )
               }
               onClick={() =>
                 void run(async () => {
-                  await approvePromptBundle(projectId, workflow.prompt_bundle!.version_id);
+                  await approvePromptBundle(
+                    projectId,
+                    workflow.prompt_bundle!.version_id,
+                    workflow.prompt_bundle!.snapshot_sha256,
+                  );
                   await reload();
                   setMessage("逐格 PromptPackage 已审批，可冻结到生成任务。");
                 })

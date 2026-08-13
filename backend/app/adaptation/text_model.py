@@ -24,7 +24,7 @@ from .models import StoryboardDocument, StoryboardRequest, validate_storyboard_s
 PROMPT_TEMPLATE_VERSION = "storyboard-1.0"
 BIBLE_PROMPT_TEMPLATE_VERSION = "bibles-1.0"
 CHARACTER_TAG_PROMPT_TEMPLATE_VERSION = "character-tags-1.0"
-PANEL_PROMPT_TEMPLATE_VERSION = "novelai-panel-prompts-1.0"
+PANEL_PROMPT_TEMPLATE_VERSION = "panel-plan-v2"
 MAX_REPAIR_ATTEMPTS = 2
 DocumentT = TypeVar("DocumentT", bound=BaseModel)
 
@@ -192,8 +192,10 @@ class OpenAICompatibleTextModel:
                 request=request,
                 document_type=PromptDraftBundleDocument,
                 safeguards=(
-                    "必须逐字沿用 target_prompt_package_ids。角色块只能给 variable_tags，"
-                    "不得复制或改写 fixed_tags，不得生成文字、对白气泡、页码、水印或 logo。"
+                    "必须逐字沿用 target_prompt_package_ids。每个角色块只能给 variable_tags、"
+                    "negative_tags、角色自身 action、连续 order，center 必须与已批准 layout 一致。"
+                    "不得复制或改写 fixed_tags。多角色必须给 relationship_action，"
+                    "不得生成文字、对白气泡、页码、水印或 logo。"
                 ),
             ),
             lambda invalid, problem: artifact_repair_messages(

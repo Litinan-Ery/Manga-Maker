@@ -6,12 +6,20 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from ..bootstrap.dependencies import get_composition_facade, require_local_session
+from ..modules.composition.public import (
+    CompositionFacade,
+    CreatePageRevisionCommandV1,
+    PageDocumentSnapshotV1,
+)
 from ..pages.models import PageDocument
 from ..pages.service import PageService
 from ..security import session_headers
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/pages", tags=["pages"])
 Headers = Annotated[tuple[str | None, str | None], Depends(session_headers)]
+CompositionDependency = Annotated[CompositionFacade, Depends(get_composition_facade)]
+RequiredSession = Annotated[None, Depends(require_local_session)]
 
 
 class DraftPagesRequest(BaseModel):
@@ -102,17 +110,17 @@ def activate_page_version(
 def create_page_revision(
     project_id: str,
     page_id: str,
-    request: Request,
     body: CreatePageRevisionRequest,
-    headers: Headers,
+    facade: CompositionDependency,
+    _session: RequiredSession,
 ) -> dict[str, Any]:
-    verify_session(request, headers)
-    return service(request).create_revision(
-        project_id,
-        page_id,
-        body.document,
+    command = CreatePageRevisionCommandV1(
+        project_id=project_id,
+        page_id=page_id,
         expected_revision=body.expected_revision,
+        document=PageDocumentSnapshotV1.model_validate(body.document.model_dump(mode="json")),
     )
+    return facade.create_page_revision(command).legacy_payload()
 
 
 @router.get(

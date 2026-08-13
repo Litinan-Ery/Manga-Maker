@@ -1,0 +1,1 @@
+"""Registered composition migrations only."""

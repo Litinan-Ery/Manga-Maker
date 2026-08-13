@@ -199,6 +199,11 @@ class StubTextModel:
             str(tag.character_id): tag.tag_set_id
             for tag in request.character_tags.tag_sets
         }
+        layout_frames = {
+            str(frame["frame"]["panel_id"]): frame["frame"]
+            for page in request.layout_snapshot["pages"]
+            for frame in page["frames"]
+        }
         document = PromptDraftBundleDocument(
             schema_version="1.0",
             storyboard_version_id=request.storyboard_version_id,
@@ -213,17 +218,29 @@ class StubTextModel:
                             character_id=names[name.casefold()],
                             tag_set_id=tag_ids[str(names[name.casefold()])],
                             variable_tags=["alert expression"],
+                            negative_tags=["closed eyes"],
+                            action="looks toward the source of the sound",
+                            order=order,
+                            center=layout_frames[str(panel.panel_id)][
+                                "character_positions"
+                            ][order]["center"],
                         )
-                        for name in panel.characters
+                        for order, name in enumerate(panel.characters)
                     ],
                     style_tags=["crisp ink line art", "controlled screentone"],
                     negative_tags=["bad anatomy"],
+                    relationship_action=(
+                        "the characters react to one another"
+                        if len(panel.characters) > 1
+                        else None
+                    ),
+                    continuity_tags=["same rainy night"],
                 )
                 for page in request.storyboard.pages
                 for panel in page.panels
             ],
         )
-        return self._candidate(document, "novelai-panel-prompts-1.0")
+        return self._candidate(document, "panel-plan-v2")
 
     def _candidate(self, document: Any, template: str) -> ModelCandidate[Any]:
         return ModelCandidate(

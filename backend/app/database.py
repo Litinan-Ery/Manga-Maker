@@ -6,6 +6,15 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
+from .modules.layout.migrations import LAYOUT_MIGRATIONS
+from .modules.lineage.migrations import LINEAGE_MIGRATIONS
+from .modules.production.migrations import PRODUCTION_MIGRATIONS
+from .modules.project_source.migrations import PROJECT_SOURCE_MIGRATIONS
+from .modules.prompting.migrations import PROMPTING_MIGRATIONS
+from .platform.durable_work.migrations import DURABLE_WORK_MIGRATIONS
+from .platform.persistence import MigrationRegistry, ModuleMigrationRunner, RegisteredMigration
+from .platform.recovery.migrations import RECOVERY_MIGRATIONS
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
         1,
@@ -939,6 +948,30 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     ),
 )
 
+LEGACY_REGISTERED_MIGRATIONS = tuple(
+    RegisteredMigration(
+        version=version,
+        owner="legacy_v02",
+        name=f"legacy_{version:04d}",
+        statements=statements,
+        compatibility=True,
+    )
+    for version, statements in MIGRATIONS
+)
+MODULE_MIGRATIONS: tuple[RegisteredMigration, ...] = (
+    *DURABLE_WORK_MIGRATIONS,
+    *RECOVERY_MIGRATIONS,
+    *LINEAGE_MIGRATIONS,
+    *LAYOUT_MIGRATIONS,
+    *PROJECT_SOURCE_MIGRATIONS,
+    *PRODUCTION_MIGRATIONS[:2],
+    *PROMPTING_MIGRATIONS,
+    *PRODUCTION_MIGRATIONS[2:],
+)
+DATABASE_MIGRATION_REGISTRY = MigrationRegistry(
+    (*LEGACY_REGISTERED_MIGRATIONS, *MODULE_MIGRATIONS)
+)
+
 
 class Database:
     """SQLite access with a process-local single-writer boundary."""
@@ -960,29 +993,7 @@ class Database:
         with self._write_lock:
             connection = self.connect()
             try:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-                applied = {
-                    row["version"]
-                    for row in connection.execute("SELECT version FROM schema_migrations")
-                }
-                for version, statements in MIGRATIONS:
-                    if version in applied:
-                        continue
-                    connection.executescript(
-                        f"""
-                        BEGIN IMMEDIATE;
-                        {statements}
-                        INSERT INTO schema_migrations(version) VALUES ({version});
-                        COMMIT;
-                        """
-                    )
+                ModuleMigrationRunner(DATABASE_MIGRATION_REGISTRY).migrate(connection)
             finally:
                 connection.close()
 

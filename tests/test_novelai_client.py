@@ -4,15 +4,21 @@ import asyncio
 import base64
 import json
 from io import BytesIO
+from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
 from PIL import Image
 
+from backend.app.modules.production.adapters.novelai import map_prompt_plan_to_novelai
+from backend.app.modules.prompting.contracts import PromptPlan
+from backend.app.modules.prompting.public import prompt_plan_sha256
 from backend.app.novelai.client import (
     NovelAIAuthenticationError,
     NovelAIClient,
     NovelAIConfiguration,
+    NovelAIConfigurationError,
     NovelAIImageRequest,
     NovelAIInsufficientBalanceError,
     NovelAIInvalidRequestError,
@@ -22,6 +28,7 @@ from backend.app.novelai.client import (
     NovelAITemporaryError,
     NovelAIUnknownOutcomeError,
     PreciseReferenceInput,
+    novelai_correlation_id,
 )
 from backend.app.novelai.contracts import CONNECTION_TEST_PATH, GENERATION_PATH
 
@@ -161,7 +168,7 @@ def test_image_generation_uses_pinned_json_contract_and_validates_png() -> None:
     assert request.method == "POST"
     assert request.url.path == "/ai/generate-image"
     assert request.headers["Authorization"] == "Bearer unit-test-secret"
-    assert request.headers["X-Correlation-ID"] == "correlation-123"
+    assert request.headers["X-Correlation-ID"] == "Ab12Cd"
     payload = json.loads(request.content)
     assert payload["action"] == "generate"
     assert payload["model"] == "nai-diffusion-4-5-full"
@@ -240,7 +247,7 @@ def test_inpaint_uses_pinned_infill_fields_and_inpaint_model() -> None:
         transport=httpx.MockTransport(handler),
     )
     request = NovelAIImageRequest(
-        correlation_id="correlation-inpaint",
+        correlation_id="InP4nt",
         provider_model_id="nai-diffusion-4-5-full-inpainting",
         prompt="correct hand",
         negative_prompt="text, watermark",
@@ -329,11 +336,93 @@ def test_generation_connect_failure_is_definite_and_retryable_by_bounded_queue()
     assert request_count == 1
 
 
+def test_invalid_frozen_payload_fails_before_secret_is_read() -> None:
+    raw = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "contracts"
+            / "fixtures"
+            / "v0.3"
+            / "prompt-plan-double.json"
+        ).read_text(encoding="utf-8")
+    )
+    plan = PromptPlan.model_validate(raw)
+    plan = plan.model_copy(update={"content_sha256": prompt_plan_sha256(plan)})
+    mapped = map_prompt_plan_to_novelai(
+        prompt_plan=plan,
+        generation_spec_id=UUID("01900000-0000-7000-8000-000000000602"),
+        model_id="nai-diffusion-4-5-full",
+        contract_sha256="f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8",
+        capability_snapshot_sha256="a" * 64,
+        page_layout_draft_sha256="b" * 64,
+        width=1216,
+        height=896,
+        seed=1234,
+        steps=28,
+        scale=5,
+        sampler="k_euler_ancestral",
+        noise_schedule="karras",
+    )
+    tampered = mapped.payload.model_copy(
+        update={
+            "input": "tampered base",
+            "parameters": mapped.payload.parameters.model_copy(update={"prompt": "tampered base"}),
+        }
+    )
+    secret_reads = 0
+
+    def secret_reader(_profile_id: str) -> str:
+        nonlocal secret_reads
+        secret_reads += 1
+        return "unit-test-secret"
+
+    client = NovelAIClient(
+        NovelAIConfiguration(
+            provider_model_id="nai-diffusion-4-5-full",
+            credential_profile_id="novelai",
+        ),
+        secret_reader,
+        transport=httpx.MockTransport(lambda _request: httpx.Response(500)),
+    )
+    with pytest.raises(NovelAIConfigurationError):
+        request = NovelAIImageRequest(
+            correlation_id="Fr0zen",
+            provider_model_id="nai-diffusion-4-5-full",
+            prompt="compatibility-only",
+            negative_prompt="compatibility-only",
+            width=1216,
+            height=896,
+            steps=28,
+            scale=5,
+            seed=1234,
+            provider_execution_spec=mapped.execution_spec,
+            frozen_payload=tampered,
+        )
+        asyncio.run(client.generate_image(request))
+    assert secret_reads == 0
+
+
+def test_correlation_id_must_match_the_six_character_swagger_contract() -> None:
+    with pytest.raises(NovelAIConfigurationError, match="six alphanumeric"):
+        image_request(correlation_id="correlation-123")
+    with pytest.raises(NovelAIConfigurationError, match="six alphanumeric"):
+        image_request(correlation_id="A1_2-3")
+
+
+def test_generated_correlation_ids_match_contract_and_do_not_repeat() -> None:
+    values = {novelai_correlation_id() for _ in range(32)}
+
+    assert len(values) == 32
+    assert all(len(value) == 6 and value.isalnum() for value in values)
+
+
 def image_request(
-    *, precise_reference: PreciseReferenceInput | None = None
+    *,
+    precise_reference: PreciseReferenceInput | None = None,
+    correlation_id: str = "Ab12Cd",
 ) -> NovelAIImageRequest:
     return NovelAIImageRequest(
-        correlation_id="correlation-123",
+        correlation_id=correlation_id,
         provider_model_id="nai-diffusion-4-5-full",
         prompt="manga panel",
         negative_prompt="text, watermark",

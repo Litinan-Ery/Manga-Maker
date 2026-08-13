@@ -1,0 +1,1 @@
+"""Storyboard adaptation capability."""

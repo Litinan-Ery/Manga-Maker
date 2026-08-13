@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +12,13 @@ from tests.test_bibles_api import (
     approve_complete_bibles,
     generate_bibles,
     prepare_storyboard,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+DIMENSION_CAPABILITIES = json.loads(
+    (ROOT / "contracts" / "fixtures" / "v0.3" / "dimension-capabilities.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 
@@ -24,6 +34,10 @@ def test_estimate_and_job_freeze_exact_approved_versions_and_limits(
     assert estimate["estimated_cost_upper_anlas"] == 10
     assert estimate["external_request_created"] is False
     assert len(estimate["plan_fingerprint"]) == 64
+    assert len(estimate["layout_snapshot_sha256"]) == 64
+    assert estimate["panels"][0]["selected_width"] == 1024
+    assert estimate["panels"][0]["selected_height"] == 1536
+    assert len(estimate["panels"][0]["frame_content_sha256"]) == 64
 
     missing_confirmation = create_job(
         client,
@@ -50,6 +64,27 @@ def test_estimate_and_job_freeze_exact_approved_versions_and_limits(
     assert job["style_bible_version_id"] == estimate["style_bible_version_id"]
     assert job["novelai_config_revision"] == estimate["novelai_config_revision"]
     assert job["external_requests_started"] == 0
+    assert job["layout_snapshot_sha256"] == estimate["layout_snapshot_sha256"]
+    assert len(job["generation_approval_id"]) > 0
+    assert len(job["generation_approval_sha256"]) == 64
+    assert len(job["prompt_approval_hash"]) == 64
+    assert len(job["prompt_snapshot_sha256"]) == 64
+    assert job["candidate_count_per_panel"] == 1
+    assert job["quality_rule_version"] == "quality-rules-v1"
+    assert job["items"][0]["dimension_selection_id"] == estimate["panels"][0][
+        "dimension_selection_id"
+    ]
+    assert len(job["items"][0]["prompt_plan_id"]) > 0
+    assert job["items"][0]["prompt_plan_version"] >= 1
+    assert len(job["items"][0]["prompt_plan_sha256"]) == 64
+    assert len(job["items"][0]["prompt_package_sha256"]) == 64
+    assert job["items"][0]["character_tag_set_refs"]
+    assert len(job["items"][0]["provider_execution_spec_id"]) > 0
+    assert len(job["items"][0]["provider_execution_spec_sha256"]) == 64
+    assert len(job["items"][0]["provider_payload_sha256"]) == 64
+    assert job["items"][0]["provider_seed"] >= 0
+    assert job["items"][0]["candidate_count"] == 1
+    assert "provider_payload" not in job["items"][0]
     assert [item["panel_id"] for item in job["items"]] == [
         panel["panel_id"] for panel in estimate["panels"]
     ]
@@ -61,8 +96,11 @@ def test_estimate_and_job_freeze_exact_approved_versions_and_limits(
         chapter["chapter_id"],
         estimate,
     )
-    assert duplicate.status_code == 409
-    assert duplicate.json()["error"]["code"] == "GENERATION_JOB_ALREADY_ACTIVE"
+    assert duplicate.status_code == 201
+    assert duplicate.json()["job_id"] == job["job_id"]
+    with client.app.state.database.reader() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM generation_approvals").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 1
 
 
 def test_plan_change_and_stale_revision_fail_closed(
@@ -73,7 +111,7 @@ def test_plan_change_and_stale_revision_fail_closed(
 
     stale = client.post(
         f"/api/v1/projects/{project_id}/generation/jobs",
-        headers=session_headers,
+        headers={**session_headers, "Idempotency-Key": "stale-plan-job"},
         json={
             "chapter_id": chapter["chapter_id"],
             "per_panel_cost_ceiling_anlas": 11,
@@ -102,6 +140,59 @@ def test_plan_change_and_stale_revision_fail_closed(
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "GENERATION_JOB_REVISION_CONFLICT"
+
+
+def test_legacy_flat_prompt_is_readable_but_cannot_create_a_v03_job(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(client, session_headers)
+    with client.app.state.database.writer() as connection:
+        row = connection.execute(
+            """
+            SELECT pbv.prompt_bundle_version_id, pbv.document_json
+            FROM prompt_bundle_versions pbv
+            JOIN prompt_bundles pb ON pb.prompt_bundle_id = pbv.prompt_bundle_id
+            WHERE pb.project_id = ? AND pb.chapter_id = ? AND pbv.is_current = 1
+            """,
+            (project_id, chapter["chapter_id"]),
+        ).fetchone()
+        document = json.loads(str(row["document_json"]))
+        document["schema_version"] = "1.1"
+        for package in document["packages"]:
+            package.pop("structured_package")
+        connection.execute(
+            "UPDATE prompt_bundle_versions SET document_json = ? "
+            "WHERE prompt_bundle_version_id = ?",
+            (
+                json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                row["prompt_bundle_version_id"],
+            ),
+        )
+
+    workflow_response = client.get(
+        f"/api/v1/projects/{project_id}/prompting",
+        params={"chapter_id": chapter["chapter_id"]},
+    )
+    assert workflow_response.status_code == 200, workflow_response.text
+    workflow = workflow_response.json()
+    assert workflow["prompt_bundle"]["compatibility"] == {
+        "kind": "legacy_flat_prompt",
+        "access": "read_only",
+        "regeneration_required": True,
+        "eligible_for_new_job": False,
+    }
+    assert workflow["prompt_bundle"]["document"]["packages"][0]["compiled_prompt"]
+    assert workflow["generation_readiness"]["ready"] is False
+    assert workflow["generation_readiness"]["structured_prompt_ready"] is False
+
+    response = client.post(
+        f"/api/v1/projects/{project_id}/generation/estimate",
+        headers=session_headers,
+        json={"chapter_id": chapter["chapter_id"], "per_panel_cost_ceiling_anlas": 10},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "GENERATION_STRUCTURED_PROMPT_REQUIRED"
 
 
 def test_stale_novelai_contract_blocks_generation_plan(
@@ -319,6 +410,7 @@ def prepare_prompting(
     project_id: str,
     chapter_id: str,
 ) -> dict[str, Any]:
+    ensure_approved_layout(client, headers, project_id, chapter_id)
     generated_tags = client.post(
         f"/api/v1/projects/{project_id}/prompting/character-tags/generate",
         headers=headers,
@@ -339,15 +431,173 @@ def prepare_prompting(
     )
     assert generated_prompts.status_code == 201, generated_prompts.text
     prompt_version_id = generated_prompts.json()["version_id"]
+    snapshot_sha256 = generated_prompts.json()["snapshot_sha256"]
     approved_prompts = client.post(
         f"/api/v1/projects/{project_id}/prompting/prompt-bundles/"
         f"{prompt_version_id}/approve",
-        headers=headers,
+        headers={**headers, "Idempotency-Key": f"approve-prompt-{prompt_version_id}"},
+        json={"snapshot_sha256": snapshot_sha256},
     )
     assert approved_prompts.status_code == 200, approved_prompts.text
     return client.get(
         f"/api/v1/projects/{project_id}/prompting?chapter_id={chapter_id}"
     ).json()
+
+
+def ensure_approved_layout(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: str,
+    chapter_id: str,
+) -> list[dict[str, Any]]:
+    """Create and approve one provider-neutral layout for every storyboard page."""
+
+    existing = client.get(
+        f"/api/v1/projects/{project_id}/layouts",
+        params={"chapter_id": chapter_id},
+    )
+    assert existing.status_code == 200, existing.text
+    if existing.json():
+        return list(existing.json())
+
+    storyboard_response = client.get(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/current",
+        params={"chapter_id": chapter_id},
+    )
+    assert storyboard_response.status_code == 200, storyboard_response.text
+    storyboard = storyboard_response.json()
+    assert storyboard["approval_status"] == "approved"
+    bible_response = client.get(
+        f"/api/v1/projects/{project_id}/bibles",
+        params={"chapter_id": chapter_id},
+    )
+    assert bible_response.status_code == 200, bible_response.text
+    character_bible = bible_response.json()["character_bible"]["document"]
+    character_ids = {
+        alias.casefold(): character["character_id"]
+        for character in character_bible["characters"]
+        for alias in [character["name"], *character["aliases"]]
+    }
+
+    approved_layouts: list[dict[str, Any]] = []
+    for page in storyboard["document"]["pages"]:
+        layout_id = str(uuid4())
+        root_frame_id = str(uuid4())
+        panel_count = len(page["panels"])
+        gutter = 0.02
+        leaf_height = (0.92 - gutter * (panel_count - 1)) / panel_count
+        frames: list[dict[str, Any]] = [
+            {
+                "frame_id": root_frame_id,
+                "parent_frame_id": None,
+                "panel_id": None,
+                "order": None,
+                "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "aspect_ratio": 2 / 3,
+                "shot_scale": "establishing",
+                "focal_point": {"x": 0.5, "y": 0.5},
+                "character_positions": [],
+                "text_safe_zones": [],
+                "crop_safe_rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+            }
+        ]
+        for index, panel in enumerate(page["panels"], start=1):
+            leaf_y = 0.04 + (index - 1) * (leaf_height + gutter)
+            panel_character_ids = [
+                character_ids[name.casefold()] for name in panel["characters"]
+            ]
+            position_count = len(panel_character_ids)
+            character_positions = [
+                {
+                    "character_id": character_id,
+                    "center": {
+                        "x": (position_index + 1) / (position_count + 1),
+                        "y": 0.56,
+                    },
+                    "prominence": "primary" if position_index == 0 else "secondary",
+                }
+                for position_index, character_id in enumerate(panel_character_ids)
+            ]
+            frames.append(
+                {
+                    "frame_id": str(uuid4()),
+                    "parent_frame_id": root_frame_id,
+                    "panel_id": panel["panel_id"],
+                    "order": index,
+                    "rect": {
+                        "x": 0.04,
+                        "y": leaf_y,
+                        "width": 0.92,
+                        "height": leaf_height,
+                    },
+                    "aspect_ratio": (0.92 * 2048) / (leaf_height * 3072),
+                    "shot_scale": "medium",
+                    "focal_point": {"x": 0.5, "y": 0.5},
+                    "character_positions": character_positions,
+                    "text_safe_zones": [],
+                    "crop_safe_rect": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 1,
+                        "height": 1,
+                    },
+                }
+            )
+        draft = {
+            "schema_version": "1.0",
+            "page_layout_draft_id": layout_id,
+            "version": 1,
+            "page_id": page["page_id"],
+            "page_profile": "print_portrait_2_3",
+            "canvas": {"width": 2048, "height": 3072},
+            "reading_direction": "ltr_ttb",
+            "frames": frames,
+            "content_sha256": "0" * 64,
+            "approved_content_sha256": None,
+        }
+        created_response = client.post(
+            f"/api/v1/projects/{project_id}/layouts/drafts",
+            headers={**headers, "Idempotency-Key": f"test-layout-create-{page['page_id']}"},
+            json={
+                "chapter_id": chapter_id,
+                "storyboard_version_id": storyboard["storyboard_version_id"],
+                "draft": draft,
+            },
+        )
+        assert created_response.status_code == 201, created_response.text
+        created = created_response.json()
+        validation_body = {
+            "expected_revision": created["revision"],
+            "layout_content_sha256": created["layout"]["content_sha256"],
+            "storyboard_version_id": storyboard["storyboard_version_id"],
+            "dimension_capabilities": DIMENSION_CAPABILITIES,
+            "target_pixels": 1_572_864,
+            "max_crop_safe_risk": 1.0,
+        }
+        validated_response = client.post(
+            f"/api/v1/projects/{project_id}/layouts/"
+            f"{created['page_layout_draft_version_id']}/validate",
+            headers=headers,
+            json=validation_body,
+        )
+        assert validated_response.status_code == 200, validated_response.text
+        validated = validated_response.json()
+        assert validated["valid"], validated
+        approved_response = client.post(
+            f"/api/v1/projects/{project_id}/layouts/"
+            f"{created['page_layout_draft_version_id']}/approve",
+            headers={
+                **headers,
+                "Idempotency-Key": f"test-layout-approve-{page['page_id']}",
+            },
+            json={
+                **validation_body,
+                "dimension_selections": validated["dimension_outcomes"],
+            },
+        )
+        assert approved_response.status_code == 200, approved_response.text
+        approved_layouts.append(created)
+    return approved_layouts
 
 
 def estimate_plan(
@@ -373,7 +623,10 @@ def create_job(
 ):
     return client.post(
         f"/api/v1/projects/{project_id}/generation/jobs",
-        headers=headers,
+        headers={
+            **headers,
+            "Idempotency-Key": f"create-job-{estimate['plan_fingerprint']}-{confirmed}",
+        },
         json={
             "chapter_id": chapter_id,
             "per_panel_cost_ceiling_anlas": estimate["per_panel_cost_ceiling_anlas"],

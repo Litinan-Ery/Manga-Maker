@@ -12,10 +12,12 @@ import {
   createProject,
   getChapters,
   getHealth,
+  getLocalSessionCredentials,
   getVaultStatus,
   listProjects,
   preflightSource,
 } from "./api";
+import { LayoutWorkbench, createLayoutHttpClient } from "./features/layout";
 import { ChapterEditor } from "./ChapterEditor";
 import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
@@ -56,6 +58,11 @@ export function App() {
     () => projects.find((project) => project.project_id === selectedProjectId),
     [projects, selectedProjectId],
   );
+  const layoutClient = useMemo(() => {
+    if (!hasSession) return null;
+    const credentials = getLocalSessionCredentials();
+    return credentials ? createLayoutHttpClient(credentials) : null;
+  }, [hasSession]);
 
   const refreshProjects = useCallback(
     async (preferredProjectId?: string, signal?: AbortSignal) => {
@@ -342,6 +349,14 @@ export function App() {
                 refreshKey={adaptationRefreshKey}
                 onChanged={() => setBibleRefreshKey((current) => current + 1)}
               />
+              {layoutClient && (
+                <LayoutWorkbench
+                  projectId={selectedProjectId}
+                  chapters={chapterSet.chapters}
+                  client={layoutClient}
+                  onError={setActionError}
+                />
+              )}
               <BibleWorkbench
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}

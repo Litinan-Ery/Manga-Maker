@@ -1177,6 +1177,24 @@ class ExportService:
                         row["workspace_path"] = str(new_workspace)
                         row["title"] = local_title
                         row["source_project_id"] = source_project_id
+                    if table == "prompt_bundle_approvals" and row.get(
+                        "idempotency_key"
+                    ):
+                        # An idempotency key identifies the original local write, not the
+                        # portable approval artifact. Give a restored copy its own local
+                        # identity so importing alongside the source cannot collide.
+                        restored_version_id = str(row["prompt_bundle_version_id"])
+                        row["idempotency_key"] = (
+                            f"restore:{import_preflight_id}:{restored_version_id}"
+                        )
+                        row["request_sha256"] = hashlib.sha256(
+                            f"{restored_version_id}|{row['snapshot_sha256']}".encode()
+                        ).hexdigest()
+                    if table == "generation_jobs":
+                        # GenerationApproval portability is introduced by MM-059.
+                        # Until then imported history is intentionally non-runnable;
+                        # remove the live-only FK and require a fresh estimate/approval.
+                        row["generation_approval_id"] = None
                     if table in ("source_preflights", "source_files"):
                         for column in ("staging_path", "original_path", "normalized_path"):
                             if row.get(column):

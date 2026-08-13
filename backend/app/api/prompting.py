@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..prompting.models import CharacterTagBundleDocument, PromptDraftBundleDocument
@@ -24,6 +25,20 @@ class ReviseCharacterTagsRequest(BaseModel):
 
 class RevisePromptBundleRequest(BaseModel):
     document: PromptDraftBundleDocument
+
+
+class ApprovePromptBundleRequest(BaseModel):
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def idempotency_key(value: str) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > 128:
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency-Key must be an opaque value of at most 128 characters",
+        )
+    return normalized
 
 
 def verify_session(request: Request, headers: Headers) -> None:
@@ -119,7 +134,46 @@ def approve_prompt_bundle(
     project_id: str,
     version_id: str,
     request: Request,
+    body: ApprovePromptBundleRequest,
     headers: Headers,
+    raw_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> dict[str, Any]:
     verify_session(request, headers)
-    return prompting_service(request).approve_prompt_bundle(project_id, version_id)
+    key = idempotency_key(raw_idempotency_key)
+    return prompting_service(request).approve_prompt_bundle(
+        project_id,
+        version_id,
+        snapshot_sha256=body.snapshot_sha256,
+        idempotency_key=key,
+        request_sha256=hashlib.sha256(
+            f"{version_id}|{body.snapshot_sha256}".encode()
+        ).hexdigest(),
+    )
+
+
+@router.get("/prompt-bundles/{version_id}/impact")
+def prompt_bundle_impact(
+    project_id: str,
+    version_id: str,
+    request: Request,
+    snapshot_sha256: Annotated[str, Query(pattern=r"^[0-9a-f]{64}$")],
+) -> dict[str, Any]:
+    return prompting_service(request).prompt_impact(
+        project_id,
+        version_id,
+        snapshot_sha256=snapshot_sha256,
+    )
+
+
+@router.get("/prompt-bundles/{version_id}/inspector")
+def prompt_bundle_inspector(
+    project_id: str,
+    version_id: str,
+    request: Request,
+    snapshot_sha256: Annotated[str, Query(pattern=r"^[0-9a-f]{64}$")],
+) -> dict[str, Any]:
+    return prompting_service(request).prompt_inspector(
+        project_id,
+        version_id,
+        snapshot_sha256=snapshot_sha256,
+    )

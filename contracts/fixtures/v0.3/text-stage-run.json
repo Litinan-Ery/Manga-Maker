@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "text_stage_run_id": "01900000-0000-7000-8000-000000000701",
+  "version": 1,
+  "chapter_id": "01900000-0000-7000-8000-000000000702",
+  "stage": "prompt_plan",
+  "state": "completed",
+  "shard_index": 0,
+  "shard_count": 2,
+  "capability_snapshot_id": "01900000-0000-7000-8000-000000000703",
+  "capability_snapshot_sha256": "7171717171717171717171717171717171717171717171717171717171717171",
+  "token_budget": {
+    "context_window_tokens": 32768,
+    "reserved_output_tokens": 4096,
+    "planned_input_tokens": 12000,
+    "hard_constraint_tokens": 1800,
+    "status": "fits"
+  },
+  "prompt_template_version": "panel-plan-v2",
+  "input_sha256": "7272727272727272727272727272727272727272727272727272727272727272",
+  "output_sha256": "7373737373737373737373737373737373737373737373737373737373737373",
+  "checkpoint_id": "01900000-0000-7000-8000-000000000704",
+  "truncation_report": {
+    "schema_version": "1.0",
+    "report_id": "01900000-0000-7000-8000-000000000705",
+    "version": 1,
+    "items": [
+      {
+        "field_path": "chapter.context.previous_scene_summary",
+        "policy": "summarized",
+        "original_tokens": 1200,
+        "retained_tokens": 300,
+        "reason": "keep the current shard below its conservative input budget"
+      },
+      {
+        "field_path": "constraints.character_tag_sets",
+        "policy": "preserved",
+        "original_tokens": 450,
+        "retained_tokens": 450,
+        "reason": "approved character tags are a hard constraint"
+      }
+    ],
+    "hard_constraints_preserved": true,
+    "content_sha256": "7474747474747474747474747474747474747474747474747474747474747474"
+  },
+  "content_sha256": "7575757575757575757575757575757575757575757575757575757575757575"
+}

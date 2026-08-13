@@ -1,0 +1,67 @@
+{
+  "schema_version": "2.0",
+  "prompt_package_id": "01900000-0000-7000-8000-000000000204",
+  "version": 1,
+  "panel_id": "01900000-0000-7000-8000-000000000102",
+  "text_model_source": {
+    "text_model_profile_id": "01900000-0000-7000-8000-000000000205",
+    "profile_version": 3,
+    "model_name": "fixture-structured-model",
+    "prompt_template_version": "panel-plan-v2",
+    "text_stage_run_id": "01900000-0000-7000-8000-000000000701"
+  },
+  "prompt_plan": {
+    "schema_version": "2.0",
+    "prompt_plan_id": "01900000-0000-7000-8000-000000000202",
+    "version": 1,
+    "panel_id": "01900000-0000-7000-8000-000000000102",
+    "base": {
+      "positive_tags": ["2girls", "night street", "wide shot"],
+      "negative_tags": ["text", "watermark", "logo"],
+      "relationship_action": "character one hands a brass key to character two"
+    },
+    "characters": [
+      {
+        "character_id": "01900000-0000-7000-8000-000000000301",
+        "character_tag_set_version_id": "01900000-0000-7000-8000-000000000501",
+        "fixed_tags": ["black bob hair", "white trench coat"],
+        "fixed_tags_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "variable_positive_tags": ["left side", "offering a brass key"],
+        "negative_tags": ["wrong hair color", "wrong outfit"],
+        "action": "extends her right hand with the key",
+        "order": 0,
+        "center": {"x": 0.3, "y": 0.56}
+      },
+      {
+        "character_id": "01900000-0000-7000-8000-000000000302",
+        "character_tag_set_version_id": "01900000-0000-7000-8000-000000000502",
+        "fixed_tags": ["long silver hair", "dark school uniform"],
+        "fixed_tags_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "variable_positive_tags": ["right side", "receiving a brass key"],
+        "negative_tags": ["short hair", "white coat"],
+        "action": "reaches out with her left hand",
+        "order": 1,
+        "center": {"x": 0.7, "y": 0.56}
+      }
+    ],
+    "style_tags": ["black and white manga", "clean screentone"],
+    "continuity_tags": ["same brass key", "wet pavement"],
+    "layout_constraints": {
+      "page_layout_draft_id": "01900000-0000-7000-8000-000000000001",
+      "page_layout_draft_version": 1,
+      "frame_id": "01900000-0000-7000-8000-000000000012",
+      "frame_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "aspect_ratio": 1.3333333333333333,
+      "focal_point": {"x": 0.56, "y": 0.48},
+      "reserved_text_zones": [
+        {"x": 0.05, "y": 0.04, "width": 0.28, "height": 0.2},
+        {"x": 0.67, "y": 0.04, "width": 0.28, "height": 0.2}
+      ],
+      "crop_safe_rect": {"x": 0.06, "y": 0.05, "width": 0.88, "height": 0.88}
+    },
+    "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "prompt_plan_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "content_sha256": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+  "approved_content_sha256": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+}

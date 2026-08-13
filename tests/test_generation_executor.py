@@ -32,17 +32,13 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
     prepared = prepare_job(client, session_headers, title_suffix="素材")
-    started = transition(
-        client, session_headers, prepared["project_id"], prepared["job"], "start"
-    )
+    started = transition(client, session_headers, prepared["project_id"], prepared["job"], "start")
     provider = MockNovelAIClient()
     install_image_provider(client, provider)
 
     asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
 
-    job = client.app.state.generation_queue.get_job(
-        prepared["project_id"], started["job_id"]
-    )
+    job = client.app.state.generation_queue.get_job(prepared["project_id"], started["job_id"])
     assert job["status"] == "completed"
     assert job["items_claimed"] == 1
     assert job["calls_started"] == 1
@@ -53,14 +49,12 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     assert provider.generation_calls == 1
     assert job["items"][0]["asset_version_id"]
 
-    assets = client.get(
-        f"/api/v1/projects/{prepared['project_id']}/generation/assets"
-    )
+    assets = client.get(f"/api/v1/projects/{prepared['project_id']}/generation/assets")
     assert assets.status_code == 200
     asset = assets.json()[0]
     assert asset["version"] == 1
     assert asset["is_current"] is True
-    assert (asset["width"], asset["height"]) == (832, 1216)
+    assert (asset["width"], asset["height"]) == (1024, 1536)
 
     denied = client.get(
         f"/api/v1/projects/{prepared['project_id']}/generation/assets/"
@@ -74,15 +68,18 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     )
     assert content.status_code == 200
     with Image.open(BytesIO(content.content)) as image:
-        assert image.size == (832, 1216)
+        assert image.size == (1024, 1536)
 
     with client.app.state.database.reader() as connection:
         row = connection.execute(
             """
             SELECT av.original_relative_path, av.provenance_relative_path,
-                   gs.document_json, p.workspace_path
+                   gs.document_json, p.workspace_path,
+                   pes.provider_execution_spec_id, pes.execution_spec_json,
+                   pes.payload_json, pes.payload_sha256
             FROM asset_versions av
             JOIN generation_specs gs ON gs.spec_id = av.spec_id
+            JOIN provider_execution_specs pes ON pes.generation_spec_id = gs.spec_id
             JOIN projects p ON p.project_id = av.project_id
             WHERE av.asset_version_id = ?
             """,
@@ -98,11 +95,138 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     assert provenance["cost_record_status"] == "not_reported"
     assert provenance["credential_included"] is False
     assert provenance["correlation_id"] == spec["correlation_id"]
+    assert provenance["provider_execution_spec_id"] == row["provider_execution_spec_id"]
+    assert provenance["provider_payload_sha256"] == row["payload_sha256"]
     assert provenance["generated_at"].endswith("+00:00")
     assert spec["seed"] == asset["seed"]
     assert "no text" in spec["prompt"]
     serialized = json.dumps({"provenance": provenance, "spec": spec})
     assert "unit-novelai-secret" not in serialized
+    execution_spec = json.loads(str(row["execution_spec_json"]))
+    payload = json.loads(str(row["payload_json"]))
+    positive = payload["parameters"]["v4_prompt"]["caption"]["char_captions"]
+    negative = payload["parameters"]["v4_negative_prompt"]["caption"]["char_captions"]
+    assert len(positive) == len(negative) == len(execution_spec["character_captions"])
+    assert positive and all(item["char_caption"] for item in positive)
+    assert negative and all(item["char_caption"] for item in negative)
+    assert [item["centers"] for item in positive] == [item["centers"] for item in negative]
+    assert "unit-novelai-secret" not in json.dumps(
+        {"execution_spec": execution_spec, "payload": payload}
+    )
+
+
+def test_layout_change_after_job_creation_blocks_before_secret_read(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="版式过期")
+    project_id = prepared["project_id"]
+    job = prepared["job"]
+    item = job["items"][0]
+    layout_response = client.get(
+        f"/api/v1/projects/{project_id}/layouts/drafts/{item['page_layout_draft_id']}"
+    )
+    assert layout_response.status_code == 200, layout_response.text
+    current = layout_response.json()
+    changed = json.loads(json.dumps(current["layout"]))
+    leaf = next(frame for frame in changed["frames"] if frame["panel_id"] is not None)
+    leaf["focal_point"]["x"] = 0.6
+    saved = client.post(
+        f"/api/v1/projects/{project_id}/layouts/"
+        f"{current['page_layout_draft_version_id']}/revisions",
+        headers={**session_headers, "Idempotency-Key": "change-layout-before-spec"},
+        json={
+            "expected_revision": current["revision"],
+            "storyboard_version_id": current["storyboard"]["storyboard_version_id"],
+            "draft": changed,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    started = transition(client, session_headers, project_id, job, "start")
+    secret_reads = 0
+    original_get_secret = client.app.state.vault.get_secret
+
+    def counted_get_secret(profile_id: str) -> str:
+        nonlocal secret_reads
+        secret_reads += 1
+        return original_get_secret(profile_id)
+
+    client.app.state.vault.get_secret = counted_get_secret
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    failed = client.app.state.generation_queue.get_job(project_id, started["job_id"])
+    assert failed["status"] == "failed"
+    assert failed["calls_started"] == 0
+    assert secret_reads == 0
+    with client.app.state.database.reader() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM generation_specs WHERE item_id = ?",
+                (item["item_id"],),
+            ).fetchone()[0]
+            == 0
+        )
+        stale_count = connection.execute(
+            """
+            SELECT COUNT(*) FROM artifact_versions
+            WHERE artifact_type = 'prompt_package'
+              AND project_id = ? AND is_stale = 1
+            """,
+            (project_id,),
+        ).fetchone()[0]
+        assert stale_count == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM asset_versions WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_tampered_frozen_provider_payload_blocks_before_secret_read(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="冻结载荷篡改")
+    project_id = prepared["project_id"]
+    started = transition(
+        client, session_headers, project_id, prepared["job"], "start"
+    )
+    with client.app.state.database.writer() as connection:
+        row = connection.execute(
+            "SELECT item_id, provider_payload_json FROM generation_job_items "
+            "WHERE job_id = ?",
+            (started["job_id"],),
+        ).fetchone()
+        payload = json.loads(str(row["provider_payload_json"]))
+        payload["parameters"]["seed"] += 1
+        connection.execute(
+            "UPDATE generation_job_items SET provider_payload_json = ? WHERE item_id = ?",
+            (
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                row["item_id"],
+            ),
+        )
+
+    provider = MockNovelAIClient()
+    install_image_provider(client, provider)
+    secret_reads = 0
+    original_get_secret = client.app.state.vault.get_secret
+
+    def counted_get_secret(profile_id: str) -> str:
+        nonlocal secret_reads
+        secret_reads += 1
+        return original_get_secret(profile_id)
+
+    client.app.state.vault.get_secret = counted_get_secret
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    failed = client.app.state.generation_queue.get_job(project_id, started["job_id"])
+    assert failed["status"] == "failed"
+    assert failed["calls_started"] == 0
+    assert failed["items"][0]["last_error_code"] == "GENERATION_APPROVAL_STALE"
+    assert secret_reads == 0
+    assert provider.generation_calls == 0
 
 
 def test_precise_reference_is_compiled_once_with_hashes_and_padding(
@@ -112,8 +236,7 @@ def test_precise_reference_is_compiled_once_with_hashes_and_padding(
     character = ready_bundle["character_bible"]
     character_id = character["document"]["characters"][0]["character_id"]
     uploaded = client.post(
-        f"/api/v1/projects/{project_id}/bibles/character/"
-        f"{character['version_id']}/references",
+        f"/api/v1/projects/{project_id}/bibles/character/{character['version_id']}/references",
         headers=session_headers,
         data={
             "character_id": character_id,
@@ -125,8 +248,7 @@ def test_precise_reference_is_compiled_once_with_hashes_and_padding(
     assert uploaded.status_code == 201
     next_character = uploaded.json()["bible"]
     approved = client.post(
-        f"/api/v1/projects/{project_id}/bibles/character/"
-        f"{next_character['version_id']}/approve",
+        f"/api/v1/projects/{project_id}/bibles/character/{next_character['version_id']}/approve",
         headers=session_headers,
     )
     assert approved.status_code == 200
@@ -139,9 +261,7 @@ def test_precise_reference_is_compiled_once_with_hashes_and_padding(
     )
 
     estimate = estimate_plan(client, session_headers, project_id, chapter["chapter_id"])
-    created = create_job(
-        client, session_headers, project_id, chapter["chapter_id"], estimate
-    )
+    created = create_job(client, session_headers, project_id, chapter["chapter_id"], estimate)
     assert created.status_code == 201
     started = transition(client, session_headers, project_id, created.json(), "start")
     provider = MockNovelAIClient()
@@ -166,7 +286,7 @@ def test_temporary_provider_errors_retry_only_within_frozen_limits(
     estimate = estimate_plan(client, session_headers, project_id, chapter["chapter_id"])
     created = client.post(
         f"/api/v1/projects/{project_id}/generation/jobs",
-        headers=session_headers,
+        headers={**session_headers, "Idempotency-Key": "temporary-retry-job"},
         json={
             "chapter_id": chapter["chapter_id"],
             "per_panel_cost_ceiling_anlas": 10,
@@ -196,19 +316,13 @@ def test_unknown_provider_outcome_stops_without_replay(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
     prepared = prepare_job(client, session_headers, title_suffix="未知")
-    started = transition(
-        client, session_headers, prepared["project_id"], prepared["job"], "start"
-    )
-    provider = MockNovelAIClient(
-        generation_failure=NovelAIUnknownOutcomeError("connection lost")
-    )
+    started = transition(client, session_headers, prepared["project_id"], prepared["job"], "start")
+    provider = MockNovelAIClient(generation_failure=NovelAIUnknownOutcomeError("connection lost"))
     install_image_provider(client, provider)
 
     asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
 
-    job = client.app.state.generation_queue.get_job(
-        prepared["project_id"], started["job_id"]
-    )
+    job = client.app.state.generation_queue.get_job(prepared["project_id"], started["job_id"])
     assert job["status"] == "needs_review"
     assert job["calls_started"] == 1
     assert job["calls_completed"] == 0
@@ -223,9 +337,7 @@ def test_disk_full_after_provider_response_stops_without_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = prepare_job(client, session_headers, title_suffix="生成磁盘不足")
-    started = transition(
-        client, session_headers, prepared["project_id"], prepared["job"], "start"
-    )
+    started = transition(client, session_headers, prepared["project_id"], prepared["job"], "start")
     provider = MockNovelAIClient()
     install_image_provider(client, provider)
 
@@ -235,9 +347,7 @@ def test_disk_full_after_provider_response_stops_without_replay(
     monkeypatch.setattr("backend.app.generation.assets.write_synced", disk_full)
     asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
 
-    job = client.app.state.generation_queue.get_job(
-        prepared["project_id"], started["job_id"]
-    )
+    job = client.app.state.generation_queue.get_job(prepared["project_id"], started["job_id"])
     assert job["status"] == "needs_review"
     assert job["calls_started"] == 1
     assert job["calls_completed"] == 0
@@ -251,18 +361,14 @@ def test_locked_vault_fails_before_provider_request_is_counted(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
     prepared = prepare_job(client, session_headers, title_suffix="凭证锁定")
-    started = transition(
-        client, session_headers, prepared["project_id"], prepared["job"], "start"
-    )
+    started = transition(client, session_headers, prepared["project_id"], prepared["job"], "start")
     provider = MockNovelAIClient()
     install_image_provider(client, provider)
     client.app.state.vault.lock()
 
     asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
 
-    job = client.app.state.generation_queue.get_job(
-        prepared["project_id"], started["job_id"]
-    )
+    job = client.app.state.generation_queue.get_job(prepared["project_id"], started["job_id"])
     assert job["status"] == "failed"
     assert job["calls_started"] == 0
     assert job["allocated_cost_anlas"] == 0
@@ -275,12 +381,9 @@ def test_execute_endpoint_requires_exact_user_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = prepare_job(client, session_headers, title_suffix="确认")
-    started = transition(
-        client, session_headers, prepared["project_id"], prepared["job"], "start"
-    )
+    started = transition(client, session_headers, prepared["project_id"], prepared["job"], "start")
     endpoint = (
-        f"/api/v1/projects/{prepared['project_id']}/generation/jobs/"
-        f"{started['job_id']}/execute"
+        f"/api/v1/projects/{prepared['project_id']}/generation/jobs/{started['job_id']}/execute"
     )
     scheduled: list[str] = []
 
@@ -327,9 +430,7 @@ def test_execute_endpoint_requires_exact_user_confirmation(
 class TwoTemporaryFailures(MockNovelAIClient):
     failures_remaining = 2
 
-    async def generate_image(
-        self, request: NovelAIImageRequest
-    ) -> NovelAIGeneratedImage:
+    async def generate_image(self, request: NovelAIImageRequest) -> NovelAIGeneratedImage:
         self.generation_calls += 1
         if self.failures_remaining > 0:
             self.failures_remaining -= 1
@@ -343,8 +444,8 @@ async def no_sleep(_delay: float) -> None:
 
 
 def install_image_provider(client: TestClient, provider: Any) -> None:
-    client.app.state.generation_executor.provider_factory = (
-        lambda _configuration, _secret_reader: provider
+    client.app.state.generation_executor.provider_factory = lambda _configuration, _secret_reader: (
+        provider
     )
 
 

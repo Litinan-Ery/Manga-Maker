@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -74,6 +86,16 @@ def revision_service(request: Request) -> RevisionService:
     return cast(RevisionService, request.app.state.revisions)
 
 
+def idempotency_key(value: str) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > 128:
+        raise HTTPException(
+            status_code=422,
+            detail="Idempotency-Key must be an opaque value of at most 128 characters",
+        )
+    return normalized
+
+
 @router.post("/estimate")
 def estimate(
     project_id: str,
@@ -95,8 +117,15 @@ def create_job(
     request: Request,
     body: CreateJobRequest,
     headers: Headers,
+    raw_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    key = idempotency_key(raw_idempotency_key)
+    request_sha256 = hashlib.sha256(
+        json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
     return queue_service(request).create_job(
         project_id,
         body.chapter_id,
@@ -105,6 +134,8 @@ def create_job(
         max_calls=body.max_calls,
         max_cost_anlas=body.max_cost_anlas,
         confirmed=body.confirmed,
+        idempotency_key=key,
+        request_sha256=request_sha256,
     )
 
 
@@ -300,8 +331,13 @@ def create_revision_job(
     request: Request,
     body: CreateRevisionJobRequest,
     headers: Headers,
+    raw_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    key = idempotency_key(raw_idempotency_key)
+    request_sha256 = hashlib.sha256(
+        json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     return revision_service(request).create_job(
         project_id,
         body.operation,
@@ -315,4 +351,6 @@ def create_revision_job(
         max_calls=body.max_calls,
         max_cost_anlas=body.max_cost_anlas,
         confirmed=body.confirmed,
+        idempotency_key=key,
+        request_sha256=request_sha256,
     )

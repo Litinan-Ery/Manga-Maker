@@ -14,6 +14,7 @@ PROJECT_DIRECTORIES = (
     "source/preflight",
     "source/chapters",
     "storyboard/versions",
+    "layouts/versions",
     "bibles/characters",
     "bibles/styles",
     "assets/references",
@@ -32,6 +33,7 @@ class ProjectRecord:
     title: str
     status: str
     revision: int
+    workflow_version: str
     created_at: str
     updated_at: str
 
@@ -42,6 +44,7 @@ class ProjectRecord:
             title=str(row["title"]),
             status=str(row["status"]),
             revision=int(row["revision"]),
+            workflow_version=str(row["workflow_version"]),
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
         )
@@ -75,6 +78,7 @@ class ProjectService:
                 "project_id": project_id,
                 "title": normalized_title,
                 "status": "draft",
+                "workflow_version": "v03",
             }
             self._write_json(staging_path / "manifest.json", manifest)
             os.replace(staging_path, final_path)
@@ -83,8 +87,9 @@ class ProjectService:
                 with self.database.writer() as connection:
                     connection.execute(
                         """
-                        INSERT INTO projects(project_id, title, workspace_path)
-                        VALUES (?, ?, ?)
+                        INSERT INTO projects(
+                            project_id, title, workspace_path, workflow_version
+                        ) VALUES (?, ?, ?, 'v03')
                         """,
                         (project_id, normalized_title, str(final_path)),
                     )
@@ -112,7 +117,8 @@ class ProjectService:
         with self.database.reader() as connection:
             row = connection.execute(
                 """
-                SELECT project_id, title, status, revision, created_at, updated_at
+                SELECT project_id, title, status, revision, workflow_version,
+                       created_at, updated_at
                 FROM projects WHERE project_id = ?
                 """,
                 (project_id,),
@@ -129,7 +135,8 @@ class ProjectService:
         with self.database.reader() as connection:
             rows = connection.execute(
                 """
-                SELECT project_id, title, status, revision, created_at, updated_at
+                SELECT project_id, title, status, revision, workflow_version,
+                       created_at, updated_at
                 FROM projects ORDER BY updated_at DESC, project_id DESC
                 """
             ).fetchall()

@@ -5,14 +5,64 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Literal, cast
+from uuid import NAMESPACE_URL, uuid5
 
 from ..adaptation.models import StoryboardDocument
+from ..bibles.models import CharacterBibleDocument, CharacterProfile, StyleBibleDocument
 from ..bibles.service import BibleService
 from ..database import Database
 from ..errors import ApplicationError
 from ..ids import uuid7
-from ..novelai.contracts import CONTRACT_SHA256, MAPPING_VERSION
+from ..modules.production.adapters.novelai import map_prompt_plan_to_novelai
+from ..modules.production.errors import ProviderMappingError
+from ..modules.prompting.public import PromptPackage, require_prompt_package_integrity
+from ..novelai.contracts import CONTRACT_SHA256, MAPPING_VERSION, require_model_profile
 from ..prompting.service import PromptingService
+from ..shared_kernel import canonical_sha256
+from .references import ReferencePreparationError, prepare_precise_reference
+
+DEFAULT_CANDIDATE_COUNT_PER_PANEL = 1
+QUALITY_RULE_VERSION = "quality-rules-v1"
+GENERATION_PARAMETER_VERSION = "novelai-v4-safe-defaults-1"
+
+
+def _redacted_provider_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expose only the non-sensitive mapping preview; never return image/base64 fields."""
+
+    redacted = cast(dict[str, Any], json.loads(json.dumps(payload)))
+    parameters = cast(dict[str, Any], redacted.get("parameters", {}))
+    for field in ("image", "mask", "director_reference_images"):
+        if field in parameters:
+            value = parameters[field]
+            parameters[field] = (
+                ["[local image omitted]" for _ in value]
+                if isinstance(value, list)
+                else "[local image omitted]"
+            )
+    return redacted
+
+
+def _match_characters(
+    panel_names: list[str], profiles: list[CharacterProfile]
+) -> list[CharacterProfile]:
+    wanted = {name.strip().casefold() for name in panel_names if name.strip()}
+    return [
+        profile
+        for profile in profiles
+        if profile.name.strip().casefold() in wanted
+        or any(alias.strip().casefold() in wanted for alias in profile.aliases)
+    ]
+
+
+def _first_reference_candidate(
+    characters: list[CharacterProfile], style: StyleBibleDocument
+) -> tuple[str, str] | None:
+    for character in characters:
+        if character.reference_asset_ids:
+            return str(character.reference_asset_ids[0]), "character"
+    if style.reference_asset_ids:
+        return str(style.reference_asset_ids[0]), "style"
+    return None
 
 JobStatus = Literal[
     "draft",
@@ -39,8 +89,37 @@ class PlannedPanel:
     compiled_prompt: str
     compiled_negative_prompt: str
     compiled_prompt_sha256: str
+    prompt_package_sha256: str
+    prompt_plan_id: str
+    prompt_plan_version: int
+    prompt_plan_sha256: str
+    prompt_plan: dict[str, Any]
+    character_tag_set_refs: tuple[dict[str, Any], ...]
+    provider_execution_spec_id: str
+    provider_execution_spec: dict[str, Any]
+    provider_execution_spec_sha256: str
+    provider_payload_sha256: str
+    provider_payload: dict[str, Any]
+    provider_seed: int
+    candidate_count: int
+    reference_use: dict[str, Any] | None
+    page_layout_draft_id: str
+    page_layout_draft_version_id: str
+    layout_version: int
+    layout_content_sha256: str
+    layout_approval_id: str
+    layout_approval_sha256: str
+    frame_id: str
+    frame_content_sha256: str
+    dimension_selection_id: str
+    dimension_selection_sha256: str
+    selected_width: int
+    selected_height: int
+    expected_crop_ratio: float
+    dimension_rule_version: str
+    capability_snapshot_sha256: str
 
-    def payload(self) -> dict[str, int | str]:
+    def payload(self) -> dict[str, Any]:
         return {
             "ordinal": self.ordinal,
             "page_id": self.page_id,
@@ -52,7 +131,41 @@ class PlannedPanel:
             "compiled_prompt": self.compiled_prompt,
             "compiled_negative_prompt": self.compiled_negative_prompt,
             "compiled_prompt_sha256": self.compiled_prompt_sha256,
+            "prompt_package_sha256": self.prompt_package_sha256,
+            "prompt_plan_id": self.prompt_plan_id,
+            "prompt_plan_version": self.prompt_plan_version,
+            "prompt_plan_sha256": self.prompt_plan_sha256,
+            "prompt_plan": self.prompt_plan,
+            "character_tag_set_refs": list(self.character_tag_set_refs),
+            "provider_execution_spec_id": self.provider_execution_spec_id,
+            "provider_execution_spec": self.provider_execution_spec,
+            "provider_execution_spec_sha256": self.provider_execution_spec_sha256,
+            "provider_payload_sha256": self.provider_payload_sha256,
+            "provider_payload": _redacted_provider_payload(self.provider_payload),
+            "provider_seed": self.provider_seed,
+            "candidate_count": self.candidate_count,
+            "reference_use": self.reference_use,
+            "page_layout_draft_id": self.page_layout_draft_id,
+            "page_layout_draft_version_id": self.page_layout_draft_version_id,
+            "layout_version": self.layout_version,
+            "layout_content_sha256": self.layout_content_sha256,
+            "layout_approval_id": self.layout_approval_id,
+            "layout_approval_sha256": self.layout_approval_sha256,
+            "frame_id": self.frame_id,
+            "frame_content_sha256": self.frame_content_sha256,
+            "dimension_selection_id": self.dimension_selection_id,
+            "dimension_selection_sha256": self.dimension_selection_sha256,
+            "selected_width": self.selected_width,
+            "selected_height": self.selected_height,
+            "expected_crop_ratio": self.expected_crop_ratio,
+            "dimension_rule_version": self.dimension_rule_version,
+            "capability_snapshot_sha256": self.capability_snapshot_sha256,
         }
+
+    def freeze_payload(self) -> dict[str, Any]:
+        payload = self.payload()
+        payload["provider_payload"] = self.provider_payload
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +185,11 @@ class GenerationPlan:
     contract_sha256: str
     credential_profile_id: str
     timeout_seconds: float
+    layout_snapshot_sha256: str
+    prompt_approval_hash: str
+    prompt_snapshot_sha256: str
+    candidate_count_per_panel: int
+    quality_rule_version: str
     panels: tuple[PlannedPanel, ...]
     page_count: int
     per_panel_cost_ceiling_anlas: int
@@ -83,7 +201,9 @@ class GenerationPlan:
 
     @property
     def estimated_cost_upper_anlas(self) -> int:
-        return sum(panel.cost_ceiling_anlas for panel in self.panels)
+        return sum(
+            panel.cost_ceiling_anlas * panel.candidate_count for panel in self.panels
+        )
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -102,9 +222,14 @@ class GenerationPlan:
             "contract_sha256": self.contract_sha256,
             "credential_profile_id": self.credential_profile_id,
             "timeout_seconds": self.timeout_seconds,
+            "layout_snapshot_sha256": self.layout_snapshot_sha256,
+            "prompt_approval_hash": self.prompt_approval_hash,
+            "prompt_snapshot_sha256": self.prompt_snapshot_sha256,
+            "candidate_count_per_panel": self.candidate_count_per_panel,
+            "quality_rule_version": self.quality_rule_version,
             "page_count": self.page_count,
             "panel_count": self.panel_count,
-            "estimated_calls": self.panel_count,
+            "estimated_calls": self.panel_count * self.candidate_count_per_panel,
             "per_panel_cost_ceiling_anlas": self.per_panel_cost_ceiling_anlas,
             "estimated_cost_upper_anlas": self.estimated_cost_upper_anlas,
             "cost_basis": "user_confirmed_per_panel_ceiling",
@@ -163,6 +288,8 @@ class GenerationQueueService:
         max_calls: int,
         max_cost_anlas: int,
         confirmed: bool,
+        idempotency_key: str,
+        request_sha256: str,
     ) -> dict[str, Any]:
         if not confirmed:
             raise ApplicationError(
@@ -181,7 +308,8 @@ class GenerationQueueService:
                 message="分镜、设定、模型或成本预留已经变化，请重新估算并确认。",
                 status_code=409,
             )
-        if max_calls < plan.panel_count or max_calls > plan.panel_count * 3:
+        required_calls = plan.panel_count * plan.candidate_count_per_panel
+        if max_calls < required_calls or max_calls > required_calls * 3:
             raise ApplicationError(
                 code="GENERATION_CALL_LIMIT_INVALID",
                 message="调用上限必须覆盖全部面板，且不得超过面板数的三倍。",
@@ -200,10 +328,87 @@ class GenerationQueueService:
                 status_code=422,
             )
 
+        with self.database.reader() as connection:
+            existing = connection.execute(
+                """
+                SELECT ga.request_sha256, ga.plan_fingerprint, gj.job_id
+                FROM generation_approvals ga
+                LEFT JOIN generation_jobs gj
+                  ON gj.generation_approval_id = ga.generation_approval_id
+                WHERE ga.project_id = ? AND ga.idempotency_key = ?
+                """,
+                (project_id, idempotency_key),
+            ).fetchone()
+        if existing is not None:
+            if (
+                str(existing["request_sha256"]) != request_sha256
+                or str(existing["plan_fingerprint"]) != plan.fingerprint
+            ):
+                raise ApplicationError(
+                    "GENERATION_APPROVAL_IDEMPOTENCY_CONFLICT",
+                    "Idempotency-Key 已绑定到另一份生成批准。",
+                    409,
+                )
+            if existing["job_id"] is None:
+                raise ApplicationError(
+                    "GENERATION_APPROVAL_INCOMPLETE",
+                    "生成批准已存在但 Job 尚未完整创建，请进行恢复。",
+                    409,
+                )
+            return self.get_job(project_id, str(existing["job_id"]))
+
         job_id = str(uuid7())
         user_action_id = str(uuid7())
+        generation_approval_id = str(uuid7())
+        approval_snapshot = {
+            "schema_version": "1.0",
+            "project_id": project_id,
+            "chapter_id": chapter_id,
+            "plan_fingerprint": plan.fingerprint,
+            "prompt_approval_hash": plan.prompt_approval_hash,
+            "prompt_snapshot_sha256": plan.prompt_snapshot_sha256,
+            "layout_snapshot_sha256": plan.layout_snapshot_sha256,
+            "character_tag_bundle_version_id": plan.character_tag_bundle_version_id,
+            "provider_model_id": plan.provider_model_id,
+            "mapping_version": plan.mapping_version,
+            "contract_sha256": plan.contract_sha256,
+            "candidate_count_per_panel": plan.candidate_count_per_panel,
+            "quality_rule_version": plan.quality_rule_version,
+            "max_calls": max_calls,
+            "max_cost_anlas": max_cost_anlas,
+            "panels": [panel.freeze_payload() for panel in plan.panels],
+        }
+        approval_sha256 = canonical_sha256(approval_snapshot)
         try:
             with self.database.writer() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO generation_approvals(
+                        generation_approval_id, project_id, chapter_id,
+                        plan_fingerprint, approval_sha256, snapshot_json,
+                        idempotency_key, request_sha256, candidate_count_per_panel,
+                        quality_rule_version, user_action_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        generation_approval_id,
+                        project_id,
+                        chapter_id,
+                        plan.fingerprint,
+                        approval_sha256,
+                        json.dumps(
+                            approval_snapshot,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        idempotency_key,
+                        request_sha256,
+                        plan.candidate_count_per_panel,
+                        plan.quality_rule_version,
+                        user_action_id,
+                    ),
+                )
                 connection.execute(
                     """
                     INSERT INTO generation_jobs(
@@ -213,12 +418,16 @@ class GenerationQueueService:
                         text_model_config_revision,
                         novelai_config_revision, provider_model_id, mapping_version,
                         contract_sha256, credential_profile_id, timeout_seconds,
-                        plan_fingerprint, status, user_action_id, page_count,
+                        layout_snapshot_sha256, plan_fingerprint, status,
+                        user_action_id, page_count,
                         panel_count, max_calls, max_cost_anlas,
                         estimated_cost_upper_anlas, cost_basis
+                        , generation_approval_id, generation_approval_sha256,
+                        prompt_approval_hash, prompt_snapshot_sha256,
+                        candidate_count_per_panel, quality_rule_version
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        'queued', ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     (
@@ -237,6 +446,7 @@ class GenerationQueueService:
                         plan.contract_sha256,
                         plan.credential_profile_id,
                         plan.timeout_seconds,
+                        plan.layout_snapshot_sha256,
                         plan.fingerprint,
                         user_action_id,
                         plan.page_count,
@@ -245,6 +455,12 @@ class GenerationQueueService:
                         max_cost_anlas,
                         plan.estimated_cost_upper_anlas,
                         "user_confirmed_per_panel_ceiling",
+                        generation_approval_id,
+                        approval_sha256,
+                        plan.prompt_approval_hash,
+                        plan.prompt_snapshot_sha256,
+                        plan.candidate_count_per_panel,
+                        plan.quality_rule_version,
                     ),
                 )
                 for panel in plan.panels:
@@ -252,8 +468,27 @@ class GenerationQueueService:
                         """
                         INSERT INTO generation_job_items(
                             item_id, job_id, ordinal, page_id, page_number, panel_id,
-                            status, cost_ceiling_anlas
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)
+                            status, cost_ceiling_anlas,
+                            page_layout_draft_id, page_layout_draft_version_id,
+                            layout_version, layout_content_sha256,
+                            layout_approval_id, layout_approval_sha256,
+                            frame_id, frame_content_sha256,
+                            dimension_selection_id, dimension_selection_sha256,
+                            selected_width, selected_height, expected_crop_ratio,
+                            dimension_rule_version, capability_snapshot_sha256
+                            , prompt_plan_id, prompt_plan_version,
+                            prompt_plan_sha256, prompt_plan_json,
+                            prompt_package_sha256,
+                            character_tag_set_refs_json,
+                            provider_execution_spec_id, provider_execution_spec_json,
+                            provider_execution_spec_sha256,
+                            provider_payload_sha256, provider_payload_json,
+                            provider_seed, candidate_count, reference_use_json
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, 'queued',
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        )
                         """,
                         (
                             str(uuid7()),
@@ -263,6 +498,64 @@ class GenerationQueueService:
                             panel.page_number,
                             panel.panel_id,
                             panel.cost_ceiling_anlas,
+                            panel.page_layout_draft_id,
+                            panel.page_layout_draft_version_id,
+                            panel.layout_version,
+                            panel.layout_content_sha256,
+                            panel.layout_approval_id,
+                            panel.layout_approval_sha256,
+                            panel.frame_id,
+                            panel.frame_content_sha256,
+                            panel.dimension_selection_id,
+                            panel.dimension_selection_sha256,
+                            panel.selected_width,
+                            panel.selected_height,
+                            panel.expected_crop_ratio,
+                            panel.dimension_rule_version,
+                            panel.capability_snapshot_sha256,
+                            panel.prompt_plan_id,
+                            panel.prompt_plan_version,
+                            panel.prompt_plan_sha256,
+                            json.dumps(
+                                panel.prompt_plan,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            panel.prompt_package_sha256,
+                            json.dumps(
+                                panel.character_tag_set_refs,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            panel.provider_execution_spec_id,
+                            json.dumps(
+                                panel.provider_execution_spec,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            panel.provider_execution_spec_sha256,
+                            panel.provider_payload_sha256,
+                            json.dumps(
+                                panel.provider_payload,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                            panel.provider_seed,
+                            panel.candidate_count,
+                            (
+                                json.dumps(
+                                    panel.reference_use,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                )
+                                if panel.reference_use is not None
+                                else None
+                            ),
                         ),
                     )
                 self._audit(
@@ -334,7 +627,14 @@ class GenerationQueueService:
             "contract_sha256": str(row["contract_sha256"]),
             "credential_profile_id": str(row["credential_profile_id"]),
             "timeout_seconds": float(row["timeout_seconds"]),
+            "layout_snapshot_sha256": str(row["layout_snapshot_sha256"]),
             "plan_fingerprint": str(row["plan_fingerprint"]),
+            "generation_approval_id": row["generation_approval_id"],
+            "generation_approval_sha256": str(row["generation_approval_sha256"]),
+            "prompt_approval_hash": str(row["prompt_approval_hash"]),
+            "prompt_snapshot_sha256": str(row["prompt_snapshot_sha256"]),
+            "candidate_count_per_panel": int(row["candidate_count_per_panel"]),
+            "quality_rule_version": str(row["quality_rule_version"]),
             "status": str(row["status"]),
             "user_action_id": str(row["user_action_id"]),
             "page_count": int(row["page_count"]),
@@ -808,6 +1108,7 @@ class GenerationQueueService:
         *,
         per_panel_cost_ceiling_anlas: int,
     ) -> GenerationPlan:
+        self._require_v03_project(project_id)
         if not 0 <= per_panel_cost_ceiling_anlas <= 100_000:
             raise ApplicationError(
                 "GENERATION_COST_ESTIMATE_INVALID",
@@ -826,6 +1127,10 @@ class GenerationQueueService:
         character_version_id = str(readiness["character_bible_version_id"])
         style_version_id = str(readiness["style_bible_version_id"])
         character_document = cast(dict[str, Any], bundle["character_bible"])["document"]
+        character_bible = CharacterBibleDocument.model_validate(character_document)
+        style_bible = StyleBibleDocument.model_validate(
+            cast(dict[str, Any], bundle["style_bible"])["document"]
+        )
         storyboard_version_id = str(character_document["storyboard_version_id"])
         style_storyboard_version_id = str(
             cast(dict[str, Any], bundle["style_bible"])["document"]["storyboard_version_id"]
@@ -839,6 +1144,13 @@ class GenerationQueueService:
         prompt_workflow = self.prompting.get_workflow(project_id, chapter_id)
         prompt_readiness = cast(dict[str, Any], prompt_workflow["generation_readiness"])
         if not bool(prompt_readiness["ready"]):
+            if not bool(prompt_readiness.get("structured_prompt_ready", False)):
+                raise ApplicationError(
+                    "GENERATION_STRUCTURED_PROMPT_REQUIRED",
+                    "旧 legacy_flat_prompt 只能查看历史素材，请重新生成并审批 PromptPlan v2。",
+                    409,
+                    {"blockers": prompt_readiness["blockers"]},
+                )
             raise ApplicationError(
                 "GENERATION_PROMPTS_NOT_APPROVED",
                 "角色固定 tags 和逐格 PromptPackage 尚未全部批准。",
@@ -850,7 +1162,20 @@ class GenerationQueueService:
         )
         prompt_bundle_version_id = str(prompt_readiness["prompt_bundle_version_id"])
         text_model_config_revision = int(prompt_readiness["text_model_config_revision"])
-        prompt_document = cast(dict[str, Any], prompt_workflow["prompt_bundle"])["document"]
+        prompt_bundle_payload = cast(dict[str, Any], prompt_workflow["prompt_bundle"])
+        prompt_approval_hash = str(prompt_bundle_payload["approval_hash"])
+        prompt_snapshot_sha256 = str(prompt_bundle_payload["snapshot_sha256"])
+        prompt_document = prompt_bundle_payload["document"]
+        if (
+            prompt_document.get("schema_version") != "1.2"
+            or not isinstance(prompt_document.get("layout_snapshot_sha256"), str)
+        ):
+            raise ApplicationError(
+                "GENERATION_STRUCTURED_PROMPT_REQUIRED",
+                "旧 legacy_flat_prompt 只能查看历史素材，请重新生成并审批 PromptPlan v2。",
+                409,
+            )
+        layout_snapshot_sha256 = str(prompt_document["layout_snapshot_sha256"])
         prompt_packages = {
             str(item["panel_id"]): item
             for item in cast(list[dict[str, Any]], prompt_document["packages"])
@@ -917,6 +1242,136 @@ class GenerationQueueService:
                         "已审批 PromptPackage 未覆盖全部分镜格。",
                         409,
                     )
+                binding = package.get("layout_binding")
+                if not isinstance(binding, dict):
+                    raise ApplicationError(
+                        "GENERATION_LAYOUT_BINDING_MISSING",
+                        "PromptPackage 缺少逐格版式与尺寸冻结信息。",
+                        409,
+                    )
+                structured_package = package.get("structured_package")
+                if not isinstance(structured_package, dict):
+                    raise ApplicationError(
+                        "GENERATION_STRUCTURED_PROMPT_REQUIRED",
+                        "PromptPackage 缺少可验证的 PromptPlan v2，不能创建新 Job。",
+                        409,
+                    )
+                structured = PromptPackage.model_validate(structured_package)
+                require_prompt_package_integrity(structured)
+                prompt_plan = structured.prompt_plan
+                binding = cast(dict[str, Any], binding)
+                provider_seed = self._planned_seed(
+                    prompt_plan.content_sha256,
+                    str(binding["dimension_selection_sha256"]),
+                    str(novelai_row["provider_model_id"]),
+                    str(novelai_row["mapping_version"]),
+                )
+                preview_spec_id = uuid5(
+                    NAMESPACE_URL,
+                    "manga-maker:provider-preview:"
+                    f"{prompt_plan.content_sha256}:{binding['dimension_selection_sha256']}:"
+                    f"{novelai_row['provider_model_id']}:{novelai_row['mapping_version']}:"
+                    f"{provider_seed}",
+                )
+                preview_generation_spec_id = uuid5(
+                    NAMESPACE_URL,
+                    "manga-maker:generation-preview:"
+                    f"{prompt_plan.content_sha256}:{binding['dimension_selection_sha256']}:"
+                    f"{novelai_row['provider_model_id']}:{novelai_row['mapping_version']}:"
+                    f"{provider_seed}",
+                )
+                reference_payload: dict[str, Any] | None = None
+                reference_use: dict[str, Any] | None = None
+                reference_candidate = _first_reference_candidate(
+                    _match_characters(panel.characters, character_bible.characters),
+                    style_bible,
+                )
+                if reference_candidate is not None:
+                    reference_asset_id, description = reference_candidate
+                    profile = require_model_profile(str(novelai_row["provider_model_id"]))
+                    if not profile.supports_precise_reference:
+                        raise ApplicationError(
+                            "GENERATION_REFERENCE_UNSUPPORTED",
+                            "已审批设定包含参考图，但所选模型不支持 Precise Reference。",
+                            409,
+                        )
+                    metadata = self.bibles.reference_asset(project_id, reference_asset_id)
+                    if not bool(metadata["rights_confirmed"]):
+                        raise ApplicationError(
+                            "REFERENCE_RIGHTS_NOT_CONFIRMED",
+                            "已审批参考图缺少授权确认。",
+                            409,
+                        )
+                    reference_path, _media_type, _filename = self.bibles.reference_content(
+                        project_id, reference_asset_id
+                    )
+                    try:
+                        prepared = prepare_precise_reference(reference_path.read_bytes())
+                    except ReferencePreparationError as exc:
+                        raise ApplicationError(
+                            "REFERENCE_PREPARATION_FAILED",
+                            "已审批参考图无法安全转换为冻结输入。",
+                            409,
+                        ) from exc
+                    if prepared.original_sha256 != str(metadata["sha256"]):
+                        raise ApplicationError(
+                            "REFERENCE_ASSET_HASH_MISMATCH",
+                            "本地参考图哈希与审批记录不一致。",
+                            409,
+                        )
+                    reference_payload = {
+                        "png_base64": prepared.png_base64,
+                        "description": description,
+                        "strength": 0.7,
+                        "fidelity": 0.8,
+                    }
+                    reference_use = {
+                        "reference_asset_id": reference_asset_id,
+                        "original_sha256": prepared.original_sha256,
+                        "prepared_sha256": prepared.prepared_sha256,
+                        "description": description,
+                        "strength": 0.7,
+                        "fidelity": 0.8,
+                        "prepared_width": prepared.width,
+                        "prepared_height": prepared.height,
+                    }
+                try:
+                    mapped = map_prompt_plan_to_novelai(
+                        prompt_plan=prompt_plan,
+                        generation_spec_id=preview_generation_spec_id,
+                        provider_execution_spec_id=preview_spec_id,
+                        seed_material=str(preview_spec_id),
+                        model_id=str(novelai_row["provider_model_id"]),
+                        contract_sha256=str(novelai_row["contract_sha256"]),
+                        capability_snapshot_sha256=str(
+                            binding["capability_snapshot_sha256"]
+                        ),
+                        page_layout_draft_sha256=str(binding["layout_content_sha256"]),
+                        width=int(binding["selected_width"]),
+                        height=int(binding["selected_height"]),
+                        seed=provider_seed,
+                        steps=28,
+                        scale=5.0,
+                        sampler="k_euler_ancestral",
+                        noise_schedule="karras",
+                        mapping_version=str(novelai_row["mapping_version"]),
+                        reference=reference_payload,
+                    )
+                except ProviderMappingError as exc:
+                    raise ApplicationError(exc.code, exc.message, 409, exc.details) from exc
+                character_tag_set_refs = tuple(
+                    {
+                        "character_id": str(character.character_id),
+                        "character_tag_set_version_id": str(
+                            character.character_tag_set_version_id
+                        ),
+                        "fixed_tags_sha256": character.fixed_tags_sha256,
+                    }
+                    for character in sorted(
+                        prompt_plan.characters,
+                        key=lambda item: item.order,
+                    )
+                )
                 panels.append(
                     PlannedPanel(
                         ordinal=ordinal,
@@ -929,6 +1384,49 @@ class GenerationQueueService:
                         compiled_prompt=str(package["compiled_prompt"]),
                         compiled_negative_prompt=str(package["compiled_negative_prompt"]),
                         compiled_prompt_sha256=str(package["compiled_prompt_sha256"]),
+                        prompt_package_sha256=structured.content_sha256,
+                        prompt_plan_id=str(prompt_plan.prompt_plan_id),
+                        prompt_plan_version=prompt_plan.version,
+                        prompt_plan_sha256=prompt_plan.content_sha256,
+                        prompt_plan=prompt_plan.model_dump(mode="json"),
+                        character_tag_set_refs=character_tag_set_refs,
+                        provider_execution_spec_id=str(
+                            mapped.execution_spec.provider_execution_spec_id
+                        ),
+                        provider_execution_spec=mapped.execution_spec.model_dump(
+                            mode="json"
+                        ),
+                        provider_execution_spec_sha256=canonical_sha256(
+                            mapped.execution_spec.model_dump(mode="json")
+                        ),
+                        provider_payload_sha256=mapped.execution_spec.payload_sha256,
+                        provider_payload=mapped.payload.model_dump(
+                            mode="json", exclude_none=True
+                        ),
+                        provider_seed=provider_seed,
+                        candidate_count=DEFAULT_CANDIDATE_COUNT_PER_PANEL,
+                        reference_use=reference_use,
+                        page_layout_draft_id=str(binding["page_layout_draft_id"]),
+                        page_layout_draft_version_id=str(
+                            binding["page_layout_draft_version_id"]
+                        ),
+                        layout_version=int(binding["layout_version"]),
+                        layout_content_sha256=str(binding["layout_content_sha256"]),
+                        layout_approval_id=str(binding["layout_approval_id"]),
+                        layout_approval_sha256=str(binding["layout_approval_sha256"]),
+                        frame_id=str(binding["frame_id"]),
+                        frame_content_sha256=str(binding["frame_content_sha256"]),
+                        dimension_selection_id=str(binding["dimension_selection_id"]),
+                        dimension_selection_sha256=str(
+                            binding["dimension_selection_sha256"]
+                        ),
+                        selected_width=int(binding["selected_width"]),
+                        selected_height=int(binding["selected_height"]),
+                        expected_crop_ratio=float(binding["expected_crop_ratio"]),
+                        dimension_rule_version=str(binding["dimension_rule_version"]),
+                        capability_snapshot_sha256=str(
+                            binding["capability_snapshot_sha256"]
+                        ),
                     )
                 )
         if not panels:
@@ -951,8 +1449,14 @@ class GenerationQueueService:
             "contract_sha256": str(novelai_row["contract_sha256"]),
             "credential_profile_id": str(novelai_row["credential_profile_id"]),
             "timeout_seconds": float(novelai_row["timeout_seconds"]),
+            "layout_snapshot_sha256": layout_snapshot_sha256,
+            "prompt_approval_hash": prompt_approval_hash,
+            "prompt_snapshot_sha256": prompt_snapshot_sha256,
+            "candidate_count_per_panel": DEFAULT_CANDIDATE_COUNT_PER_PANEL,
+            "quality_rule_version": QUALITY_RULE_VERSION,
+            "generation_parameter_version": GENERATION_PARAMETER_VERSION,
             "per_panel_cost_ceiling_anlas": per_panel_cost_ceiling_anlas,
-            "panels": [panel.payload() for panel in panels],
+            "panels": [panel.freeze_payload() for panel in panels],
         }
         fingerprint = hashlib.sha256(
             json.dumps(
@@ -978,10 +1482,35 @@ class GenerationQueueService:
             contract_sha256=str(novelai_row["contract_sha256"]),
             credential_profile_id=str(novelai_row["credential_profile_id"]),
             timeout_seconds=float(novelai_row["timeout_seconds"]),
+            layout_snapshot_sha256=layout_snapshot_sha256,
+            prompt_approval_hash=prompt_approval_hash,
+            prompt_snapshot_sha256=prompt_snapshot_sha256,
+            candidate_count_per_panel=DEFAULT_CANDIDATE_COUNT_PER_PANEL,
+            quality_rule_version=QUALITY_RULE_VERSION,
             panels=tuple(panels),
             page_count=len(document.pages),
             per_panel_cost_ceiling_anlas=per_panel_cost_ceiling_anlas,
             fingerprint=fingerprint,
+        )
+
+    @staticmethod
+    def _planned_seed(
+        prompt_plan_sha256: str,
+        dimension_selection_sha256: str,
+        provider_model_id: str,
+        mapping_version: str,
+    ) -> int:
+        material = "|".join(
+            (
+                prompt_plan_sha256,
+                dimension_selection_sha256,
+                provider_model_id,
+                mapping_version,
+                GENERATION_PARAMETER_VERSION,
+            )
+        )
+        return int(hashlib.sha256(material.encode("utf-8")).hexdigest()[:8], 16) % (
+            4_294_967_288
         )
 
     def _transition(
@@ -1042,6 +1571,21 @@ class GenerationQueueService:
             ).fetchone()
         if row is None:
             raise ApplicationError("PROJECT_NOT_FOUND", "没有找到该项目。", 404)
+
+    def _require_v03_project(self, project_id: str) -> None:
+        with self.database.reader() as connection:
+            row = connection.execute(
+                "SELECT workflow_version FROM projects WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            raise ApplicationError("PROJECT_NOT_FOUND", "没有找到该项目。", 404)
+        if str(row["workflow_version"]) != "v03":
+            raise ApplicationError(
+                "LEGACY_PROJECT_MIGRATION_REQUIRED",
+                "旧 v0.2 工程保持只读。请先完成 v0.3 迁移、版式校验与审批。",
+                409,
+            )
 
     @staticmethod
     def _check_revision_and_status(
@@ -1113,6 +1657,40 @@ class GenerationQueueService:
             "edit_prompt": row["edit_prompt"],
             "inpaint_strength": row["inpaint_strength"],
             "last_error_code": row["last_error_code"],
+            "page_layout_draft_id": str(row["page_layout_draft_id"]),
+            "page_layout_draft_version_id": str(row["page_layout_draft_version_id"]),
+            "layout_version": int(row["layout_version"]),
+            "layout_content_sha256": str(row["layout_content_sha256"]),
+            "layout_approval_id": str(row["layout_approval_id"]),
+            "layout_approval_sha256": str(row["layout_approval_sha256"]),
+            "frame_id": str(row["frame_id"]),
+            "frame_content_sha256": str(row["frame_content_sha256"]),
+            "dimension_selection_id": str(row["dimension_selection_id"]),
+            "dimension_selection_sha256": str(row["dimension_selection_sha256"]),
+            "selected_width": int(row["selected_width"]),
+            "selected_height": int(row["selected_height"]),
+            "expected_crop_ratio": float(row["expected_crop_ratio"]),
+            "dimension_rule_version": str(row["dimension_rule_version"]),
+            "capability_snapshot_sha256": str(row["capability_snapshot_sha256"]),
+            "prompt_plan_id": str(row["prompt_plan_id"]),
+            "prompt_plan_version": int(row["prompt_plan_version"]),
+            "prompt_plan_sha256": str(row["prompt_plan_sha256"]),
+            "prompt_package_sha256": str(row["prompt_package_sha256"]),
+            "character_tag_set_refs": json.loads(
+                str(row["character_tag_set_refs_json"])
+            ),
+            "provider_execution_spec_id": str(row["provider_execution_spec_id"]),
+            "provider_execution_spec_sha256": str(
+                row["provider_execution_spec_sha256"]
+            ),
+            "provider_payload_sha256": str(row["provider_payload_sha256"]),
+            "provider_seed": int(row["provider_seed"]),
+            "candidate_count": int(row["candidate_count"]),
+            "reference_use": (
+                json.loads(str(row["reference_use_json"]))
+                if row["reference_use_json"] is not None
+                else None
+            ),
         }
 
     @staticmethod

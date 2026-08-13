@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..modules.production.adapters.novelai import NovelAIV4Payload
+from ..modules.production.contracts import ProviderExecutionSpec
 from ..novelai.client import NovelAIImageRequest
 
 
@@ -21,31 +23,64 @@ class ReferenceUse(BaseModel):
     prepared_height: int = Field(gt=0)
 
 
+class CharacterTagSetRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    character_id: str = Field(min_length=1, max_length=64)
+    character_tag_set_version_id: str = Field(min_length=1, max_length=64)
+    fixed_tags_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class GenerationSpecDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.0"
     spec_id: str = Field(min_length=1, max_length=64)
     project_id: str = Field(min_length=1, max_length=64)
     chapter_id: str = Field(min_length=1, max_length=64)
     job_id: str = Field(min_length=1, max_length=64)
     item_id: str = Field(min_length=1, max_length=64)
     attempt_id: str = Field(min_length=1, max_length=64)
-    correlation_id: str = Field(min_length=1, max_length=100)
+    correlation_id: str = Field(pattern=r"^[A-Za-z0-9]{6}$")
     panel_id: str = Field(min_length=1, max_length=64)
     storyboard_version_id: str = Field(min_length=1, max_length=64)
     character_bible_version_id: str = Field(min_length=1, max_length=64)
     style_bible_version_id: str = Field(min_length=1, max_length=64)
-    character_tag_bundle_version_id: str | None = Field(
-        default=None, min_length=1, max_length=64
-    )
+    character_tag_bundle_version_id: str | None = Field(default=None, min_length=1, max_length=64)
     prompt_bundle_version_id: str | None = Field(default=None, min_length=1, max_length=64)
     prompt_package_id: str | None = Field(default=None, min_length=1, max_length=64)
     text_model_config_revision: int | None = Field(default=None, ge=1)
     compiled_prompt_sha256: str | None = Field(default=None, min_length=64, max_length=64)
-    compiled_negative_prompt_sha256: str | None = Field(
-        default=None, min_length=64, max_length=64
+    compiled_negative_prompt_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    generation_approval_id: str | None = Field(default=None, min_length=1, max_length=64)
+    generation_approval_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    prompt_approval_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    prompt_snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    prompt_plan_id: str | None = Field(default=None, min_length=1, max_length=64)
+    prompt_plan_version: int | None = Field(default=None, ge=1)
+    prompt_plan_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    prompt_package_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    character_tag_set_refs: list[CharacterTagSetRef] = Field(default_factory=list, max_length=3)
+    approved_provider_execution_spec_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
     )
+    provider_payload_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    candidate_count: int | None = Field(default=None, ge=1, le=16)
+    quality_rule_version: str | None = Field(default=None, min_length=1, max_length=100)
+    layout_snapshot_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    page_layout_draft_id: str | None = Field(default=None, min_length=1, max_length=64)
+    page_layout_draft_version_id: str | None = Field(default=None, min_length=1, max_length=64)
+    layout_version: int | None = Field(default=None, ge=1)
+    layout_content_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    layout_approval_id: str | None = Field(default=None, min_length=1, max_length=64)
+    layout_approval_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    frame_id: str | None = Field(default=None, min_length=1, max_length=64)
+    frame_content_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    dimension_selection_id: str | None = Field(default=None, min_length=1, max_length=64)
+    dimension_selection_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    expected_crop_ratio: float | None = Field(default=None, ge=0, le=1)
+    dimension_rule_version: str | None = Field(default=None, min_length=1, max_length=64)
+    capability_snapshot_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     provider: Literal["novelai"] = "novelai"
     provider_model_id: str = Field(min_length=1, max_length=100)
     mapping_version: str = Field(min_length=1, max_length=100)
@@ -72,9 +107,7 @@ class GenerationSpecDocument(BaseModel):
         "approved_storyboard_and_bibles_plus_user_edit",
         "approved_prompt_package",
         "approved_prompt_package_plus_user_edit",
-    ] = (
-        "approved_storyboard_and_bibles"
-    )
+    ] = "approved_storyboard_and_bibles"
 
     @model_validator(mode="after")
     def validate_revision_inputs(self) -> GenerationSpecDocument:
@@ -86,10 +119,49 @@ class GenerationSpecDocument(BaseModel):
             self.compiled_prompt_sha256,
             self.compiled_negative_prompt_sha256,
         )
-        if self.schema_version == "1.2" and not all(
+        if self.schema_version in {"1.2", "1.3", "1.4"} and not all(
             value is not None for value in prompt_package_fields
         ):
             raise ValueError("schema 1.2 requires frozen PromptPackage provenance")
+        layout_fields = (
+            self.layout_snapshot_sha256,
+            self.page_layout_draft_id,
+            self.page_layout_draft_version_id,
+            self.layout_version,
+            self.layout_content_sha256,
+            self.layout_approval_id,
+            self.layout_approval_sha256,
+            self.frame_id,
+            self.frame_content_sha256,
+            self.dimension_selection_id,
+            self.dimension_selection_sha256,
+            self.expected_crop_ratio,
+            self.dimension_rule_version,
+            self.capability_snapshot_sha256,
+        )
+        if self.schema_version in {"1.3", "1.4"} and any(
+            value is None for value in layout_fields
+        ):
+            raise ValueError("schema 1.3 requires frozen approved layout provenance")
+        approval_fields = (
+            self.generation_approval_id,
+            self.generation_approval_sha256,
+            self.prompt_approval_hash,
+            self.prompt_snapshot_sha256,
+            self.prompt_plan_id,
+            self.prompt_plan_version,
+            self.prompt_plan_sha256,
+            self.prompt_package_sha256,
+            self.approved_provider_execution_spec_sha256,
+            self.provider_payload_sha256,
+            self.candidate_count,
+            self.quality_rule_version,
+        )
+        if self.schema_version == "1.4" and (
+            any(value is None for value in approval_fields)
+            or not self.character_tag_set_refs
+        ):
+            raise ValueError("schema 1.4 requires the complete GenerationApproval freeze")
         parent_fields = (self.parent_asset_version_id, self.parent_image_sha256)
         if self.action == "generate":
             if any(value is not None for value in parent_fields):
@@ -115,4 +187,6 @@ class GenerationSpecDocument(BaseModel):
 @dataclass(frozen=True, slots=True)
 class CompiledGenerationSpec:
     document: GenerationSpecDocument
+    provider_execution_spec: ProviderExecutionSpec
+    provider_payload: NovelAIV4Payload
     provider_request: NovelAIImageRequest

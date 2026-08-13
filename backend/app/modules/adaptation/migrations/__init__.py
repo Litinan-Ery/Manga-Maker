@@ -1,0 +1,1 @@
+"""Registered adaptation migrations only."""

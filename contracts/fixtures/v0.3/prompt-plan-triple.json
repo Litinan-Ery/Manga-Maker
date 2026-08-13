@@ -1,0 +1,61 @@
+{
+  "schema_version": "2.0",
+  "prompt_plan_id": "01900000-0000-7000-8000-000000000203",
+  "version": 1,
+  "panel_id": "01900000-0000-7000-8000-000000000103",
+  "base": {
+    "positive_tags": ["3girls", "abandoned station", "wide shot"],
+    "negative_tags": ["text", "watermark", "logo"],
+    "relationship_action": "the center character shields the other two from falling glass"
+  },
+  "characters": [
+    {
+      "character_id": "01900000-0000-7000-8000-000000000301",
+      "character_tag_set_version_id": "01900000-0000-7000-8000-000000000501",
+      "fixed_tags": ["black bob hair", "white trench coat"],
+      "fixed_tags_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "variable_positive_tags": ["left side", "ducking"],
+      "negative_tags": ["wrong hair color"],
+      "action": "ducks and covers her head",
+      "order": 0,
+      "center": {"x": 0.2, "y": 0.6}
+    },
+    {
+      "character_id": "01900000-0000-7000-8000-000000000302",
+      "character_tag_set_version_id": "01900000-0000-7000-8000-000000000502",
+      "fixed_tags": ["long silver hair", "dark school uniform"],
+      "fixed_tags_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "variable_positive_tags": ["center", "arms spread"],
+      "negative_tags": ["short hair"],
+      "action": "spreads both arms to shield her companions",
+      "order": 1,
+      "center": {"x": 0.5, "y": 0.52}
+    },
+    {
+      "character_id": "01900000-0000-7000-8000-000000000303",
+      "character_tag_set_version_id": "01900000-0000-7000-8000-000000000503",
+      "fixed_tags": ["short auburn hair", "mechanic overalls"],
+      "fixed_tags_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "variable_positive_tags": ["right side", "looking upward"],
+      "negative_tags": ["silver hair"],
+      "action": "looks up at the falling glass",
+      "order": 2,
+      "center": {"x": 0.8, "y": 0.6}
+    }
+  ],
+  "style_tags": ["black and white manga", "high contrast screentone"],
+  "continuity_tags": ["broken station clock", "brass key in left pocket"],
+  "layout_constraints": {
+    "page_layout_draft_id": "01900000-0000-7000-8000-000000000001",
+    "page_layout_draft_version": 1,
+    "frame_id": "01900000-0000-7000-8000-000000000013",
+    "frame_sha256": "2333333333333333333333333333333333333333333333333333333333333333",
+    "aspect_ratio": 1.7777777777777777,
+    "focal_point": {"x": 0.5, "y": 0.48},
+    "reserved_text_zones": [
+      {"x": 0.68, "y": 0.03, "width": 0.28, "height": 0.2}
+    ],
+    "crop_safe_rect": {"x": 0.04, "y": 0.05, "width": 0.92, "height": 0.88}
+  },
+  "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}
