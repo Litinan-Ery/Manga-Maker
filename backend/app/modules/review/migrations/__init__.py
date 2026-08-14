@@ -1,0 +1,1 @@
+"""Registered review migrations only."""

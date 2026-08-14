@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "review_snapshot_id": "01900000-0000-7000-8000-000000000801",
+  "version": 1,
+  "candidate_set": {
+    "schema_version": "1.0",
+    "candidate_set_id": "01900000-0000-7000-8000-000000000802",
+    "version": 1,
+    "panel_id": "01900000-0000-7000-8000-000000000102",
+    "generation_target_sha256": "8181818181818181818181818181818181818181818181818181818181818181",
+    "candidate_ids": [
+      "01900000-0000-7000-8000-000000000803",
+      "01900000-0000-7000-8000-000000000804"
+    ],
+    "content_sha256": "8282828282828282828282828282828282828282828282828282828282828282"
+  },
+  "candidates": [
+    {
+      "schema_version": "1.0",
+      "candidate_id": "01900000-0000-7000-8000-000000000803",
+      "version": 1,
+      "candidate_set_id": "01900000-0000-7000-8000-000000000802",
+      "panel_id": "01900000-0000-7000-8000-000000000102",
+      "asset_version_id": "01900000-0000-7000-8000-000000000811",
+      "generation_target_sha256": "8181818181818181818181818181818181818181818181818181818181818181",
+      "asset_sha256": "8383838383838383838383838383838383838383838383838383838383838383",
+      "state": "ready",
+      "content_sha256": "8484848484848484848484848484848484848484848484848484848484848484"
+    },
+    {
+      "schema_version": "1.0",
+      "candidate_id": "01900000-0000-7000-8000-000000000804",
+      "version": 1,
+      "candidate_set_id": "01900000-0000-7000-8000-000000000802",
+      "panel_id": "01900000-0000-7000-8000-000000000102",
+      "asset_version_id": "01900000-0000-7000-8000-000000000812",
+      "generation_target_sha256": "8181818181818181818181818181818181818181818181818181818181818181",
+      "asset_sha256": "8585858585858585858585858585858585858585858585858585858585858585",
+      "state": "stale",
+      "content_sha256": "8686868686868686868686868686868686868686868686868686868686868686"
+    }
+  ],
+  "quality_findings": [
+    {
+      "schema_version": "1.0",
+      "quality_finding_id": "01900000-0000-7000-8000-000000000821",
+      "version": 1,
+      "candidate_id": "01900000-0000-7000-8000-000000000803",
+      "rule_id": "LAYOUT_CROP_SAFE_ZONE",
+      "rule_version": "1.0",
+      "severity": "blocker",
+      "region": {"x": 0.72, "y": 0.04, "width": 0.24, "height": 0.3},
+      "confidence": 1,
+      "status": "waived",
+      "waiver": {
+        "user_action_id": "01900000-0000-7000-8000-000000000831",
+        "reason": "the clipped umbrella is intentional and does not obscure either face",
+        "waived_evidence_sha256": "8787878787878787878787878787878787878787878787878787878787878787"
+      },
+      "evidence_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+      "content_sha256": "8989898989898989898989898989898989898989898989898989898989898989"
+    },
+    {
+      "schema_version": "1.0",
+      "quality_finding_id": "01900000-0000-7000-8000-000000000822",
+      "version": 1,
+      "candidate_id": "01900000-0000-7000-8000-000000000803",
+      "rule_id": "CHARACTER_COUNT_MISMATCH",
+      "rule_version": "1.0",
+      "severity": "warning",
+      "region": null,
+      "confidence": 0.78,
+      "status": "resolved",
+      "waiver": null,
+      "evidence_sha256": "9090909090909090909090909090909090909090909090909090909090909090",
+      "content_sha256": "9191919191919191919191919191919191919191919191919191919191919191"
+    },
+    {
+      "schema_version": "1.0",
+      "quality_finding_id": "01900000-0000-7000-8000-000000000823",
+      "version": 1,
+      "candidate_id": "01900000-0000-7000-8000-000000000804",
+      "rule_id": "POSSIBLE_RANDOM_TEXT",
+      "rule_version": "1.0",
+      "severity": "info",
+      "region": {"x": 0.1, "y": 0.08, "width": 0.2, "height": 0.12},
+      "confidence": 0.42,
+      "status": "open",
+      "waiver": null,
+      "evidence_sha256": "9292929292929292929292929292929292929292929292929292929292929292",
+      "content_sha256": "9393939393939393939393939393939393939393939393939393939393939393"
+    }
+  ],
+  "decision_history": [
+    {
+      "schema_version": "1.0",
+      "review_decision_id": "01900000-0000-7000-8000-000000000841",
+      "version": 1,
+      "candidate_set_id": "01900000-0000-7000-8000-000000000802",
+      "asset_version_id": "01900000-0000-7000-8000-000000000811",
+      "decision": "accepted",
+      "dependency_sha256": "9494949494949494949494949494949494949494949494949494949494949494",
+      "user_action_id": "01900000-0000-7000-8000-000000000851",
+      "reason": "best composition after reviewing the recorded waiver",
+      "content_sha256": "9595959595959595959595959595959595959595959595959595959595959595"
+    },
+    {
+      "schema_version": "1.0",
+      "review_decision_id": "01900000-0000-7000-8000-000000000842",
+      "version": 1,
+      "candidate_set_id": "01900000-0000-7000-8000-000000000802",
+      "asset_version_id": "01900000-0000-7000-8000-000000000812",
+      "decision": "rejected",
+      "dependency_sha256": "9696969696969696969696969696969696969696969696969696969696969696",
+      "user_action_id": "01900000-0000-7000-8000-000000000852",
+      "reason": "the image contains distracting random text",
+      "content_sha256": "9797979797979797979797979797979797979797979797979797979797979797"
+    },
+    {
+      "schema_version": "1.0",
+      "review_decision_id": "01900000-0000-7000-8000-000000000843",
+      "version": 1,
+      "candidate_set_id": "01900000-0000-7000-8000-000000000802",
+      "asset_version_id": "01900000-0000-7000-8000-000000000812",
+      "decision": "needs_fix",
+      "dependency_sha256": "9898989898989898989898989898989898989898989898989898989898989898",
+      "user_action_id": "01900000-0000-7000-8000-000000000853",
+      "reason": "remove the sign through a bounded inpaint revision",
+      "content_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  ],
+  "page_approval": {
+    "schema_version": "1.0",
+    "page_approval_id": "01900000-0000-7000-8000-000000000861",
+    "version": 2,
+    "page_id": "01900000-0000-7000-8000-000000000002",
+    "page_version_id": "01900000-0000-7000-8000-000000000862",
+    "dependency_sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "finding_snapshot_sha256": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+    "state": "stale",
+    "stale_reason": "the accepted candidate dependency hash changed after a layout revision",
+    "content_sha256": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3"
+  },
+  "content_sha256": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4"
+}

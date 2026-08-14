@@ -37,6 +37,41 @@ def test_project_creation_requires_session(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_legacy_project_is_read_only_across_all_project_write_routes(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project = create_project(client, session_headers, "历史工程")
+    project_id = project["project_id"]
+    with client.app.state.database.writer() as connection:
+        connection.execute(
+            "UPDATE projects SET workflow_version = 'legacy_v02' WHERE project_id = ?",
+            (project_id,),
+        )
+
+    readable = client.get(f"/api/v1/projects/{project_id}")
+    assert readable.status_code == 200
+    blocked = client.put(
+        f"/api/v1/projects/{project_id}/adaptation/text-model",
+        headers=session_headers,
+        json={
+            "provider_api_url": "https://example.invalid/v1",
+            "model_name": "must-not-run",
+            "api_key": "must-not-be-stored",
+        },
+    )
+
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "LEGACY_PROJECT_READ_ONLY"
+    with client.app.state.database.reader() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM text_model_configs WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
 def test_utf8_preflight_confirm_chapters_and_anchor(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:

@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "name": "landscape",
+      "target_pixels": 1572864,
+      "max_crop_safe_risk": 0,
+      "expected_status": "selected",
+      "expected_candidate_key": "landscape-1536x1024",
+      "frame": {
+        "frame_id": "01900000-0000-7000-8000-000000001001",
+        "parent_frame_id": "01900000-0000-7000-8000-000000001000",
+        "panel_id": "01900000-0000-7000-8000-000000001101",
+        "order": 1,
+        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "aspect_ratio": 1.46,
+        "shot_scale": "wide",
+        "focal_point": {"x": 0.5, "y": 0.5},
+        "character_positions": [],
+        "text_safe_zones": [],
+        "crop_safe_rect": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.84}
+      }
+    },
+    {
+      "name": "portrait",
+      "target_pixels": 1572864,
+      "max_crop_safe_risk": 0,
+      "expected_status": "selected",
+      "expected_candidate_key": "portrait-1024x1536",
+      "frame": {
+        "frame_id": "01900000-0000-7000-8000-000000001002",
+        "parent_frame_id": "01900000-0000-7000-8000-000000001000",
+        "panel_id": "01900000-0000-7000-8000-000000001102",
+        "order": 1,
+        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "aspect_ratio": 0.6666666666666666,
+        "shot_scale": "medium",
+        "focal_point": {"x": 0.5, "y": 0.5},
+        "character_positions": [],
+        "text_safe_zones": [],
+        "crop_safe_rect": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.84}
+      }
+    },
+    {
+      "name": "near_square",
+      "target_pixels": 1048576,
+      "max_crop_safe_risk": 0,
+      "expected_status": "selected",
+      "expected_candidate_key": "square-1024x1024",
+      "frame": {
+        "frame_id": "01900000-0000-7000-8000-000000001003",
+        "parent_frame_id": "01900000-0000-7000-8000-000000001000",
+        "panel_id": "01900000-0000-7000-8000-000000001103",
+        "order": 1,
+        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "aspect_ratio": 1.02,
+        "shot_scale": "close_up",
+        "focal_point": {"x": 0.5, "y": 0.5},
+        "character_positions": [],
+        "text_safe_zones": [],
+        "crop_safe_rect": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.84}
+      }
+    },
+    {
+      "name": "crop_safe_unsatisfied",
+      "target_pixels": 1572864,
+      "max_crop_safe_risk": 0,
+      "expected_status": "unsatisfied",
+      "expected_candidate_key": null,
+      "frame": {
+        "frame_id": "01900000-0000-7000-8000-000000001004",
+        "parent_frame_id": "01900000-0000-7000-8000-000000001000",
+        "panel_id": "01900000-0000-7000-8000-000000001104",
+        "order": 1,
+        "rect": {"x": 0, "y": 0, "width": 1, "height": 1},
+        "aspect_ratio": 2,
+        "shot_scale": "establishing",
+        "focal_point": {"x": 0.5, "y": 0.5},
+        "character_positions": [],
+        "text_safe_zones": [],
+        "crop_safe_rect": {"x": 0.01, "y": 0.01, "width": 0.98, "height": 0.98}
+      }
+    }
+  ]
+}

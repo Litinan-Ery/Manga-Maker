@@ -4,9 +4,9 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**v0.2 离线 Mock 闭环已完成，真实服务验收仍未执行。** 三字段文本模型配置、模型化分镜与设定、角色固定 Tags、逐格 NovelAI PromptPackage、本地确定性编译、有界生成、页面编辑、版本恢复、整本规划和凭证零泄露均已有自动化证据。真实文本模型、NovelAI 付费 smoke 与代表性授权章节的真实生产仍需用户单独批准，不能由 Mock 结果替代。
+> 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、版式先行、PromptPlan/PromptPackage v2、NovelAI V4 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。真实文本模型、NovelAI 付费 smoke 与代表性授权章节生产仍需用户单独批准，不能由 Mock 结果替代。
 
-完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
+完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，v0.3 所有权与追踪基线见 [V03_IMPLEMENTATION_BASELINE.md](docs/architecture/V03_IMPLEMENTATION_BASELINE.md)，关键决策的兼容/回滚/删除条件见 [ADR-010-018.md](docs/adr/ADR-010-018.md)，v0.2 P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
 ## 当前可用范围
 
@@ -19,15 +19,16 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
 | 文本模型与结构化改编 | 已实现（Mock 验收） | 界面只需 API 链接、模型名称、密钥三项；密钥本地加密保存，同一配置生成分镜、角色/风格设定、固定 Tags 和逐格 Prompt；未做真实调用 |
 | CharacterBible、StyleBible 与参考图 | 已实现（Mock 验收） | 从已审批分镜调用当前文本模型草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
-| CharacterTagSet 与 PromptPackage | 已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；逐格 Prompt 组件可编辑预览，本地编译器原样注入固定 Tags 并冻结 SHA-256，执行期不再调用文本模型 |
+| CharacterTagSet、PromptPlan 与 ProviderExecutionSpec | v0.3 多角色链路已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；PromptPlan v2 保留每角色正负区块、动作、顺序、版式坐标与关系动作；版本化 mapper 生成并冻结 NovelAI V4 base/正负角色 captions、坐标、payload hash；旧 flat prompt 只读且不能创建新 Job |
+| Prompt Inspector 与生成审批 | v0.3 已实现（Mock 验收） | 逐格显示结构化字段、固定 Tags、映射对照、脱敏 payload、哈希、影响与调用/成本边界；编辑后必须保存并重新预览，审批与 Job 创建均幂等，尚不包含候选审片 |
 | NovelAI 契约、配置与连接测试 | 已实现（Mock 验收） | 固定官方 Swagger 哈希与模型能力；Token 在应用本地加密保存；连接测试须点击触发且只查标签、不出图；未做真实调用 |
-| 有界串行生成队列 | 已实现 | 冻结面板、上游版本、凭证引用、契约和调用/成本上限；全局单在途、暂停/取消和重启转人工审阅 |
-| NovelAI 逐格执行与素材版本 | 已实现（离线 Mock 验收） | 二次明确确认后才执行；固定 host/字段、最多一张 Precise Reference、严格 201 JSON/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；未做真实付费 smoke |
+| 有界串行生成队列 | v0.3 冻结已实现（Mock 验收） | GenerationApproval 原子冻结 PromptPlan、ProviderExecutionSpec/payload、Layout、CharacterTagSet、模型/mapping/rule、seed、参考图来源和每格候选数；全局单在途、暂停/取消和重启转人工审阅 |
+| NovelAI 逐格执行与素材版本 | 已实现（离线 Mock 验收） | 二次明确确认后才执行；执行前先复验全部冻结哈希、再读取凭证，只发送审批时冻结的 payload；固定 host、最多一张 Precise Reference、严格 201 JSON/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；未做真实付费 smoke |
 | 本地页面排版与不可变 PageVersion | 已实现 | 16 种分页/条漫模板、黑白或彩色、LTR/RTL/竖向阅读、裁切焦点/缩放、气泡/旁白/音效/页码；后端按页面尺寸规范输出 PNG；修改不访问图像 API |
 | 项目可复用素材库 | 已实现 | 收藏已有不可变面板素材，维护角色/道具/场景/面板标签，跨页引用；归档可恢复，不复制图片、不调用图像 API |
 | reroll、inpaint 与历史恢复 | 已实现（离线 Mock 验收） | 单格/整页冻结父版本与成本，PNG 蒙版局部重绘，结果创建 AssetVersion + PageVersion；两层人工确认后才可执行；恢复不调用外部服务 |
-| 工程包、PNG、PDF、CBZ 导出 | 已实现 | 导出冻结完整 PageVersion 清单；先在 staging 生成并校验全部格式，再一次性登记成功版本；失败不改旧导出 |
-| 工程包 dry-run 与恢复 | 已实现 | 校验 schema、SHA-256、文件数/大小/压缩比、磁盘空间，拒绝绝对路径、`..`、Zip Slip 和符号链接；确认后恢复到新工作区，ID 冲突整体重映射 |
+| 工程包、PNG、PDF、CBZ 导出 | 已实现 | v1.5 工程包包含 v0.3 版式、审批、lineage、ProviderExecutionSpec 与 GenerationApproval；导出在 staging 完整校验后登记，失败不改旧导出 |
+| 工程包 dry-run 与恢复 | 已实现 | v1.5 完整 round-trip；保留 v1.4 compatibility reader。恢复会重建 ID 绑定的哈希与快照，并把历史生成审批标为 stale，重新配置凭据、估算和审批后才可再次付费执行。schema 16 迁移前备份与旧主版本回滚演练仍由 MM-044/MM-059 收口 |
 | 崩溃恢复与本地完整性检查 | 已实现 | 启动时只做本地 reconciliation；未知计费转人工审阅，半成品保留在恢复边界，不会自动重放付费任务 |
 | 导出凭证零泄露扫描 | 已实现 | 解锁后以内存中的真实凭证字节扫描普通文件与 ZIP 条目；命中即失败关闭，旧成功导出不受影响 |
 | 跨章节连续性账本 | 已实现 | 按章汇总角色、服装、道具、场景和剧情状态；手工修改追加新版本，并定位未来已审批章节中受影响的分格 |
@@ -188,6 +189,11 @@ Manga Maker/
 ├── contracts/novelai/       # 经审计的官方契约元数据、哈希和更新边界
 ├── pyproject.toml / uv.lock # Python 依赖与可复现锁文件
 ├── backend/app/
+│   ├── bootstrap/           # typed AppContainer、composition root、installer/lifespan
+│   ├── shared_kernel/       # UUIDv7、ArtifactRef、clock、SHA-256 与错误原语
+│   ├── platform/            # persistence/durable work/file/security/observability 机制边界
+│   ├── modules/             # v0.3 纵向业务模块及版本化公开契约
+│   ├── workflows/           # 章节与整本 process manager 边界
 │   ├── api/                 # 健康、凭证库、项目和来源 API
 │   ├── adaptation/          # Storyboard 契约与文本模型适配器
 │   ├── bibles/              # 角色/风格版本、参考图与审批门禁
@@ -200,8 +206,15 @@ Manga Maker/
 │   ├── exports/             # ExportRevision、四格式输出、工程包校验与恢复
 │   └── novelai/             # 能力 profile、错误归一化、Mock 和安全连接测试
 ├── frontend/                # React/TypeScript 本地操作界面
+│   └── src/
+│       ├── app/             # shell 与跨 feature workflow
+│       ├── features/        # v0.3 feature public entry 与 feature-local client
+│       ├── shared/ui/       # 无业务语义的 UI 原语
+│       └── generated/api/   # Canonical Schema DTO、hash 与错误边界
 └── tests/                   # 后端单元/接口测试
 ```
+
+现有 `api/`、`adaptation/`、`generation/`、`pages/` 等 v0.2 路径仍由 `LegacyCompatibilityBindings` 显式接入 typed AppContainer，以保持 URL 和恢复语义；它们是迁移缝，不是 v0.3 新代码的 service locator。新模块的真实 adapter 只允许在 `bootstrap/` composition root 组装。
 
 运行时项目结构位于应用数据目录而非仓库，包括 `source/`、`storyboard/`、`bibles/`、`assets/`、`pages/`、`exports/` 和 `audit/`；本地凭证库与项目目录分离。
 

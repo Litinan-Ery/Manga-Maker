@@ -2,23 +2,919 @@
 
 | 项目 | 内容 |
 |---|---|
-| 版本 | v0.2 |
-| 日期 | 2026-08-09 |
-| 状态 | v0.2 工单已完成 |
+| 版本 | v0.3 |
+| 日期 | 2026-08-13 |
+| 状态 | v0.2 工单已完成；v0.3 Wave 3 已完成，下一顺序工单为 MM-038 |
+| 拆票代码基线 | `main@40f2cb9`；当前 v0.3 `PRD.md` 与 `TECHNICAL_ARCHITECTURE.md` 为需求来源，不代表代码已交付 |
 | 产品范围 | 以 README、PRD、TECHNICAL_ARCHITECTURE 为准 |
 
 ## 优先级定义
 
 | 优先级 | 含义 | 调度规则 |
 |---|---|---|
-| P0 / Blocker | 后续工单无法安全开展的基础能力 | 当前优先完成，不被功能性工作抢占 |
-| P1 / High | 产品 P0 单章闭环的必要能力 | 依赖满足后按编号执行 |
-| P2 / Medium | 产品 P1 整本小说能力 | 产品 P0 验收后启动 |
-| P3 / Low | 产品 P2 高级创作能力 | 产品 P1 稳定后评估 |
+| P0 / Blocker | v0.3 P0 主链、架构护栏或安全发布的必要能力 | 先基础、再主链、后发版门禁；同一依赖层可并行 |
+| P0 / Release Gate | 不一定新增产品能力，但缺少证据时不得宣称 v0.3 P0 完成 | 实现工单完成后执行；真实付费调用仍需用户单独授权 |
+| P1 / High | V03-P1-01 分层、Token 感知文本流水线 | v0.3 P0 的架构、Mock 产品与恢复门禁通过后启动；真实 P1 验收仍单独等待用户授权，不反向阻塞 P0 |
+| P2 / Medium | 后续整本出版与协作增强 | P1 验收后重新排期 |
+| P3 / Low | 受控并发、更多供应商或高级创作实验 | 只有证据和条款边界明确后评估 |
 
-状态统一为 `Todo / In Progress / Blocked / Done`。`Done` 必须同时满足代码、测试、文档和验收证据，只有方向性实现不得标记完成。
+状态统一为 `Todo / In Progress / Blocked / Done`。`Done` 必须同时满足代码、迁移、测试、文档和验收证据，只有目录骨架、方向性实现或 Mock 单点成功不得标记完成。
 
-## v0.2 功能点
+“产品 P0/P1”表示产品范围；“工单 P0/P1”表示开发调度优先级。本文优先级默认指开发调度。
+
+## v0.3 Epic：版式先行、结构化多角色与候选审片
+
+### 已核对的当前状态
+
+| 代码面 | v0.2 当前状态 | v0.3 差距 |
+|---|---|---|
+| 应用组装 | typed `AppContainer`、module installer 与 compatibility seam 已建立 | 旧 v0.2 service 仍需按后续工单收口 |
+| 数据库 | schema 30；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval 已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
+| 后端能力 | 公开模块契约、版式门禁、结构化多角色 mapper、审批冻结和发送前复验已实现 | 缺少候选/质检/接受、PageApproval 与正式导出门禁 |
+| 前端 | feature boundary、Layout Workbench 与 Prompt Inspector 已实现 | 缺少 Candidate Review、页面批准和真实导出预检状态 |
+| 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、真实双角色与授权章节证据仍未完成 |
+
+以上测试数字来自 v0.2 已归档完成证据，本次拆票不把它们当作重新执行后的结果。开发开始时先由 MM-024 复跑并固定基线。
+
+### 目标代码落点与统一验证
+
+| 工单组 | 主要目标路径 | 需要保护的现有兼容边界 |
+|---|---|---|
+| MM-023～MM-027、MM-052～MM-053 | `backend/app/bootstrap/`、`backend/app/shared_kernel/`、`backend/app/modules/*/public.py`、`frontend/src/app/`、`frontend/src/features/`、`tests/architecture/`、`tests/contracts/` | `backend/app/main.py`、`backend/app/api/`、`frontend/src/api.ts` |
+| MM-028～MM-030、MM-054～MM-055 | `backend/app/platform/durable_work/`、`backend/app/modules/lineage/`、所属模块 `migrations/`、`tests/recovery/` | `backend/app/database.py`、`backend/app/recovery.py`、`backend/app/generation/queue.py` |
+| MM-031～MM-034、MM-056 | `backend/app/modules/layout/`、`frontend/src/features/layout/`、`tests/modules/layout/` | `backend/app/pages/templates.py`、`backend/app/pages/models.py`、`frontend/src/PageComposer.tsx` |
+| MM-035～MM-037、MM-057 | `backend/app/modules/prompting/`、`backend/app/modules/production/adapters/novelai/`、`frontend/src/features/prompting/`、`tests/modules/prompting/`、`tests/contracts/novelai/` | `backend/app/prompting/`、`backend/app/novelai/`、`backend/app/generation/executor.py`、`frontend/src/PromptWorkbench.tsx` |
+| MM-038～MM-043、MM-058、MM-062、MM-064～MM-065 | `backend/app/modules/review/`、`backend/app/modules/composition/`、`backend/app/modules/exporting/`、`frontend/src/features/review/`、`frontend/src/features/exporting/` | `backend/app/pages/`、`backend/app/exports/`、`frontend/src/PageComposer.tsx`、`frontend/src/ExportCenter.tsx` |
+| MM-044～MM-046、MM-059～MM-060、MM-063 | 各模块 `migrations/`、`tests/e2e/`、`tests/recovery/`、验收报告 | schema 16、工程包 v1.4、`P0_ACCEPTANCE_REPORT.md` |
+| MM-047～MM-051、MM-061 | `backend/app/modules/text_execution/`、`backend/app/workflows/chapter_production/`、`frontend/src/features/adaptation/`、`tests/modules/text_execution/` | `backend/app/adaptation/text_model.py`、`backend/app/adaptation/service.py`、`frontend/src/StoryboardWorkbench.tsx` |
+
+每张后端工单至少运行其模块/契约定向测试，并在合并前运行：
+
+```bash
+uv run ruff check backend tests
+uv run mypy backend
+uv run pytest -q
+```
+
+每张前端工单至少运行对应 `*.test.tsx`，并在合并前运行：
+
+```bash
+pnpm --dir frontend test -- --run
+pnpm --dir frontend build
+```
+
+MM-027 建成新测试目录后，P0 Release Gate 还必须运行：
+
+```bash
+uv run pytest -q tests/architecture tests/contracts tests/modules tests/workflows tests/recovery tests/e2e
+```
+
+如果定向测试路径尚未由上游工单创建，当前工单必须创建它；不得以“全量测试里间接覆盖”为理由省略模块级验收。
+
+### PRD 追踪矩阵
+
+| PRD 项目 | 对应需求与验收 | 主工单 | 完成判定 |
+|---|---|---|---|
+| 共享架构底座 | PRD §12、NFR-01～06、AC-01、架构 DoD 1～10/16 | MM-023～MM-030、MM-052～MM-055 | 新模块有公开契约、表所有者、架构门禁、durable work/outbox、SSE replay 和最小失效图；v0.2 行为仍通过 |
+| V03-P0-01 版式先行 | FR-06/10/11/13、FR-20、AC-09 | MM-031～MM-034、MM-056 | 每个 PromptPackage/GenerationSpec 之前存在有效 LayoutApproval；尺寸选择确定且修改只失效必要下游 |
+| V03-P0-02 多角色契约 | FR-07/10/11/12、FR-21、AC-10 | MM-035～MM-037、MM-057 | 单/双/三角色正负区块、顺序、坐标、动作/关系和固定 Tags 可验证；禁止扁平回退 |
+| V03-P0-03 候选闭环 | FR-11/14/17/18、FR-22、AC-11 | MM-038～MM-043、MM-058、MM-062、MM-064～MM-065 | 供应商成功只创建候选；完整质量清单不自动接受；只有有效 accepted 候选和 PageApproval 可进入正式导出 |
+| v0.3 P0 迁移与证明 | AC-01～11、PRD DoD 1～9/11～14、架构 DoD 1～14/16～19 | MM-044～MM-046、MM-059～MM-060、MM-063 | v0.2 工程安全迁移、回滚演练、Mock 全链和崩溃恢复通过；真实调用与授权章节另经用户批准完成 |
+| V03-P1-01 Token 感知 | FR-05、FR-23、AC-12 | MM-047～MM-051、MM-061 | 长章节按 stage/shard 可恢复运行；硬约束不被静默裁剪，失败只重跑最小范围 |
+
+### 范围锁定与不可破坏项
+
+- 保持本地模块化单体、一个 SQLite、一个发布物；不拆微服务，不引入 Redis、Kafka 或外部消息代理。
+- v0.2 不可变素材、页面和导出继续可读；迁移只追加，不重写历史 migration 或覆盖旧文件。
+- 新路径禁止继续扩张 `request.app.state.*`、全局 `services/models/repositories` 和 `frontend/src/api.ts`；旧路径只能作为有删除条件的 compatibility seam。
+- 文本模型与 NovelAI 密钥继续只存在于应用本地加密凭证库及解锁后的短期内存，不进入 SQLite、日志、工程包或前端持久存储。
+- 不改变“用户明确触发、有界预算、默认串行、重启不自动续跑付费调用”的边界。
+- 自动质量规则只产生证据，不能代替人工接受或 PageApproval；生成成功、渲染成功和 Job completed 都不等于发布批准。
+- 真实文本模型、NovelAI 付费 smoke、授权章节生产、永久删除、发布和外部部署不因工单存在而自动获得授权。
+
+### v0.3 执行总览
+
+| 波次 | 工单 | 优先级 | 状态 | 预计 | 直接依赖 |
+|---:|---|---|---|---:|---|
+| 0 | MM-023 v0.3 契约、ADR 与文档基线 | P0 | Done | 1–2d | 无 |
+| 0 | MM-052 v0.3 Canonical Schema 与契约 fixture | P0 | Done | 1–2d | MM-023 |
+| 0 | MM-024 v0.2 行为刻画与迁移 fixture | P0 | Done | 1–2d | MM-023、MM-052 |
+| 0 | MM-025 模块骨架、shared kernel 与 typed AppContainer | P0 | Done | 2–3d | MM-024 |
+| 0 | MM-026 后端公开 facade 与路由注入 | P0 | Done | 1–2d | MM-025、MM-052 |
+| 0 | MM-053 前端 feature 边界与 feature-local client | P0 | Done | 1–2d | MM-025、MM-052 |
+| 0 | MM-027 架构适应性函数与表/迁移所有权 | P0 | Done | 2–3d | MM-025、MM-026、MM-053 |
+| 1 | MM-028 Durable Work 存储与幂等事务 | P0 | Done | 1–2d | MM-027 |
+| 1 | MM-054 Durable Worker、租约与重试策略 | P0 | Done | 1–2d | MM-028 |
+| 1 | MM-029 Outbox 与 SSE replay | P0 | Done | 1–2d | MM-028 |
+| 1 | MM-055 Durable Work/Outbox 重启恢复 | P0 | Done | 1–2d | MM-029、MM-054 |
+| 1 | MM-030 Artifact Dependency Graph 与最小失效 | P0 | Done | 2–3d | MM-027、MM-029 |
+| 2 | MM-031 PageLayoutDraft 领域、Schema 与持久化 | P0 | Done | 2–3d | MM-027、MM-030 |
+| 2 | MM-032 LayoutValidator 与 DimensionSelector | P0 | Done | 1–2d | MM-031 |
+| 2 | MM-033 Layout API 与审批命令 | P0 | Done | 1–2d | MM-026、MM-031、MM-032 |
+| 2 | MM-056 Layout Workbench 与影响预览 | P0 | Done | 1–2d | MM-053、MM-031、MM-032 |
+| 2 | MM-034 版式生成门禁、冻结与旧入口收口 | P0 | Done | 2–3d | MM-030、MM-033 |
+| 3 | MM-035 PromptPlan v2 与固定 Tags 结构化编译 | P0 | Done | 2–3d | MM-034 |
+| 3 | MM-036 ProviderExecutionSpec 与 NovelAI 多角色映射 | P0 | Done | 2–3d | MM-035 |
+| 3 | MM-037 Prompt 审批与 Job 冻结 | P0 | Done | 1–2d | MM-033、MM-036 |
+| 3 | MM-057 Prompt Inspector 与脱敏载荷预览 | P0 | Done | 1–2d | MM-053、MM-035、MM-036 |
+| 4 | MM-038 PanelCandidateSet 与生成结果接入 | P0 | Todo | 2–3d | MM-030、MM-037、MM-055 |
+| 4 | MM-039 QualityRun/Finding 框架与确定性规则 | P0 | Todo | 1–2d | MM-032、MM-038 |
+| 4 | MM-062 视觉质量检查清单与金标 fixture | P0 | Todo | 1–2d | MM-039 |
+| 4 | MM-040 ReviewDecision 状态机与 API | P0 | Todo | 1–2d | MM-039 |
+| 4 | MM-064 候选审片台与质量证据 UI | P0 | Todo | 1–2d | MM-040、MM-053、MM-062 |
+| 4 | MM-041 reroll/inpaint 候选回环 | P0 | Todo | 1–2d | MM-040 |
+| 4 | MM-042 PageApproval 与页面状态机 | P0 | Todo | 1–2d | MM-040、MM-062 |
+| 4 | MM-065 页面批准与状态导航 UI | P0 | Todo | 1–2d | MM-042、MM-053、MM-064 |
+| 4 | MM-043 ExportPreflight 引擎与 TOCTOU 门禁 | P0 | Todo | 1–2d | MM-042 |
+| 4 | MM-058 Export Center 预检交互与问题定位 | P0 | Todo | 1–2d | MM-043、MM-053、MM-065 |
+| 5 | MM-044 v0.2→v0.3 数据迁移与只读恢复 | P0 | Todo | 1–2d | MM-034、MM-037、MM-043 |
+| 5 | MM-059 工程包升级、恢复与 v0.2 回滚演练 | P0 | In Progress | 1–2d | MM-044 |
+| 5 | MM-045 P0 架构与契约测试门禁 | P0 / Release Gate | Todo | 1–2d | MM-027、MM-036、MM-039、MM-043、MM-044 |
+| 5 | MM-060 P0 Mock 产品 E2E 与 v0.2 回归 | P0 / Release Gate | Todo | 1–2d | MM-034、MM-037、MM-041、MM-056、MM-057、MM-058、MM-059、MM-062、MM-064、MM-065 |
+| 5 | MM-063 崩溃注入、恢复与未知结果矩阵 | P0 / Release Gate | Todo | 1–2d | MM-030、MM-043、MM-055、MM-059 |
+| 5 | MM-046 真实 smoke、授权章节与 v0.3 P0 报告 | P0 / Release Gate | Blocked | 1–2d | MM-045、MM-060、MM-063、用户对服务/预算/素材的单独授权 |
+| 6 | MM-047 ModelCapabilitySnapshot 与 TokenBudget | P1 | Todo | 2–3d | MM-060、MM-063 |
+| 6 | MM-048 TextStageRun、checkpoint 与 durable 执行 | P1 | Todo | 2–3d | MM-029、MM-047、MM-054 |
+| 6 | MM-049 Stage DAG、shard、缓存与最小重跑 | P1 | Todo | 2–3d | MM-030、MM-048 |
+| 6 | MM-050 分层改编/设定/Prompt 后端接线 | P1 | Todo | 1–2d | MM-049 |
+| 6 | MM-061 TextStage 阶段 UI 与 Token 报告 | P1 | Todo | 1–2d | MM-049、MM-053 |
+| 6 | MM-051 长章节与真实文本流水线验收 | P1 | Blocked | 1–2d | MM-050、MM-061、用户对真实文本模型与授权章节的单独授权 |
+
+工期是单个熟悉仓库的工程师对一张可独立评审工单的粗估，不包含等待付费服务授权、供应商响应或人工审片的时间。超过 3 个开发日仍未达到验收时，应拆分而不是扩大当前工单。
+
+### 依赖图
+
+```mermaid
+flowchart LR
+    A["Wave 0<br/>契约与架构护栏"] --> B["Wave 1<br/>Durable Work / Outbox / Lineage"]
+    B --> C["Wave 2<br/>版式先行"]
+    C --> D["Wave 3<br/>结构化多角色"]
+    D --> E["Wave 4<br/>候选 / 质检 / 接受 / 导出"]
+    E --> F["Wave 5<br/>迁移、破坏测试、真实 P0 证明"]
+    F --> G["Wave 6<br/>Token 感知文本流水线"]
+```
+
+MM-033/MM-056、MM-037/MM-057、MM-040/MM-064、MM-042/MM-065、MM-050/MM-061 可在共享契约冻结后分别开发后端与 UI；MM-041 只依赖 ReviewDecision 后端，不等待审片 UI。MM-047～MM-050 只依赖 Mock P0 门禁 MM-060/MM-063，不等待付费验收 MM-046；真实 P1 仍由 MM-051 单独阻断。不得为了并行而复制状态或绕开公开契约。
+
+## v0.3 P0 / 架构与可靠性底座
+
+### MM-023 v0.3 契约、ADR 与文档基线
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`。
+- 对应：PRD V03-P0-01～03、V03-P1-01、AC-01；技术架构 §5～7、§17、§20。
+- 目标：把新版 PRD 和技术架构转成无自相矛盾、可追踪的实施边界。
+- 交付：模块所有权表、依赖白名单、表/目录所有权草案、ADR-010～018、v0.2→v0.3 fixture 清单、官方 Swagger/mapping 快照元数据和文档一致性报告。
+- 验收：
+  - README、PRD、技术架构和本文对“已实现/未实现”、P0/P1、术语和真实调用状态一致；
+  - PRD 每个 FR-20～23、AC-09～12 和架构 DoD 条目能反查至少一张实现/验收工单；
+  - 每个 v0.3 对象、表和工作区目录有唯一 owning module，跨模块依赖符合白名单；
+  - ADR 明确选择、拒绝方案、兼容期、回滚路径和删除条件，不把方向性文档写成已实现；
+  - 文档敏感信息扫描为 0，Swagger URL/hash/mapping version 可追溯。
+- 不包含：Canonical Schema/fixture 实现、模块搬迁、数据库迁移或真实模型调用。
+
+完成证据（2026-08-13）：`docs/architecture/V03_IMPLEMENTATION_BASELINE.md`、`docs/adr/ADR-010-018.md` 与 `tests/test_v03_document_baseline.py`；定向测试 4 项通过，Ruff 通过。真实服务未调用。
+
+### MM-052 v0.3 Canonical Schema 与契约 fixture
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-023。
+- 对应：PRD §11、NFR-06、AC-09～12；技术架构 §5.6、§6、§16.2。
+- 目标：把 v0.3 核心对象冻结为后端、前端、迁移和测试共用的单一契约基线。
+- 交付：PageLayoutDraft/PromptPlan/ProviderExecutionSpec/Candidate/Finding/Review/PageApproval/TextStageRun JSON Schema 与 Pydantic DTO；canonical JSON/hash 规则；consumer fixture。
+- 验收：
+  - 每个对象声明 schema version、稳定 ID/version/hash、必填字段、枚举和向后兼容策略；
+  - PageLayoutDraft fixture 包含 page profile、frame hierarchy、shot scale、阅读顺序、焦点、人物位置、文字和 crop-safe zone；
+  - PromptPlan 单/双/三角色 fixture 包含独立正负区块、order/center、每角色动作和跨角色 relationship action；
+  - Review fixture 覆盖两个候选、blocker/warning/info、接受/拒绝/待修复、Finding 豁免和 stale PageApproval；
+  - canonical bytes 在 Python/TypeScript fixture 中得到同一 SHA-256；敏感字段和绝对路径 Schema 校验失败。
+- 不包含：业务状态机、数据库表、UI 或供应商请求。
+
+完成证据（2026-08-13）：`backend/app/modules/*/contracts.py`、`contracts/schemas/v0.3/`、`contracts/fixtures/v0.3/`、`tests/contracts/test_v03_contracts.py` 与 `frontend/src/generated/api/v03Canonical.test.ts`；后端 20 项契约测试、前端 2 项跨端哈希测试、Ruff、Mypy 和 production build 通过。真实服务未调用。
+
+### MM-024 v0.2 行为刻画与迁移 fixture
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-023、MM-052。
+- 对应：AC-02～08 的继承回归；技术架构 §5.8、§16.6。
+- 目标：先锁定重构前真实行为，避免“目录升级”破坏已完成闭环。
+- 交付：`main@40f2cb9` 基线测试报告、v0.2 schema 16 数据库 fixture、工程包 v1.4 fixture、关键 HTTP/错误/审计 characterization tests。
+- 验收：
+  - 复跑后端测试、前端测试、Ruff、Mypy 和 production build，并记录精确数量与结果；
+  - 固定 adaptation、bibles、prompting、generation、pages、exports、recovery 的成功、关键失败、幂等与 revision 冲突行为；
+  - fixture 覆盖单角色、双角色 flat prompt、历史 PageVersion、AssetVersion、reroll/inpaint、工程包恢复；
+  - 测试不依赖真实文本模型或 NovelAI，不读取真实凭证；
+  - 任何基线失败先单独修复，不能在架构工单中顺手改变产品语义。
+- 不包含：新模块或新表。
+
+完成证据（2026-08-13）：`tests/fixtures/v0.2/`、`tests/characterization/test_v02_baseline_fixtures.py` 与 `docs/acceptance/V02_BASELINE_REPORT.md`；后端 137 项、前端 22 项、Ruff、Mypy 和 production build 通过。fixture 仅使用 Stub/Mock，无真实凭证和真实服务调用。
+
+### MM-025 模块骨架、shared kernel 与 typed AppContainer
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-024。
+- 对应：PRD §12；技术架构 §5.2～5.5、§5.8、ADR-016/018。
+- 目标：建立纵向模块的真实组装边界，同时让 v0.2 路径原样运行。
+- 交付：`bootstrap/`、`shared_kernel/`、`platform/`、`modules/`、`workflows/` 骨架；typed `AppContainer`；clock/ID/hash/error/ArtifactRef 原语；module installer 生命周期。
+- 验收：
+  - `main.py` 只创建容器、安装模块和路由，不继续新增具体 service 构造逻辑；
+  - AppContainer 显式声明依赖，真实 adapter 只在 composition root 创建；
+  - shared kernel 不出现业务 DTO、BaseService、GenericRepository 或可变全局状态；
+  - 旧 service 通过明确命名的 compatibility binding 接入，MM-024 行为测试全部保持；
+  - `/health`、启动 reconciliation、generation executor shutdown 和 vault lock 生命周期不退化。
+- 不包含：一次性移动全部旧 service、改变数据库 schema 或前端 UI。
+
+完成证据（2026-08-13）：`backend/app/bootstrap/`、`backend/app/shared_kernel/`、`backend/app/platform/`、`backend/app/modules/`、`backend/app/workflows/` 与 `tests/bootstrap/test_app_container.py`；Ruff、Mypy、全量后端测试通过，旧 URL、恢复与生命周期测试保持。
+
+### MM-026 后端公开 facade 与路由注入
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-025、MM-052。
+- 对应：技术架构 §5.5～5.8、架构 DoD 4～6。
+- 目标：让后端新能力只能通过最小公开契约接入，停止继续扩大旧的 `app.state` 入口。
+- 交付：各模块 `public.py`/`contracts.py`、legacy facade adapter、FastAPI `Depends` provider 和一个旧用例的垂直迁移样例。
+- 验收：
+  - v0.3 新 route 不读取 `request.app.state.*`，不导入其他模块内部 service/repository；
+  - 公开 Command/Query/Snapshot/Event DTO 为不可变、版本化对象，不暴露 SQLite row、FastAPI Request 或供应商 payload；
+  - 现有 route 可继续走 compatibility provider，行为与 URL 不变；
+  - 至少一个旧用例通过 facade + `Depends` 运行，成功、错误、幂等和 revision 冲突与 MM-024 一致；
+  - compatibility provider 有精确 allowlist、owner 和删除条件，不成为新的 service locator。
+- 不包含：前端目录迁移、删除所有 legacy 入口或生成完整 OpenAPI client。
+
+完成证据（2026-08-13）：各模块 `contracts.py`/`public.py`、`backend/app/bootstrap/dependencies.py`、`modules/composition/adapters/legacy.py` 与 `tests/modules/composition/test_legacy_facade.py`；页面 revision 的成功、错误、幂等、revision conflict 和零外部调用保持，Ruff、Mypy、全量后端测试通过。
+
+### MM-053 前端 feature 边界与 feature-local client
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-025、MM-052。
+- 对应：技术架构 §5.1、§5.5、§16.4，架构 DoD 3～4。
+- 目标：为 v0.3 UI 建立可独立演进的 feature 边界，不继续把领域状态和请求堆进根目录与全局 `api.ts`。
+- 交付：`frontend/src/app/`、`features/`、`shared/ui/`、`generated/api/` 或等价生成 DTO 边界；feature public entry；fixture-backed client test harness。
+- 验收：
+  - feature 只能导入自身文件、`shared/ui`、生成 DTO/client 和 app 提供的公开 workflow；
+  - v0.3 业务规则和请求不新增到 `frontend/src/api.ts`，旧 API 继续作为显式 compatibility seam；
+  - 跨 feature 流程由 `app/` 组合公开入口，不能直接导入另一 feature 的 component/store；
+  - fixture client 可在后端未完成时提供与 MM-052 一致的成功/错误/revision conflict 响应；
+  - 现有前端测试和 production build 不退化。
+- 不包含：Layout、Prompt 或 Review 的具体页面。
+
+完成证据（2026-08-13）：`frontend/src/app/`、`features/`、`shared/ui/`、`generated/api/` 与 Layout fixture client；成功、not found、validation、revision conflict 共 5 项定向测试，全量前端 17 个文件/27 项与 production build 通过，legacy `api.ts` 明确标记迁移缝。
+
+### MM-027 架构适应性函数与表/迁移所有权
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-025、MM-026、MM-053。
+- 对应：技术架构 §5.4～5.8、§16.3～16.4、架构 DoD 2～6。
+- 目标：把高内聚、低耦合从评审约定变成 CI 硬门禁。
+- 交付：`tests/architecture/`、依赖白名单、循环检测、公开入口检测、domain 纯净检测、table/migration registry、模块迁移 runner、Port contract harness、前端 import 检查。
+- 验收：
+  - 业务模块循环依赖为 0，跨模块 import 只能进入 `public`/`contracts`；
+  - 新增跨模块写 SQL、跨模块 cascade、未登记表/迁移或重复表所有者会使测试失败并打印完整依赖链；
+  - v0.3 新增 `app.state` service lookup、模块内部真实 HTTP client 和前端跨 feature 内部 import 会被阻断；
+  - 空库、v0.2 fixture 前向、重复执行和未知更高 schema version 均有迁移测试；
+  - 临时豁免必须包含 owner、原因、影响、删除条件和 ADR，永久 ignore 不通过。
+- 不包含：为了让门禁变绿而批量豁免现有代码；legacy 只能使用精确 allowlist。
+
+完成证据（2026-08-13）：`tests/architecture/`、`backend/app/platform/persistence/`、模块
+`migrations/` 入口、精确 compatibility exemption registry 与共享 Composition Port contract
+harness；架构/契约/模块门禁 44 项、全量后端 165 项、全量前端 17 个文件/27 项、Ruff、
+Mypy 和 production build 通过。空库、schema 16 fixture、重复迁移与未知 999 schema 均已
+回归；未调用真实文本模型或 NovelAI。
+
+### MM-028 Durable Work 存储与幂等事务
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-027。
+- 对应：NFR-01、FR-11；技术架构 §5.3、§7.1、§9.2.1、ADR-013。
+- 目标：先在领域事务中持久化工作意图；进程内 task 不再是真源。
+- 交付：`work_items`、attempt/handler receipt 表；durable work Port；UnitOfWork 接线；幂等键；`requires_user_action`、`not_before`、attempt limit 和 last-safe-error 字段。
+- 验收：
+  - 领域提交与 work item 在同一个 SQLite 事务中完成，事务失败时两者都不存在；
+  - 同一幂等键重复提交只返回原结果，不创建第二项工作；
+  - payload 只保存版本化 command ref/hash，不保存 Token、完整正文、完整 Prompt 或图片字节；
+  - 状态转移使用 revision/CAS 条件，重复完成、取消后完成和超 attempt limit 均失败关闭；
+  - 同一 contract suite 同时验证 in-memory fake 和 SQLite adapter。
+- 不包含：worker 循环、租约、SSE、外部 broker 或付费调用。
+
+完成证据（2026-08-13）：schema 17 的 `work_items`、`work_attempts`、
+`work_handler_receipts` migration，`backend/app/platform/durable_work/` Port、fake、SQLite
+adapter 与 typed UnitOfWork；同一 contract suite 验证幂等、CAS、完成/取消/失败和 attempt
+limit，另有领域状态与工作意图同事务回滚、not-before、人工动作及敏感载荷门禁。全量后端
+169 项、架构/契约/模块门禁 48 项、前端 17 个文件/27 项、Ruff、Mypy 与 production build
+通过；未启动 worker，未调用真实文本模型或 NovelAI。
+
+### MM-054 Durable Worker、租约与重试策略
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-028。
+- 对应：NFR-01、FR-11；技术架构 §9.2.1、§10、ADR-013。
+- 目标：安全领取已持久化工作，并把本地可重试、永久失败和需要人工处理严格分开。
+- 交付：单写者 worker runtime、CAS 短租约、续租/过期、handler registry、重试/退避策略和 wakeup adapter。
+- 验收：
+  - 两个 worker 竞争时同一 work item 只能有一个有效租约，租约过期后可由另一 owner 领取；
+  - 纯本地幂等失败按 `not_before` 和 attempt limit 重试，永久失败不重试；
+  - `requires_user_action=true` 或可能已外发的 attempt 不因 worker 启动、唤醒或租约过期自动执行；
+  - pause/cancel 后不领取新工作，在途本地 handler 结束后写入可解释终态；
+  - `asyncio.create_task` 只唤醒 worker，丢失 task 后 work item 仍存在。
+- 不包含：Outbox/SSE 和启动 reconciliation。
+
+完成证据（2026-08-13）：schema 18 `worker_leases`、CAS claim/renew/expiry、执行安全
+级别、handler registry、确定性退避、进程内 wakeup 与单写者 `DurableWorker`；真实双线程
+竞争仅一个租约，本地租约过期可换 owner，可能外发的 attempt 进入 `needs_review`，人工动作、
+暂停、取消及丢失 wake signal 均不产生越权执行。全量后端 177 项、架构/契约/模块门禁 56
+项、前端 17 个文件/27 项、Ruff、Mypy 与 production build 通过。当前 runtime 已交付可复用
+worker 机制和恢复验证，但尚无业务 work kind/handler 接入，因此 lifespan 不启动空 worker；
+待首个业务 durable command 接入时同票注册 handler 并启动 serve loop。未执行真实供应商调用。
+
+### MM-029 Outbox 与 SSE replay
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-028。
+- 对应：NFR-01/04/05、FR-11；技术架构 §5.7、§9.2.1、§9.3、架构 DoD 10/16。
+- 目标：让已提交状态和前端进度保持一致，不靠内存事件或轮询猜测。
+- 交付：`outbox_events`、project sequence、幂等 publisher、`Last-Event-ID` replay、handler receipt 和 SSE API。
+- 验收：
+  - HTTP 命令只返回已提交状态；SSE 断线重连能补发缺失序列且不重复应用副作用；
+  - publisher 失败不回滚领域事务，重启后可幂等重放；
+  - 同一 project sequence 单调递增且无重复；跨项目不能订阅到其他项目事件；
+  - event handler 按 `(event_id, handler_version)` 幂等，重复投递只返回首次 receipt；
+  - 事件和恢复日志不包含正文、完整 Prompt、Token、图片字节或绝对工作区路径。
+- 不包含：启动 reconciliation、WebSocket 或云端事件总线。
+
+完成证据（2026-08-13）：schema 19 `outbox_events`/project sequence/`handled_events`，
+事务内 append、幂等 publisher、同事务 handler receipt 与按项目 `Last-Event-ID` SSE replay；
+并发写入序列 1～12 无重号，publisher 失败后跨实例重放不回滚领域事实，重复 handler 只执行
+一次，跨项目事件不可见。事件只保存版本、引用、哈希和安全标量。全量后端 183 项、架构/
+契约/模块门禁 62 项、前端 17 个文件/27 项、Ruff、Mypy 与 production build 通过。SSE replay
+端点已接入；现有 legacy 业务命令尚未迁移为 outbox 写入者，前端 EventSource 消费随首个业务
+事件接入交付。未接入 WebSocket/云端总线，未执行真实供应商调用。
+
+### MM-055 Durable Work/Outbox 重启恢复
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-029、MM-054。
+- 对应：NFR-01/04、FR-11；技术架构 §9.3、架构 DoD 10/16。
+- 目标：根据持久事实恢复工作，不因重启猜测供应商结果或自动继续付费操作。
+- 交付：lease/outbox reconciliation、模块 IntegrityProbe 聚合、脱敏恢复摘要和用户恢复命令。
+- 验收：
+  - 纯本地幂等工作可按策略重新排队；可能已外发的 attempt 一律进入 `needs_review`；
+  - queued 工作重启后不自动开始，running 且无在途 attempt 的 Job 恢复为 paused；
+  - 过期租约、已发布未确认 outbox、完成结果未发事件三个断点均可幂等修复；
+  - Recovery coordinator 只调用模块 probe/repair command，不直接写任意业务私表；
+  - 查看范围、已用预算和未知结果后，用户必须显式恢复；启动本身产生的外部请求数为 0。
+- 不包含：业务模块特有的 layout/review 文件修复。
+
+完成证据（2026-08-13）：schema 20 Outbox delivery attempt 与 schema 21 owner-directed
+recovery report/finding/receipt，typed `IntegrityProbe` 聚合、脱敏 API、确认后 repair command；
+重启会暂停 queued/local orphan，外发未知进入 `needs_review`，未确认发布和缺失完成事件可幂等
+修复。启动与恢复外部请求数为 0，恢复 coordinator 只写 recovery 私表，业务修复由
+`durable_work` owner probe 执行。全量后端 185 项、架构/契约/模块/恢复门禁 64 项、前端
+17 个文件/27 项、Ruff、Mypy 与 production build 通过；未执行真实供应商调用。
+
+### MM-030 Artifact Dependency Graph 与最小失效
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-027、MM-029。
+- 对应：FR-06/07/10/14/15、NFR-01；技术架构 §5.2、§5.7、§6.4、ADR-015。
+- 目标：集中计算 Storyboard → Layout → Bible/Tags → Prompt → Spec → Candidate/Review → PageApproval → Export 的精确失效范围。
+- 交付：ArtifactRef、依赖边、边类型白名单、cycle guard、stale event、影响查询、解释文本和 lineage public contract。
+- 验收：
+  - 图为有向无环；非法边、重复冲突边和跨项目边失败关闭；
+  - 修改一个 frame 只返回该 frame 的 Prompt/Spec/Review/PageApproval 影响，不使无关页面失效；
+  - 修改一个 CharacterTagSet 只影响引用该角色/造型的面板；Storyboard 变化正确级联到相关 Layout；
+  - 失效记录保存原因、起点、依赖路径和事件 ID，但不复制业务文档；
+  - 重放同一失效事件幂等，旧版本和历史决定保留且可解释为 stale。
+- 不包含：lineage 直接写其他模块私表或自行决定业务边是否合法。
+
+完成证据（2026-08-13）：schema 22 `artifact_versions`、typed dependency edges、
+`invalidation_events/impacts`，边类型白名单、跨项目/冲突/cycle guard、确定性最短完整路径与
+幂等 stale 传播；单 frame、单 CharacterTagSet 和 Storyboard 三类最小影响 fixture 均不波及
+无关页面/角色，重复 source event 不重复写，后续事件保留历史并记录 `marked_stale=false`。
+全量后端 190 项、架构/契约/模块/恢复门禁 69 项、前端 17 个文件/27 项、Ruff、Mypy 与
+production build 通过；lineage 仅保存引用、哈希、原因与路径，未写其他模块私表。
+
+## v0.3 P0 / V03-P0-01 版式先行
+
+### MM-031 PageLayoutDraft 领域、Schema 与持久化
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-027、MM-030。
+- 对应：FR-06/10/13/20、AC-04/09；技术架构 §6.1～6.2、§7.5、ADR-010。
+- 目标：让页面版式成为 Prompt 和 GenerationSpec 的上游版本对象，而不是出图后的临时 UI 状态。
+- 交付：layout module；PageLayoutDraft/FrameSpec/LayoutApproval/DimensionSelection 契约；模块迁移和 workspace 版本快照；draft/save/get/list/approve command/query。
+- 验收：
+  - 页面 profile/尺寸、frame parent/child hierarchy、shot scale、panel ID、0–1 坐标、order、aspect ratio、focal point、character positions、text/crop safe zone 可往返；
+  - 每个已批准 Storyboard panel 恰好映射一个叶子 frame；frame hierarchy 无孤儿、重复 panel 或循环；
+  - 保存和审批均创建不可变版本与规范化 SHA-256，不覆盖旧版；
+  - LayoutApproval 绑定精确 Storyboard/Layout 内容哈希，修改后旧审批可查询但标记 stale；
+  - v0.2 页面几何只能创建 `imported_legacy` draft，不能自动审批；
+  - API/存储不包含 NovelAI 字段、供应商尺寸或图片 Token。
+- 不包含：尺寸选择算法、画布 UI、图像请求。
+
+完成证据（2026-08-13）：schema 23 新增 layout 自有的不可变版本、审批与
+`dimension_selections` 基线；PageLayoutDraft 全字段以规范化 JSON/SHA-256 同步写入 SQLite
+索引和 workspace 快照，读取时双向验哈希。保存使用乐观 revision，同内容重放不增版本，
+内容或 Storyboard 绑定变化才追加版本；审批精确绑定两侧内容哈希，旧审批保留并按固定原因
+查询为 stale。`imported_legacy` 导入不产生审批，先绑定已批准 Storyboard 才可人工审批；
+layout 表与快照无 NovelAI、凭证或图片 Token 字段，所有命令
+`external_requests_started = 0`。全量后端 196 项、架构/契约/模块门禁 77 项、前端 17 个
+文件/27 项、Ruff、Mypy（172 source files）与 production build 通过；未执行真实供应商调用。
+
+### MM-032 LayoutValidator 与 DimensionSelector
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-031。
+- 对应：FR-13/20、AC-09；技术架构 §7.5、OPEN-07。
+- 目标：在付费生成前确定格框合法性、阅读顺序和可满足的目标尺寸。
+- 交付：纯函数 LayoutValidator、DimensionCapabilitySet、DimensionSelector、规则版本、黄金 fixture 和可解释选择结果。
+- 验收：
+  - 检查 panel/frame 全集、有限坐标、画布边界、面积、gutter、非法重叠、阅读顺序环、人物/安全区范围；
+  - 按“宽高比误差 → crop-safe 风险 → 目标像素 → 成本/固定键”稳定排序，完全相同输入得到相同选择与哈希；
+  - 横格、竖格、近方格、六格页和不可满足的 crop-safe fixture 均有明确结果；
+  - capability 变化会使契约测试失败或产生新规则/mapping version，不静默改旧结果；
+  - 算法不导入 production/NovelAI 类型，也不访问网络或凭证库。
+- 不包含：真实供应商尺寸 smoke；该证据归 MM-046。
+
+完成证据（2026-08-13）：纯函数 `LayoutValidator` 覆盖 panel/frame 全集、规范化/有限几何、
+全画布 root、最小面积、重叠、gutter、人物/文字/crop-safe 范围和 reading-order DAG，并返回
+稳定 code/path。provider-neutral `DimensionCapabilitySet` 与 `DimensionSelector` 按宽高比误差、
+crop-safe 风险、目标像素、成本、固定 key 稳定排序，结果和失败均带规则版本与规范化哈希；
+能力候选变化而哈希未变会失败关闭。横格、竖格、近方格、六格页及不可满足 crop-safe 黄金
+fixture 通过。全量后端 209 项、前端 17 个文件/27 项、Ruff、Mypy（174 source files）与
+production build 通过；算法未导入 production/NovelAI、未访问网络或凭证库。
+
+### MM-033 Layout API 与审批命令
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-026、MM-031、MM-032。
+- 对应：PRD §8.5、FR-06/13/20、AC-09。
+- 目标：为版式编辑和审批提供强校验、可恢复的后端命令面。
+- 交付：draft/get/list/save/approve/impact API、revision/Idempotency-Key、LayoutValidator/DimensionSelector 接线和 OpenAPI 契约。
+- 验收：
+  - 保存使用乐观 revision；两个并发写只有一个成功，失败方收到当前 revision 且不覆盖另一版本；
+  - approve 同步复验 Storyboard、page profile、hierarchy、shot scale、frame 和 DimensionSelection hash；非法项返回精确 frame/path；
+  - impact 查询返回将 stale 的具体 ArtifactRef/路径，但审批命令不直接写下游私表；
+  - 同一 Idempotency-Key 重复提交返回同一版本/审批，不产生重复行；
+  - 所有命令只写本地状态，`external_requests_started = 0`。
+- 不包含：Layout Workbench UI、Prompt 编译和 NovelAI 调用。
+
+完成证据（2026-08-13）：schema 24 增加 layout 自有的 command receipt 和审批-尺寸绑定；
+draft/get/list/save/validate/approve/impact 路由进入 OpenAPI，写命令要求本地 session、CSRF、
+`Idempotency-Key`，相同请求跨 revision 变化仍返回原资源，不重复落行。并发 revision 回归中
+两个写只有一个 201，另一方 409 且返回 `current_revision=2`；只允许从当前父版本继续修订。
+approve 从已批准 Storyboard 页面重新取得 panel 集，复验 profile/canvas、层级/格框、shot
+scale 契约和每个 leaf 的 DimensionSelection 哈希，缺失 frame/path 精确返回；layout 版本通过
+公开 lineage facade 注册边，impact 只读返回 ArtifactRef/完整路径，审批不改下游私表。
+全量后端 214 项、前端 17 个文件/27 项、Ruff、Mypy（177 source files）、production build
+及 `git diff --check` 通过，所有响应 `external_requests_started = 0`，未调用真实供应商。
+
+### MM-056 Layout Workbench 与影响预览
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-053、MM-031、MM-032。
+- 对应：PRD §8.5、FR-06/13/20、AC-09。
+- 目标：让用户在 Prompt 和出图前看见、编辑并明确批准页面节奏与每格约束。
+- 交付：layout feature client、Layout Workbench、1–6 格模板、格框拖拽/拆分/合并、page profile、frame hierarchy、shot scale、阅读顺序、焦点、人物位置、安全区和尺寸/裁切预览。
+- 验收：
+  - 刷新或重启后从后端 fixture/API 恢复草稿/已批准版本，前端 store 不是项目真源；
+  - 画布可编辑横格、竖格、近方格和六格页，清楚显示层级、景别、实际比例、合法尺寸和 crop-safe 风险；
+  - 审批前展示受影响 Prompt/Spec/Review/PageApproval、候选数和成本摘要；非法 frame 的批准按钮禁用并定位问题；
+  - revision conflict 保留本地草稿并提供重新加载，不静默覆盖；
+  - 前端测试覆盖模板、拆分/合并、层级、shot scale、键盘阅读顺序、审批失效和零外部请求。
+- 不包含：后端状态机或图像请求。
+
+完成证据（2026-08-13）：新增 feature-local Layout HTTP/fixture client 与可恢复工作台，启动、
+刷新及章节/页面切换均从后端 current snapshot、approval、impact 重建状态。1～6 格模板保持
+Storyboard panel 与叶子 frame 一一映射；拖拽和方向键使用页面绝对坐标，层级拆分/合并可逆且
+不制造空 panel，page profile 会同步重算嵌套 frame 比例。Inspector 支持景别、焦点、人物位置、
+文字/crop-safe 区，校验后显示合法尺寸、预计裁切与风险；审批前展示 Prompt/Spec/Review/
+PageApproval 影响、候选数 0 与图像成本 0。revision conflict 保留本地草稿，须显式重载；修改
+已批准版本会明确显示审批失效。前端 20 个文件/36 项、全量后端 214 项、Ruff、Mypy（178
+source files）、production build 与 `git diff --check` 通过，全部 layout 响应
+`external_requests_started = 0`，未发起图像请求。
+
+### MM-034 版式生成门禁、冻结与旧入口收口
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-030、MM-033。
+- 对应：FR-06/10/11/13/20、AC-04/09；技术架构 §6.4、§8、§9.1。
+- 目标：让任何新 PromptPackage、GenerationSpec 和 Job 都实际依赖已批准版式，关闭新项目“先统一竖图、后裁切”的旧捷径。
+- 交付：LayoutSnapshot 查询、生成预检门禁、frame/DimensionSelection 冻结、计划指纹扩展、lineage 边、旧入口提示和 compatibility 条件。
+- 验收：
+  - 无 LayoutApproval、审批 stale、frame 非法或尺寸不可满足时，不创建 PromptPackage/GenerationSpec，不读取供应商凭证；
+  - GenerationPlan/Job/Spec 冻结 layout ID/version/hash、frame hash、尺寸选择、expected crop ratio 和规则版本；
+  - 修改单格 layout 只失效对应 Prompt/Spec/Review/PageApproval，旧素材不删除、不自动重抽；
+  - 新项目无法走固定统一尺寸旧入口；旧 v0.2 工程仍可只读查看并收到明确迁移提示；
+  - 回归证明文字/气泡/布局本地编辑仍不发图像请求。
+- 不包含：多角色供应商映射和候选接受。
+
+完成证据（2026-08-13）：新增逐章 `ApprovedChapterLayoutSnapshot` 查询和生成前
+fail-closed 门禁；PromptPackage 1.1、GenerationPlan、JobItem 与 GenerationSpec 1.3
+逐格冻结 layout/approval/frame/DimensionSelection 的 ID、版本、哈希、尺寸、预计裁切和
+规则版本。执行器在保存 Spec 和读取本地凭证前复验当前审批，版式变化时调用数保持 0；
+frame lineage 只失效对应 PromptPackage/Spec 路径，既有素材不删除且不自动重抽。新建项目
+标记 `v03`，schema 16 工程标记 `legacy_v02`，可读但生成入口返回明确迁移提示。数据库
+schema 26 的空库、v0.2 fixture 前向和重复迁移通过；后端 217 项、前端 20 文件/36 项、
+Ruff、Mypy（178 source files）、production build、`git diff --check` 与凭证明文扫描通过，
+全部外部调用使用 Stub/Mock。
+
+## v0.3 P0 / V03-P0-02 结构化多角色契约
+
+### MM-035 PromptPlan v2 与固定 Tags 结构化编译
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-034。
+- 对应：FR-05/07/10/12/21、AC-04/10；技术架构 §7.3、§8.1/8.3/8.4、ADR-011。
+- 目标：把 base、每个角色正负区块、顺序、坐标和关系动作保留为领域真源，禁止先扁平化。
+- 交付：PromptPlan v2/PromptPackage v2 Schema、compiler、冲突/覆盖校验、固定 Tags 确定性注入、legacy flat prompt reader、单/双/三角色 fixture。
+- 验收：
+  - 每个目标角色恰好出现一次，order 连续唯一、center 在 0–1，角色正负区块不合并；
+  - 每个角色保留自己的 action/pose，base 保留跨角色 `relationship_action`；编译后可从 fixture 逐字段反查，不能只剩共享自然语言；
+  - `fixed_tags` 与已批准 CharacterTagSet 的有序内容和哈希完全一致，模型不能改写、漏掉、重排或串角色；
+  - 固定/可变/负向冲突、未知角色、缺角色、空区块和 layout 角色位置不一致均本地阻断；
+  - 相同输入版本得到相同 PromptPlan 和哈希，变更 mapping 不改写历史 PromptPackage；
+  - 多角色 `legacy_flat_prompt` 只可查看旧素材，不能用于新 Job；单角色也必须显式重新批准后才能进入 v0.3 路径。
+- 不包含：把 PromptPlan 转为 NovelAI 私有字段。
+
+完成证据（2026-08-14）：`backend/app/modules/prompting/compiler.py` 以
+`PromptPlan 2.0` / `PromptPackage 2.0` 保留 base、每角色正负区块、action、连续 order、
+已批准 layout center、关系动作与固定 Tags 的有序内容/哈希；现有 Prompt API 以 bundle
+schema 1.2 持久化该结构，flat 字符串仅保留为 v0.2 UI 兼容投影，不能反向重建角色。
+compiler 对角色/版式覆盖、坐标、空区块、固定/可变/负向冲突和跨角色串扰失败关闭，
+Executor 再验 v2 内容哈希与冻结 TagSet。`legacy_flat_prompt` 查询明确返回只读、需重新生成、
+不可创建新 Job；单/双/三角色、确定性哈希、冲突和 legacy 阻断均有模块/API/生成回归。
+架构/契约/模块测试、Prompt/Queue/Executor/revision 定向测试、前端 20 文件/36 项、Ruff、
+Mypy、TypeScript、production build 与 `git diff --check` 通过；未调用真实文本或图像服务。
+
+### MM-036 ProviderExecutionSpec 与 NovelAI 多角色映射
+
+- 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-035。
+- 对应：FR-09/11/12/21、AC-10；技术架构 §8.2/8.4、§16.1～16.2、OPEN-03/08。
+- 目标：用版本化 anti-corruption mapper 把稳定 PromptPlan 转成当前 NovelAI V4 载荷。
+- 交付：ProviderExecutionSpec、mapping version、capability fixture、base/正向角色 captions/负向角色 captions/坐标映射、canonical payload hash、Swagger diff 契约测试。
+- 验收：
+  - 单/双/三角色 fixture 的正负 captions 与坐标数量一致、顺序稳定、非空，base 不混入角色固定 Tags；
+  - 每角色 action/pose 映射到自己的 caption，跨角色 relationship action 只进入规定的 base/关系字段；交换角色顺序时 caption/坐标/action 同步交换而不串扰；
+  - 角色遗漏、空 `char_captions`、错序、负向数量不匹配或 capability 不支持时，在构造 Authorization 前失败；
+  - 相同 PromptPlan/GenerationSpec 得到相同 ProviderExecutionSpec payload hash；mapping 升级产生新版本；
+  - mock 覆盖当前成功载荷、400/422、401/403、429、5xx、损坏响应和未知结果，不读取真实 Token；
+  - 运行代码只发送冻结 ProviderExecutionSpec，不从 flat prompt 反推角色。
+- 不包含：真实双角色付费调用；归 MM-046。
+
+完成证据（2026-08-14）：`production` 模块提供严格 Pydantic V4 DTO 与版本化
+anti-corruption mapper，mapping 固定为 `novelai-image-2026-08-09.2-v03-structure-1`；
+单/双/三角色和交换顺序 fixture 逐字段验证 base、正负 captions、order、center、action
+及 canonical payload hash。角色缺失、空区块、数量/顺序错误、不支持模型或过期 mapping
+均在凭证读取前失败关闭；当前官方 Swagger 快照的 112,680 bytes 与 SHA-256 进入契约测试。
+queue、revision 和 executor 只消费冻结 ProviderExecutionSpec/payload，不从 flat prompt 反推，
+Mock 覆盖供应商成功及现有错误分类；未读取真实 Token、未发出付费请求。
+
+### MM-037 Prompt 审批与 Job 冻结
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-033、MM-036。
+- 对应：PRD §8.6、FR-10～12/21、AC-10。
+- 目标：把结构化 PromptPlan 和供应商载荷纳入可失效的生成批准与冻结指纹。
+- 交付：Prompt approve/impact API、GenerationApproval/Plan/Job/Spec 扩展、生成预检和 executor 发送前复验。
+- 验收：
+  - Job 指纹冻结 PromptPlan/ProviderExecutionSpec/Layout/CharacterTagSet/model/mapping/rule 版本和每格候选数；
+  - 上游任一哈希变化都会使批准 stale 并要求重新估算，不静默沿用；
+  - approve/Job create 使用 Idempotency-Key；重复提交不创建第二个批准、Job 或成本预留；
+  - executor 在读取凭证前复验全部冻结哈希；失败时外部请求数为 0；
+  - executor 只发送冻结 ProviderExecutionSpec，不再次调用文本模型、自由重写 Prompt 或退回 flat prompt。
+- 不包含：Prompt Inspector UI、候选质量判断和页面批准。
+
+完成证据（2026-08-14）：schema 28/29 增加 Prompt 审批幂等快照和
+GenerationApproval，schema 30 将幂等键唯一性安全迁移到审批对象作用域；Job/Item 原子冻结 PromptPlan/PromptPackage/CharacterTagSet、
+ProviderExecutionSpec/payload、Layout/frame/dimension、模型、mapping/contract、seed、参考图
+provenance、候选数和质量规则版本，并只对外返回审计 ID/哈希而不返回完整 payload。
+approve/Job create 重放不创建第二份批准或 Job；executor 在读取凭证前重算并复验全部哈希，
+篡改回归返回 `GENERATION_APPROVAL_STALE`，凭证读取和 provider 调用均为 0。reroll/inpaint
+同样冻结映射与父版本输入；旧 flat prompt 仍失败关闭。
+
+### MM-057 Prompt Inspector 与脱敏载荷预览
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-053、MM-035、MM-036。
+- 对应：PRD §8.6、FR-10～12/21、AC-10。
+- 目标：用户在批准前能逐格核对领域 PromptPlan 与实际供应商映射，不接受黑盒拼接。
+- 交付：Prompt Inspector feature、结构化角色编辑/对照、mapping 预览、候选数/成本摘要和 stale 影响提示。
+- 验收：
+  - UI 分区显示 base、每个角色固定/可变/负向 Tags、action、relationship action、order/center、layout 约束和供应商映射；
+  - 单/双/三角色 fixture 的角色区块数量和顺序在领域/载荷两栏一一对应，缺失或空区块高亮且不能批准；
+  - payload 预览只展示 allowlist 字段，不包含 Token、请求头、完整章节、base64 或其他项目数据；
+  - 修改结构化字段后显示新 PromptPlan/payload hash、受影响对象和重新估算要求；
+  - 前端测试覆盖固定 Tags 只读边界、动作/关系保留、载荷脱敏、stale 和 revision conflict。
+- 不包含：后端 Job 创建或真实供应商调用。
+
+完成证据（2026-08-14）：feature-local client/Inspector 逐格显示 base、固定/可变/负向
+Tags、action、relationship、order/center、layout 与实际 NovelAI 映射；固定 Tags 只读，
+可变结构修改后立即进入未保存状态、清空可批准哈希并阻止审批，保存后重新读取服务端
+snapshot。payload 后端采用字段 allowlist，明确排除 Token、header、章节原文、图片/mask/
+reference base64；界面展示 mapping/model/hash、影响对象、候选数/预计调用和“需生成预估”
+成本边界。前后端测试覆盖角色对齐、只读边界、编辑保留、脱敏、stale conflict 和审批门禁；
+预览外部请求数始终为 0。
+
+## v0.3 P0 / V03-P0-03 候选、质检、接受与发布
+
+### MM-038 PanelCandidateSet 与生成结果接入
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 2–3d`；依赖 MM-030、MM-037、MM-055。
+- 对应：FR-10/11/14/22、AC-06/11；技术架构 §6.1～6.2、§9.5、ADR-012。
+- 目标：把“文件生成成功”与“素材被采用”彻底分离。
+- 交付：review module 基线；PanelCandidateSet/候选状态契约和表；Generation target hash；AssetVersion ready 事件 handler；多候选 Job 接入。
+- 验收：
+  - 供应商成功响应只登记不可变 AssetVersion，并加入唯一的 `panel_id + generation_target_sha256` CandidateSet，初始为 `qc_pending`；
+  - 同一事件重复投递不重复加入候选；同一目标支持两个以上候选且保留各自 seed/provenance/成本；
+  - 不自动改变 Panel 当前素材、PageVersion 或任何 accepted 状态；
+  - GenerationJob completed 只表示有可用文件，不创建 ReviewDecision/PageApproval；
+  - 文件落盘、候选登记和事件发布任一断点都可 reconciliation，未登记文件不会冒充候选。
+- 不包含：质量规则、人工接受 UI。
+
+### MM-039 QualityRun/Finding 框架与确定性规则
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-032、MM-038。
+- 对应：FR-18/22、AC-11；技术架构 §9.5、§15.3、§16.2、OPEN-10/11。
+- 目标：建立可解释、可复跑的质量状态机，并先落地确定性文件/版式规则。
+- 交付：QualityRun/Finding 状态机、规则注册表和版本；`FILE_DECODE_BLOCKER`、`BLANK_IMAGE_BLOCKER`、`DIMENSION_MISMATCH_BLOCKER`、`LOW_RESOLUTION_WARNING`、`CROP_SAFE_ZONE_BLOCKER`、`DUPLICATE_CANDIDATE_SHA256_WARNING`；resolve/waive 契约。
+- 验收：
+  - 规则输入固定候选文件哈希、layout frame、必要 Bible/continuity 摘要和规则版本，默认不调用云模型；
+  - 同一输入/规则重复运行结果幂等，规则升级创建新 run，不改写旧 Finding；
+  - blocker/warning 包含 rule ID/version、区域、证据、置信口径和状态；规则执行失败进入 `qc_failed`，候选仍保留；
+  - 关闭或豁免必须由明确用户动作完成并保留理由；规则永远不能创建 accepted 决定；
+  - 六条命名规则各有 pass/fail fixture；纯白、纯黑或像素方差低于版本化阈值的 fixture 必出 `BLANK_IMAGE_BLOCKER`；两个字节相同候选必出 duplicate warning，损坏图和越过 crop-safe 的图必出 blocker。
+- 不包含：随机文字、角色数量、服装/道具和页面文字溢出检查；归 MM-062。
+
+### MM-062 视觉质量检查清单与金标 fixture
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-039。
+- 对应：FR-18/22、AC-11；技术架构 §15.3、§16.2、OPEN-10/11。
+- 目标：完整覆盖 PRD 点名的 P0 质量项；可靠性不足的视觉项必须显式进入人工检查，不能用空规则冒充自动识别。
+- 交付：`RANDOM_TEXT_REVIEW`、`CHARACTER_COUNT_REVIEW`、`CLOTHING_PROP_VISIBILITY_REVIEW`、`PAGE_TEXT_OVERFLOW_BLOCKER`；授权/合成金标 fixture；规则能力登记和抽样报告模板。
+- 验收：
+  - 每个候选都生成随机文字、目标角色数量、固定服装/标志道具三项明确检查项，用户必须记录 `pass/fail/not_applicable + note` 后才能 PageApproval；
+  - 在本地 detector 未在每类至少 50 个授权/合成标注样本上达到 `precision ≥ 0.90` 且 `recall ≥ 0.80` 前，上述三项标记 `manual_check_required`，不得显示“自动通过”；引入 detector 时须单列版本、误报/漏报和禁用开关；
+  - `PAGE_TEXT_OVERFLOW_BLOCKER` 对每个 PageDocument 实际测量文字边界，任一像素越界或最小字号违规必出 blocker；
+  - blank、duplicate、损坏、crop-risk、随机文字、角色数、服装/道具、溢出八类 fixture 均产生预期 rule ID/severity/status；
+  - 规则/人工检查只能生成或关闭 Finding，不能自动接受候选或批准页面。
+- 不包含：云端视觉模型、通用美学评分或自动豁免。
+
+### MM-040 ReviewDecision 状态机与 API
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-039。
+- 对应：PRD §8.7、FR-14/22、AC-06/11；NFR-02/05。
+- 目标：让用户动作能对精确 AssetVersion 创建可追溯、可失效的决定，且 API 不替用户推断接受结果。
+- 交付：accepted/rejected/needs_fix 追加式 ReviewDecision、幂等 command/query API、current-decision projection、Finding resolve/waive 接线和审片指标事件。
+- 验收：
+  - 一个 target 最多一个当前有效 accepted 决定，但历史决定全部保留；
+  - 决定绑定精确 asset/version/target/dependency hash/user action；lineage 变化只把当前决定标记 stale，不改写历史事件；
+  - accept/reject/needs_fix 和 Finding resolve/waive 均使用 Idempotency-Key；重复提交返回相同事件 ID；
+  - 接受未 ready、跨 target、stale 或 blocker 未处置的候选失败关闭并返回稳定错误码；
+  - 查询可在重启后重建 current decision、历史和指标，API 不根据“最新候选”自动推断 accepted。
+- 不包含：候选审片 UI 或从决定直接发布页面。
+
+### MM-064 候选审片台与质量证据 UI
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-040、MM-053、MM-062。
+- 对应：PRD §8.7、FR-14/22、AC-06/11；NFR-02/05。
+- 目标：让用户并排比较同一目标候选，查看完整证据后明确接受、拒绝或要求修复。
+- 交付：Candidate Review feature、联系表/并排视图、Finding/人工检查面板、备注/豁免交互、指标采集和 revision conflict 处理。
+- 验收：
+  - 用户能对两个以上候选接受一个、拒绝一个、标记待修复，并看到 PromptPlan、seed、参考图、成本和八类质量证据；
+  - random-text/角色数/服装道具人工项未填写时接受按钮禁用；blocker 豁免必须输入理由并二次确认；
+  - 50 个候选使用懒加载或虚拟化，本地缓存命中时目标切换 200 ms 内有视觉反馈；
+  - 刷新/SSE 重连后决定和 Finding 从后端恢复，前端不根据卡片顺序或最新时间推断 accepted；
+  - revision conflict 保留用户备注并提示重载，不能覆盖另一审片动作。
+- 不包含：ReviewDecision 后端状态机、reroll/inpaint 执行或页面批准。
+
+### MM-041 reroll/inpaint 候选回环
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-040。
+- 对应：FR-14、AC-06/11；技术架构 §8.6、§9.5。
+- 目标：让修改结果回到同一个候选/质检/接受流程，而不是绕过审片自动替换页面。
+- 交付：从选中候选发起 reroll/inpaint 的 target/parent lineage；revision 完成事件接入 CandidateSet；旧页面兼容策略。
+- 验收：
+  - reroll/inpaint 冻结父 AssetVersion、PromptPlan/Spec、mask、用户动作和预算，父文件不覆盖；
+  - 新结果进入 `qc_pending`，不会自动撤销旧 accepted 决定或生成当前 PageVersion；
+  - 上游依赖变化会使旧 accepted stale；仅新增同 target 候选时旧 accepted 可继续有效，除非用户改选；
+  - 单格 revision 不改变其他格，整页 revision 不改变其他页；
+  - 外部调用仍遵守两次人工确认、串行、暂停/取消和 unknown outcome 边界。
+- 不包含：Focused Inpainting 或自动选择最佳候选。
+
+### MM-042 PageApproval 与页面状态机
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-040、MM-062。
+- 对应：FR-13/15/17/22、AC-06/07/11；技术架构 §9.5、§12、ADR-012。
+- 目标：把“页面可编辑”和“页面可发布”分离，形成精确、可失效的页面批准快照。
+- 交付：draft/ready_for_review/approved/changes_requested/stale 状态；PageApproval 契约和表；从 accepted assets 合成 PageVersion 的公开流程；approve/request-changes API。
+- 验收：
+  - 只有每格存在有效 accepted 候选且渲染成功时进入 ready_for_review；
+  - PageApproval 冻结 PageVersion、ordered accepted assets、Finding/豁免快照、renderer/font hash 和依赖摘要；
+  - blocker 未关闭/未显式豁免、accepted stale、文字/版式/素材变化时无法批准或使旧批准 stale；
+  - Job completed、PageVersion rendered 或 Finding=0 都不能自动生成批准；
+  - 恢复旧 PageVersion 不删除分支，也不自动恢复一个已失效批准。
+- 不包含：页面批准 UI 或导出格式编码。
+
+### MM-065 页面批准与状态导航 UI
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-042、MM-053、MM-064。
+- 对应：PRD §8.8～8.9、FR-13/17/22、AC-06/07/11。
+- 目标：让用户清楚看到页面为何不可批准、批准绑定什么，以及上游变化后该去哪里修复。
+- 交付：Page Approval feature、页面状态徽标、accepted asset/Finding/renderer 摘要、approve/request-changes、stale dependency 深链和历史批准浏览。
+- 验收：
+  - 页面缩略图准确区分缺候选、待质检、待接受、有 blocker、可审批、已审批和 stale；状态完全来自后端 Snapshot；
+  - approve 前展示 ordered accepted assets、八类质量状态/豁免、renderer/font hash 和 dependency hash；缺任一项按钮禁用；
+  - request changes 能定位具体 panel/Finding 并保留备注，不触发外部生成；
+  - 上游变化通过 SSE 将 approved 页面转 stale，并提供 Layout/Prompt/Candidate Review 的精确深链；
+  - 前端 fixture 测试覆盖 approve、changes_requested、stale、历史浏览和 revision conflict。
+- 不包含：PageApproval 后端状态机、ExportPreflight 或发布格式。
+
+### MM-043 ExportPreflight 引擎与 TOCTOU 门禁
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-042。
+- 对应：FR-16～18/22、AC-07/11；技术架构 §12.3、§13、§15、OPEN-06/11。
+- 目标：让正式 PNG/PDF/CBZ 只消费预检通过的精确 PageApproval 清单，修复假门禁。
+- 交付：ExportPreflight 计算器、blocker/warning 模型、preflight token/hash、TOCTOU 复验和 ExportRevision/PageApproval 绑定。
+- 验收：
+  - 实际计算缺页、未批准/stale 页面、未接受候选、开放 blocker、分辨率、危险裁切、文字溢出、阅读顺序和字体许可；
+  - `POST /exports` 在同一事务前复验固定 PageApproval/依赖/preflight hash，状态变化后旧预检不可复用；
+  - 正式 PNG/PDF/CBZ 遇任一 blocker 失败关闭；工程备份仍可导出，但 manifest 明确 `incomplete_project`；
+  - 导出失败不污染上次成功版本，页序、哈希、秘密扫描和派生物元数据通过；
+  - 预检只报告问题，不自动修改页面、豁免 Finding 或触发生成。
+- 不包含：Export Center UI、新增发布格式或自动上传。
+
+### MM-058 Export Center 预检交互与问题定位
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-043、MM-053、MM-065。
+- 对应：PRD §8.9、FR-17/18/22、AC-07/11。
+- 目标：让用户看懂哪一页、哪一格、哪个批准或 Finding 阻止发布，并能回到正确工作台处理。
+- 交付：Export Center feature、preflight summary、按 page/panel/rule 分组、问题深链、预检过期提示、正式导出/未完成工程包区分。
+- 验收：
+  - fixture 中 9 类 blocker/warning 均显示稳定 rule/error code、page/panel 和可操作入口；
+  - preflight hash 过期后正式导出按钮立即禁用，重新预检前不能复用旧结果；
+  - 正式 PNG/PDF/CBZ 与 `incomplete_project` 工程包使用不同文案、确认和结果状态；
+  - 页面状态变化通过 SSE 后只刷新受影响预检，不触发生成或自动豁免；
+  - 前端测试覆盖 blocker→修复→同页通过、stale PageApproval、字体许可和导出失败保留上次成功版本。
+- 不包含：后端预检计算、发布上传或新格式。
+
+## v0.3 P0 / 迁移、回归与真实发布门禁
+
+### MM-044 v0.2→v0.3 数据迁移与只读恢复
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-034、MM-037、MM-043。
+- 对应：FR-16、AC-07/09～11；技术架构 §16.6、架构 DoD 10/14。
+- 目标：让 schema 16 项目安全进入 v0.3 的“待确认”状态，不伪造版式、Prompt 或审片批准。
+- 交付：迁移前数据库备份、追加式数据库迁移、artifact 边补登记、legacy layout/prompt/candidate 转换、失败时只读恢复和 integrity probes。
+- 验收：
+  - 既有 Storyboard/PageVersion 建立可证明的 lineage，无法证明的边标记 `legacy_unknown`；
+  - PageVersion 几何只生成 `imported_legacy` LayoutDraft；flat prompt 标记 legacy；ready asset 可加入 legacy CandidateSet，但不自动 accepted；
+  - 旧 PageVersion 没有 PageApproval，仍可作为历史工程恢复；正式 v0.3 发布前必须重新质检和批准；
+  - 空库、schema 16 fixture、重复迁移、未知更高版本、磁盘故障和中途崩溃均有测试；
+  - 迁移前备份完成哈希/quick_check 后才写新 schema；失败时原备份和不可变文件哈希保持，应用进入只读恢复。
+- 不包含：工程包升级、ID 重映射、反向迁移或自动替用户接受旧素材。
+
+### MM-059 工程包升级、恢复与 v0.2 回滚演练
+
+- 优先级 / 状态 / 规模：`P0 / Todo / 1–2d`；依赖 MM-044。
+- 对应：FR-16、AC-07/09～11；技术架构 §13、§16.6、架构 DoD 10/14。
+- 目标：让 v0.3 新对象可移植，并证明代码回滚时能安全回到迁移前备份，而不是尝试破坏性降级数据库。
+- 交付：工程包新 schema、导出/恢复顺序、ID 重映射、v1.4 compatibility reader、pre-migration backup rollback drill 和恢复报告。
+- 验收：
+  - v0.3 工程包包含非秘密 layout/prompt/candidate/finding/review/PageApproval/lineage/workflow 记录及逐文件哈希；凭证继续替换为重新配置占位符；
+  - 在空工作区恢复后对象计数、依赖边、当前指针、PageApproval、页序和不可变素材 SHA-256 与源工程一致；
+  - v1.4 fixture 可导入并得到与 MM-044 相同的 legacy 待确认状态，ID 冲突整体重映射；
+  - 回滚演练使用 MM-044 的迁移前 schema 16 备份和 `main@40f2cb9` 兼容代码，只读打开项目、恢复 v1.4 包并核对全部历史素材哈希；
+  - 回滚报告明确 v0.3 新写入数据不会反向写入 schema 16；切换前保留 v0.3 数据副本，禁止就地降级或删除新表。
+- 不包含：自动逆向迁移、覆盖现有项目或外部备份服务。
+
+阶段证据（2026-08-14）：工程包 schema v1.5 已加入 layout、lineage、ProviderExecutionSpec、
+GenerationApproval 记录和 `layouts/` 文件，完成同库 ID 冲突全量重映射与 v0.3 round-trip；
+v1.4 compatibility reader 继续通过。schema 16 迁移前备份、旧主版本只读回滚演练尚依赖
+MM-044，因此本工单保持 In Progress，不标记 Done。
+
+### MM-045 P0 架构与契约测试门禁
+
+- 优先级 / 状态 / 规模：`P0 / Release Gate / Todo / 1–2d`；依赖 MM-027、MM-036、MM-039、MM-043、MM-044。
+- 对应：AC-01～11；技术架构 §16、§20 除真实调用项。
+- 目标：在进入全链 E2E 前证明模块边界、Schema、Port 和供应商映射没有结构性漏洞。
+- 交付：Port/consumer/Schema 契约套件、architecture CI、table ownership/migration checks、NovelAI mapping contract 和静态秘密扫描。
+- 验收：
+  - 架构循环、禁止 import、跨表写入、未版本化事件、新 `app.state` lookup 和前端跨 feature import 均为 0；
+  - PageLayoutDraft、PromptPlan、ProviderExecutionSpec、Candidate/Finding/Review/PageApproval 在 Python/TypeScript/JSON fixture 上兼容；
+  - 每个真实 adapter 和 fake 通过同一 Port contract suite；event consumer fixture 覆盖首次、重复、依赖未就绪和永久失败；
+  - 单/双/三角色 mapping、正负区块、坐标、action/relationship 和 payload hash 契约通过；
+  - 未登记 migration/table、跨模块 cascade、供应商 DTO 泄漏和敏感字段进入工程包 fixture 均会使门禁失败。
+- 不包含：全链 E2E、崩溃注入、UI 回归或真实调用。
+
+### MM-060 P0 Mock 产品 E2E 与 v0.2 回归
+
+- 优先级 / 状态 / 规模：`P0 / Release Gate / Todo / 1–2d`；依赖 MM-034、MM-037、MM-041、MM-056、MM-057、MM-058、MM-059、MM-062、MM-064、MM-065。
+- 对应：AC-01～11；技术架构 §16、§20 除真实调用项。
+- 目标：用完整用户旅程证明 v0.3 P0 产品行为闭环，并确认 v0.2 没有回归。
+- 交付：v0.3 Mock E2E、v0.2 全量回归、迁移/工程包 round trip 和 Mock 产品验收报告。
+- 验收：
+  - TXT → Storyboard → LayoutApproval → PromptPlan → 多候选 → QC → ReviewDecision → PageApproval → 工程包/PNG/PDF/CBZ 全链通过；
+  - 横/竖/方格/六格、两个以上候选、八类质量检查、Finding 关闭/豁免、reroll/inpaint 和 stale 路径均有断言；
+  - v0.2 全量回归、迁移幂等、schema 16 回滚、空工作区恢复、Ruff、Mypy、前端测试/build 和秘密扫描通过并记录精确数量；
+  - Mock 报告逐项勾选 AC-01～11，明确真实文本/NovelAI 请求仍为 0，不冒充 AC-08/10/11 真实证据。
+- 不包含：崩溃注入、未知远端结果或任何真实付费调用。
+
+### MM-063 崩溃注入、恢复与未知结果矩阵
+
+- 优先级 / 状态 / 规模：`P0 / Release Gate / Todo / 1–2d`；依赖 MM-030、MM-043、MM-055、MM-059。
+- 对应：NFR-01/04、AC-05/07/11；技术架构 §9.3、§16.2、架构 DoD 10/14/16。
+- 目标：证明每个跨 SQLite/文件/事件边界都能从中断恢复，且可能计费的请求绝不盲目重发。
+- 交付：确定性 fault injector、提交断点矩阵、startup reconciliation 报告和逐断点恢复断言。
+- 验收：
+  - 在 durable work/outbox、lineage、文件 staging→ready、AssetVersion→CandidateSet、QualityRun、ReviewDecision、PageApproval、preflight→ExportRevision 每个边界前后各注入一次崩溃；
+  - 纯本地幂等步骤重启后最多重放一次并收敛到相同 hash；已可能外发的 attempt 全部进入 `needs_review`，新增供应商请求为 0；
+  - 部分文件、过期租约、已提交未发布事件、stale approval 和中断导出均进入所属模块的可解释恢复结果；
+  - schema 16 备份回滚与 v0.3 工程包恢复后，不可变素材 SHA-256、页序和历史决定保持；
+  - 同一断点连续执行 20 次，重复对象、丢失事件和自动付费调用均为 0。
+- 不包含：随机 kill 造成的不可复现实验或真实供应商故障注入。
+
+### MM-046 真实 smoke、授权章节与 v0.3 P0 报告
+
+- 优先级 / 状态 / 规模：`P0 / Release Gate / Blocked / 1–2d`；依赖 MM-045、MM-060、MM-063 和用户对服务、预算、素材的单独授权。
+- 对应：AC-08、AC-10/11 的真实部分；PRD DoD 4～8/12～14；技术架构 DoD 17～19。
+- 目标：证明真实服务和真实创作流程可用，并把质量、成本与未完成项诚实记录下来。
+- 交付：最小真实文本阶段、单角色/双角色 NovelAI smoke、代表性授权章节、v0.3 P0 acceptance report、README/PRD/工单状态回写。
+- 验收：
+  - 开始前由用户明确确认端点、模型、Token 来源、授权章节、请求上限和预算；未经确认保持 Blocked；
+  - 双人格人工检查身份串扰、服装/标志物、相对位置和互动动作；至少一个目标比较两个以上候选；
+  - 至少一个 accepted 候选完成 reroll 或 inpaint 后重新质检/接受，全部页面经 PageApproval 后导出；
+  - 报告 token、图像调用、估算/可验证实际成本、P50/P95、失败/重试、首轮接受率、候选数、审片时间和 blocker/warning 密度；
+  - 401/余额不足等破坏场景继续用 Mock，不为测试故意损坏账户或浪费额度；
+  - 任何未通过项显式列出，短 smoke 不替代授权章节闭环。
+- 不包含：无人值守生产、提高并发或发布到外部平台。
+
+## v0.3 P1 / V03-P1-01 分层、Token 感知文本流水线
+
+### MM-047 ModelCapabilitySnapshot 与 TokenBudget
+
+- 优先级 / 状态 / 规模：`P1 / Todo / 2–3d`；依赖 Mock P0 门禁 MM-060、MM-063，不依赖付费验收 MM-046。
+- 对应：FR-04/05/23、AC-03/12；技术架构 §7.2～7.3、OPEN-09。
+- 目标：在请求前知道模型能力来源、输入/Schema/输出/安全余量如何占用上下文，并对裁剪作出可解释决定。
+- 交付：显式 capability probe、ModelCapabilitySnapshot、tokenizer/保守估算 Port、TokenBudgetPlanner、TruncationReport、能力来源等级和只读查询契约。
+- 验收：
+  - probe 是独立用户动作，不能只凭 `/models` 成功猜测上下文、结构化输出或 token 计量能力；
+  - snapshot 区分 `provider_reported / probed / conservative_default / unknown` 并被 TextStageRun 冻结；
+  - must-retain StoryBeat/SourceAnchor、角色身份/造型、Layout 硬约束和输出 Schema 永不静默裁剪；
+  - 可裁剪项按版本策略产生原哈希、原因和替代摘要；硬约束仍超限时缩小 shard，不发请求；
+  - 本地预算预检目标 500 ms 内完成，不通过额外外部请求估算；未知 tokenizer 使用保守上界并清楚标注。
+- 不包含：真正执行 stage 或改写 Storyboard。
+
+### MM-048 TextStageRun、checkpoint 与 durable 执行
+
+- 优先级 / 状态 / 规模：`P1 / Todo / 2–3d`；依赖 MM-029、MM-047、MM-054。
+- 对应：FR-05/23、NFR-01/04/05、AC-12；技术架构 §6.1、§7.2～7.3。
+- 目标：让每次文本阶段拥有精确输入、预算、尝试、结果、错误和可恢复检查点。
+- 交付：TextStageRun/checkpoint/token ledger/cache metadata 表和契约；TextModelProvider `execute_stage`/repair Port；durable handler；错误归一化和隐私默认值。
+- 验收：
+  - run 冻结 stage、profile revision、capability snapshot、template/Schema、ordered input hashes、TokenBudget 和幂等键；
+  - 空 content、finish_reason 截断、上下文超限、Schema 不完整、证据失败和可修复 JSON 分别归类；
+  - 只有“响应完整但格式可修复”才最多修复两次，修复也有独立预算/attempt；
+  - 通过 Schema、来源和业务不变量后才提交 checkpoint 并解锁下游；重启只恢复未完成的安全工作；
+  - 默认只保存结构化结果、原始响应哈希和错误摘要，不保存完整章节、完整供应商响应或密钥。
+- 不包含：阶段 DAG 和业务 UI。
+
+### MM-049 Stage DAG、shard、缓存与最小重跑
+
+- 优先级 / 状态 / 规模：`P1 / Todo / 2–3d`；依赖 MM-030、MM-048。
+- 对应：FR-05/23、AC-12；技术架构 §7.3、ADR-014。
+- 目标：把一次超长调用改成 `chapter_plan → scene_plan → page_plan → panel_plan → bible/tag → prompt_plan` 的可恢复 DAG。
+- 交付：process manager、稳定 shard key、依赖/检查点图、缓存键和 invalidation policy、失败补偿、最小重跑查询。
+- 验收：
+  - 每个 shard 只消费精确上游 ArtifactRef/hash，不能读取整本未选文本；
+  - 相同 stage/profile/capability/template/Schema/ordered input/token policy 命中缓存，任一版本变化使对应最小范围失效；
+  - scene/page/panel 中途失败只重跑未完成 shard，已校验的其他页面不重复调用；
+  - 重复事件、乱序到达、依赖未就绪和永久失败均有幂等/人工处置路径；
+  - workflow 只保存步骤和关联 ID，不复制 Storyboard、PromptPlan 或 Bible 真源。
+- 不包含：真实长章节调用。
+
+### MM-050 分层改编/设定/Prompt 后端接线
+
+- 优先级 / 状态 / 规模：`P1 / Todo / 1–2d`；依赖 MM-049。
+- 对应：PRD §8.3/8.10、FR-04/05/07/23、AC-03/04/12。
+- 目标：把 adaptation、world_bible 和 prompting 的写路径切到阶段流水线，同时保留可控的 legacy compatibility。
+- 交付：业务 stage handlers、公开 facade 接线、legacy adapter 切换条件、lineage/cache invalidation 和后端阶段查询/重试 API。
+- 验收：
+  - 结构化改编、CharacterTagSet 和 PromptPlan 使用同一激活 TextModelProfile revision，不静默切换；
+  - 配置变化、上游修改或 cache policy 变化只使必要 stage stale，并展示影响范围；
+  - AC-12 通过前，旧一次性真实生产路径默认关闭；compatibility 入口清楚标记 legacy，不能失败后静默回退；
+  - stage 查询返回状态、上游版本、预算、用量、裁剪、checkpoint、cache 和可恢复 command，不泄露完整正文/响应；
+  - 后端 Mock 覆盖长输入、空 content、截断、错误 JSON、证据失败和局部恢复。
+- 不包含：阶段 UI 或真实模型验收。
+
+### MM-061 TextStage 阶段 UI 与 Token 报告
+
+- 优先级 / 状态 / 规模：`P1 / Todo / 1–2d`；依赖 MM-049、MM-053。
+- 对应：PRD §8.3/8.10、FR-04/05/23、AC-03/12。
+- 目标：让用户看见每个文本阶段为何运行、裁掉什么、失败在哪里，以及恢复会重跑多少范围。
+- 交付：Adaptation Workbench 阶段树、设置页 capability 来源摘要、TokenBudget/Truncation/usage/cache 视图、checkpoint 重试、影响预览和 SSE 状态更新。
+- 验收：
+  - UI 展示 chapter/scene/page/panel/bible/prompt 的状态、上游版本、输入/Schema/预留输出/安全余量、供应商/估算用量和裁剪项；
+  - 空 content、截断、上下文超限、JSON 可修复、证据失败使用不同错误码和操作文案；
+  - 重试前显示将重跑的 shard 数与已缓存阶段，用户可取消且不会产生外部请求；
+  - 配置/模板/Schema/上游变化后只刷新受影响分支，cache hit/miss 原因可解释；
+  - 前端 fixture 测试覆盖局部失败恢复、SSE 重连、revision conflict 和凭证脱敏。
+- 不包含：后端 stage 执行或真实模型调用。
+
+### MM-051 长章节与真实文本流水线验收
+
+- 优先级 / 状态 / 规模：`P1 / Blocked / 1–2d`；依赖 MM-050、MM-061 和用户对真实文本模型与授权章节的单独授权。
+- 对应：AC-12、PRD DoD 10/12/14；技术架构实施顺序 11。
+- 目标：证明 Token 预算、分片、检查点和最小重跑在代表性长章节及真实服务上成立。
+- 交付：超限/截断/中途失败 fixture 报告、用户授权长章节真实运行、P1 验收报告、legacy 路径去留决定。
+- 验收：
+  - fixture 证明 must-retain 内容和 Schema 不被静默裁剪，所有可裁剪项进入 TruncationReport；
+  - 在中间 stage 注入失败后，只重跑最小未完成 shard，已校验上游和其他页面调用数不增加；
+  - 真实运行记录 profile/capability/template/Schema、供应商与估算 token、缓存命中、裁剪、墙钟、失败和重试；
+  - 配置或上游版本变化准确失效缓存；无可靠 tokenizer/上下文能力时保守阻断，不冒险发送；
+  - AC-12 未全部通过时保留显式 legacy 兼容，但继续禁止其作为默认真实生产入口；通过后才按 ADR 删除或限定旧路径。
+- 不包含：额外文本供应商、自动提示词压缩或无限重试。
+
+## v0.2 已完成功能点
 
 | 功能域 | 功能点 | 验收结果 |
 |---|---|---|
@@ -31,7 +927,7 @@
 | 生成门禁与冻结 | 图像任务冻结 Storyboard、Bibles、CharacterTagSet、PromptPackage、文本模型来源和 NovelAI 配置 | 缺失、过期、哈希不符或未批准时在本地阻止请求；执行期不再临时调用文本模型改写 Prompt |
 | 成本、审计与可移植性 | 文本 token 按任务分类，Prompt/Tag 来源进入审计和工程包，密钥仍保持零泄露 | 工程包可恢复新对象与引用；日志、工程包和成品导出均不含密钥原文 |
 
-## 执行顺序
+## v0.2 已完成执行顺序
 
 | 顺序 | 工单 | 优先级 | 状态 | 依赖 |
 |---:|---|---|---|---|
@@ -61,7 +957,7 @@
 | 24 | MM-021 生成冻结、导出与恢复升级 | P1 | Done | MM-020、MM-012–MM-017 |
 | 25 | MM-022 v0.2 前端闭环与回归验收 | P1 | Done | MM-018–MM-021 |
 
-## P0 / Blocker 工单
+## v0.2 P0 / Blocker 工单
 
 ### MM-001 Git 与仓库基线
 
@@ -119,7 +1015,7 @@
   - build 和测试通过。
 - 完成证据：本地健康页、离线错误状态、TypeScript build 和 7 项前端测试通过。
 
-## P1 / High 工单
+## v0.2 P1 / High 工单
 
 ### MM-006 项目创建与工作区
 
@@ -253,7 +1149,7 @@
   - Mock 通过不冒充真实文本模型或真实 NovelAI 验收。
 - 完成证据：前端已交付三字段文本模型配置、每次模型外发确认、模型化设定、固定 Tags 编辑审批、逐格 PromptPackage 编辑/最终预览/审批，以及生成预检中的逐格冻结 Prompt。109 项后端测试、20 项前端测试、ruff、mypy、TypeScript、生产构建、迁移幂等、工程包恢复、稳定对象 ID 回归与 diff 检查通过；全部外部模型测试使用 Stub/Mock，未执行真实文本模型或 NovelAI 付费调用。
 
-## P2 / P3 工单
+## v0.2 P2 / P3 工单
 
 ### MM-101 跨章节状态账本
 
@@ -273,6 +1169,10 @@
 ## 工单变更规则
 
 - 每次开发开始将一个工单设为 `In Progress`，同一时间只允许一个最高优先级主工单。
+- 同一波次只有在文件边界和依赖无重叠时才并行；共享 migration、公开契约或状态机的改动先由上游工单合并。
 - 发现新工作时先归属现有工单；范围独立才新增编号。
 - 优先级变化必须写明原因、依赖和对产品 P0 验收的影响。
+- PRD 的 FR/AC、技术架构 ADR/DoD 或对象所有权变化时，同一变更必须更新追踪矩阵和受影响工单。
+- 单张工单超过 3 个开发日、需要两个独立回滚点或同时改动两个无公开契约的业务模块时，停止并继续拆分。
+- `Blocked` 的真实验收工单只有在用户明确批准服务、模型、预算和素材范围后才能转为 `In Progress`。
 - 真实 NovelAI 调用、永久删除、发布或外部部署不因工单存在而自动获得授权。

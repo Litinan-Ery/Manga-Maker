@@ -380,6 +380,21 @@ class BookProductionService:
                 max_calls=int(next_chapter["max_calls"]),
                 max_cost_anlas=int(next_chapter["max_cost_anlas"]),
                 confirmed=True,
+                idempotency_key=(
+                    f"book-plan:{book_plan_id}:chapter:"
+                    f"{next_chapter['book_chapter_plan_id']}"
+                ),
+                request_sha256=hashlib.sha256(
+                    "|".join(
+                        (
+                            book_plan_id,
+                            str(next_chapter["book_chapter_plan_id"]),
+                            str(next_chapter["generation_plan_fingerprint"]),
+                            str(next_chapter["max_calls"]),
+                            str(next_chapter["max_cost_anlas"]),
+                        )
+                    ).encode()
+                ).hexdigest(),
             )
         except ApplicationError as exc:
             self._mark_plan_needs_review(

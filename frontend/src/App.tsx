@@ -12,10 +12,12 @@ import {
   createProject,
   getChapters,
   getHealth,
+  getLocalSessionCredentials,
   getVaultStatus,
   listProjects,
   preflightSource,
 } from "./api";
+import { LayoutWorkbench, createLayoutHttpClient } from "./features/layout";
 import { ChapterEditor } from "./ChapterEditor";
 import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
@@ -56,6 +58,12 @@ export function App() {
     () => projects.find((project) => project.project_id === selectedProjectId),
     [projects, selectedProjectId],
   );
+  const legacyReadOnly = selectedProject?.workflow_version === "legacy_v02";
+  const layoutClient = useMemo(() => {
+    if (!hasSession) return null;
+    const credentials = getLocalSessionCredentials();
+    return credentials ? createLayoutHttpClient(credentials) : null;
+  }, [hasSession]);
 
   const refreshProjects = useCallback(
     async (preferredProjectId?: string, signal?: AbortSignal) => {
@@ -268,16 +276,23 @@ export function App() {
                 </div>
                 <span>{selectedProject.title}</span>
               </div>
-              <label className="file-drop">
-                <strong>{busy ? "正在处理…" : "选择 TXT 文件"}</strong>
-                <span>最大 10 MB；原文件与规范化文本均保存在本机项目中</span>
-                <input
-                  type="file"
-                  accept=".txt,text/plain"
-                  disabled={busy}
-                  onChange={(event) => void handleFile(event.target.files?.[0])}
-                />
-              </label>
+              {legacyReadOnly ? (
+                <p className="warning" role="status">
+                  这是 v0.2 历史工程，当前版本仅允许查看。迁移与完整恢复由 MM-044/MM-059
+                  交付前，所有编辑、生成和重新导出入口均保持关闭。
+                </p>
+              ) : (
+                <label className="file-drop">
+                  <strong>{busy ? "正在处理…" : "选择 TXT 文件"}</strong>
+                  <span>最大 10 MB；原文件与规范化文本均保存在本机项目中</span>
+                  <input
+                    type="file"
+                    accept=".txt,text/plain"
+                    disabled={busy}
+                    onChange={(event) => void handleFile(event.target.files?.[0])}
+                  />
+                </label>
+              )}
             </section>
           )}
 
@@ -313,7 +328,7 @@ export function App() {
             </section>
           )}
 
-          {chapterSet && (
+          {chapterSet && !legacyReadOnly && (
             <section className="chapters">
               <div className="workspace-heading compact">
                 <div>
@@ -342,6 +357,14 @@ export function App() {
                 refreshKey={adaptationRefreshKey}
                 onChanged={() => setBibleRefreshKey((current) => current + 1)}
               />
+              {layoutClient && (
+                <LayoutWorkbench
+                  projectId={selectedProjectId}
+                  chapters={chapterSet.chapters}
+                  client={layoutClient}
+                  onError={setActionError}
+                />
+              )}
               <BibleWorkbench
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}

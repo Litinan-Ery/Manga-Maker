@@ -107,7 +107,7 @@ def test_inpaint_freezes_mask_and_preserves_unmasked_mock_pixels(
         project_id,
         panel["panel_id"],
         panel["asset_version_id"],
-        mask_bytes(832, 1216, box=(100, 100, 300, 300)),
+        mask_bytes(1024, 1536, box=(100, 100, 300, 300)),
     )
     assert uploaded.status_code == 201, uploaded.text
     mask = uploaded.json()
@@ -162,7 +162,7 @@ def test_inpaint_freezes_mask_and_preserves_unmasked_mock_pixels(
         ).fetchone()
     spec = json.loads(str(row["document_json"]))
     assert spec["action"] == "inpaint"
-    assert spec["schema_version"] == "1.2"
+    assert spec["schema_version"] == "1.4"
     assert spec["parent_asset_version_id"] == panel["asset_version_id"]
     assert spec["mask_asset_id"] == mask["mask_asset_id"]
     assert spec["mask_sha256"] == mask["sha256"]
@@ -181,13 +181,13 @@ def test_mask_validation_and_page_reroll_scope_fail_closed(
         client,
         session_headers,
         *endpoint_args,
-        mask_bytes(832, 1216),
+        mask_bytes(1024, 1536),
     )
     full = upload_mask(
         client,
         session_headers,
         *endpoint_args,
-        mask_bytes(832, 1216, full=True),
+        mask_bytes(1024, 1536, full=True),
     )
     mismatch = upload_mask(
         client,
@@ -248,7 +248,10 @@ def create_revision_job(
     target = estimate["targets"][0]
     return client.post(
         f"/api/v1/projects/{project_id}/generation/revisions/jobs",
-        headers=headers,
+        headers={
+            **headers,
+            "Idempotency-Key": f"revision-{estimate['plan_fingerprint']}",
+        },
         json={
             "operation": estimate["operation"],
             "page_id": estimate["page_id"],

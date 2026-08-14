@@ -1,0 +1,39 @@
+{
+  "schema_version": "2.0",
+  "prompt_plan_id": "01900000-0000-7000-8000-000000000201",
+  "version": 1,
+  "panel_id": "01900000-0000-7000-8000-000000000101",
+  "base": {
+    "positive_tags": ["solo", "rainy night", "medium shot"],
+    "negative_tags": ["text", "watermark", "logo"],
+    "relationship_action": null
+  },
+  "characters": [
+    {
+      "character_id": "01900000-0000-7000-8000-000000000301",
+      "character_tag_set_version_id": "01900000-0000-7000-8000-000000000501",
+      "fixed_tags": ["black bob hair", "white trench coat"],
+      "fixed_tags_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "variable_positive_tags": ["looking over shoulder"],
+      "negative_tags": ["wrong hair color", "wrong outfit"],
+      "action": "turns toward the sound of footsteps",
+      "order": 0,
+      "center": {"x": 0.35, "y": 0.58}
+    }
+  ],
+  "style_tags": ["black and white manga", "clean screentone"],
+  "continuity_tags": ["wet white trench coat"],
+  "layout_constraints": {
+    "page_layout_draft_id": "01900000-0000-7000-8000-000000000001",
+    "page_layout_draft_version": 1,
+    "frame_id": "01900000-0000-7000-8000-000000000011",
+    "frame_sha256": "2111111111111111111111111111111111111111111111111111111111111111",
+    "aspect_ratio": 1.4603174603174602,
+    "focal_point": {"x": 0.42, "y": 0.5},
+    "reserved_text_zones": [
+      {"x": 0.62, "y": 0.06, "width": 0.3, "height": 0.24}
+    ],
+    "crop_safe_rect": {"x": 0.08, "y": 0.06, "width": 0.84, "height": 0.86}
+  },
+  "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

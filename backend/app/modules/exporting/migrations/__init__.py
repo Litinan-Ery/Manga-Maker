@@ -1,0 +1,1 @@
+"""Registered exporting migrations only."""

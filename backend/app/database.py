@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import os
 import sqlite3
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+
+from .modules.layout.migrations import LAYOUT_MIGRATIONS
+from .modules.lineage.migrations import LINEAGE_MIGRATIONS
+from .modules.production.migrations import PRODUCTION_MIGRATIONS
+from .modules.project_source.migrations import PROJECT_SOURCE_MIGRATIONS
+from .modules.prompting.migrations import PROMPTING_MIGRATIONS
+from .platform.durable_work.migrations import DURABLE_WORK_MIGRATIONS
+from .platform.persistence import MigrationRegistry, ModuleMigrationRunner, RegisteredMigration
+from .platform.recovery.migrations import RECOVERY_MIGRATIONS
 
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
@@ -939,6 +950,29 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     ),
 )
 
+LEGACY_REGISTERED_MIGRATIONS = tuple(
+    RegisteredMigration(
+        version=version,
+        owner="legacy_v02",
+        name=f"legacy_{version:04d}",
+        statements=statements,
+        compatibility=True,
+    )
+    for version, statements in MIGRATIONS
+)
+MODULE_MIGRATIONS: tuple[RegisteredMigration, ...] = (
+    *DURABLE_WORK_MIGRATIONS,
+    *RECOVERY_MIGRATIONS,
+    *LINEAGE_MIGRATIONS,
+    *LAYOUT_MIGRATIONS,
+    *PROJECT_SOURCE_MIGRATIONS,
+    *PRODUCTION_MIGRATIONS[:2],
+    *PROMPTING_MIGRATIONS[:1],
+    *PRODUCTION_MIGRATIONS[2:],
+    *PROMPTING_MIGRATIONS[1:],
+)
+DATABASE_MIGRATION_REGISTRY = MigrationRegistry((*LEGACY_REGISTERED_MIGRATIONS, *MODULE_MIGRATIONS))
+
 
 class Database:
     """SQLite access with a process-local single-writer boundary."""
@@ -958,33 +992,78 @@ class Database:
     def migrate(self) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self._write_lock:
+            backup_path: Path | None = None
+            applied_version = self._applied_schema_version() if self.path.is_file() else 0
+            if 0 < applied_version < DATABASE_MIGRATION_REGISTRY.latest_version:
+                backup_path = self.path.with_name(
+                    f"{self.path.name}.pre-migration-v{applied_version}.bak"
+                )
+                self._create_verified_backup(backup_path)
             connection = self.connect()
             try:
-                connection.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-                applied = {
-                    row["version"]
-                    for row in connection.execute("SELECT version FROM schema_migrations")
-                }
-                for version, statements in MIGRATIONS:
-                    if version in applied:
-                        continue
-                    connection.executescript(
-                        f"""
-                        BEGIN IMMEDIATE;
-                        {statements}
-                        INSERT INTO schema_migrations(version) VALUES ({version});
-                        COMMIT;
-                        """
-                    )
-            finally:
+                ModuleMigrationRunner(DATABASE_MIGRATION_REGISTRY).migrate(connection)
+            except Exception:
                 connection.close()
+                if backup_path is not None:
+                    self._restore_verified_backup(backup_path)
+                raise
+            else:
+                connection.close()
+
+    def _applied_schema_version(self) -> int:
+        try:
+            with sqlite3.connect(self.path) as connection:
+                row = connection.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()
+            return int(row[0]) if row is not None else 0
+        except sqlite3.Error:
+            return 0
+
+    def _create_verified_backup(self, backup_path: Path) -> None:
+        temporary = backup_path.with_suffix(f"{backup_path.suffix}.tmp")
+        temporary.unlink(missing_ok=True)
+        with sqlite3.connect(self.path) as source, sqlite3.connect(temporary) as target:
+            source.backup(target)
+        with sqlite3.connect(temporary) as verification:
+            row = verification.execute("PRAGMA quick_check").fetchone()
+        if row is None or row[0] != "ok":
+            temporary.unlink(missing_ok=True)
+            raise sqlite3.DatabaseError("pre-migration backup failed quick_check")
+        original_hash = self._logical_database_hash(self.path)
+        backup_hash = self._logical_database_hash(temporary)
+        if original_hash != backup_hash:
+            temporary.unlink(missing_ok=True)
+            raise sqlite3.DatabaseError("pre-migration backup hash mismatch")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, backup_path)
+
+    def _restore_verified_backup(self, backup_path: Path) -> None:
+        temporary = self.path.with_name(f"{self.path.name}.restore.tmp")
+        temporary.unlink(missing_ok=True)
+        with sqlite3.connect(backup_path) as source, sqlite3.connect(temporary) as target:
+            source.backup(target)
+        with sqlite3.connect(temporary) as verification:
+            row = verification.execute("PRAGMA quick_check").fetchone()
+        if row is None or row[0] != "ok":
+            temporary.unlink(missing_ok=True)
+            raise sqlite3.DatabaseError("pre-migration restore failed quick_check")
+        if self._logical_database_hash(backup_path) != self._logical_database_hash(temporary):
+            temporary.unlink(missing_ok=True)
+            raise sqlite3.DatabaseError("pre-migration restore hash mismatch")
+        os.chmod(temporary, 0o600)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{self.path}{suffix}").unlink(missing_ok=True)
+        os.replace(temporary, self.path)
+
+    @staticmethod
+    def _logical_database_hash(path: Path) -> str:
+        with sqlite3.connect(path) as connection:
+            digest = hashlib.sha256()
+            for line in connection.iterdump():
+                digest.update(line.encode("utf-8"))
+                digest.update(b"\n")
+        return digest.hexdigest()
 
     @contextlib.contextmanager
     def reader(self) -> Iterator[sqlite3.Connection]:

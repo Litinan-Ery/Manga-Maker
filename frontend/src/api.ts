@@ -1,3 +1,9 @@
+/**
+ * @deprecated v0.2 compatibility seam. Do not add v0.3 feature DTOs or endpoints here.
+ * Owner: MM-053. Delete only after every legacy root component has moved behind a
+ * feature-local client and the full v0.2 frontend fixture suite still passes.
+ */
+
 export interface HealthResponse {
   status: "ok" | "degraded";
   version: string;
@@ -13,6 +19,7 @@ export interface Project {
   title: string;
   status: string;
   revision: number;
+  workflow_version: "v03" | "legacy_v02";
   created_at: string;
   updated_at: string;
 }
@@ -270,6 +277,17 @@ export interface GenerationJobItem {
   edit_prompt: string | null;
   inpaint_strength: number | null;
   last_error_code: string | null;
+  prompt_plan_id: string;
+  prompt_plan_version: number;
+  prompt_plan_sha256: string;
+  prompt_package_sha256: string;
+  character_tag_set_refs: Array<Record<string, unknown>>;
+  provider_execution_spec_id: string;
+  provider_execution_spec_sha256: string;
+  provider_payload_sha256: string;
+  provider_seed: number;
+  candidate_count: number;
+  reference_use: Record<string, unknown> | null;
 }
 
 export interface GenerationJob {
@@ -292,7 +310,14 @@ export interface GenerationJob {
   contract_sha256: string;
   credential_profile_id: string;
   timeout_seconds: number;
+  layout_snapshot_sha256: string;
   plan_fingerprint: string;
+  generation_approval_id: string | null;
+  generation_approval_sha256: string;
+  prompt_approval_hash: string;
+  prompt_snapshot_sha256: string;
+  candidate_count_per_panel: number;
+  quality_rule_version: string;
   status: GenerationJobStatus;
   user_action_id: string;
   page_count: number;
@@ -907,6 +932,51 @@ export interface PromptCharacterBlock {
   variable_tags: string[];
 }
 
+export interface StructuredCharacterV2 {
+  character_id: string;
+  character_tag_set_version_id: string;
+  fixed_tags: string[];
+  fixed_tags_sha256: string;
+  variable_positive_tags: string[];
+  negative_tags: string[];
+  action: string;
+  order: number;
+  center: { x: number; y: number };
+}
+
+export interface StructuredPromptPackageV2 {
+  schema_version: "2.0";
+  prompt_package_id: string;
+  version: number;
+  panel_id: string;
+  text_model_source: {
+    text_model_profile_id: string;
+    profile_version: number;
+    model_name: string;
+    prompt_template_version: string;
+    text_stage_run_id: string;
+  };
+  prompt_plan: {
+    schema_version: "2.0";
+    prompt_plan_id: string;
+    version: number;
+    panel_id: string;
+    base: {
+      positive_tags: string[];
+      negative_tags: string[];
+      relationship_action: string | null;
+    };
+    characters: StructuredCharacterV2[];
+    style_tags: string[];
+    continuity_tags: string[];
+    layout_constraints: Record<string, unknown>;
+    content_sha256: string;
+  };
+  prompt_plan_sha256: string;
+  content_sha256: string;
+  approved_content_sha256: string | null;
+}
+
 export interface PromptPackageDocument {
   prompt_package_id: string;
   panel_id: string;
@@ -918,10 +988,11 @@ export interface PromptPackageDocument {
   compiled_negative_prompt: string;
   compiled_prompt_sha256: string;
   compiled_negative_prompt_sha256: string;
+  structured_package?: StructuredPromptPackageV2 | null;
 }
 
 export interface PromptBundleDocument {
-  schema_version: "1.0";
+  schema_version: "1.0" | "1.1" | "1.2";
   storyboard_version_id: string;
   character_bible_version_id: string;
   style_bible_version_id: string;
@@ -931,6 +1002,7 @@ export interface PromptBundleDocument {
   text_model_name: string;
   prompt_template_version: string;
   provider_model_id: string;
+  layout_snapshot_sha256?: string | null;
   packages: PromptPackageDocument[];
 }
 
@@ -941,6 +1013,7 @@ export interface PromptArtifactVersion<TDocument> {
   provenance: Record<string, unknown>;
   approval_status: "draft" | "approved" | "stale";
   approval_hash: string | null;
+  snapshot_sha256: string;
   approved_at: string | null;
   is_current: boolean;
   created_at: string;
@@ -954,6 +1027,7 @@ export interface PromptingWorkflow {
   generation_readiness: {
     ready: boolean;
     blockers: string[];
+    structured_prompt_ready?: boolean;
     character_tag_bundle_version_id: string | null;
     prompt_bundle_version_id: string | null;
     text_model_config_revision: number | null;
@@ -988,6 +1062,16 @@ export function consumeLocalSession(): boolean {
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
   }
   return localSessionToken !== null && localCsrfToken !== null;
+}
+
+export interface LocalSessionCredentials {
+  session: string;
+  csrf: string;
+}
+
+export function getLocalSessionCredentials(): LocalSessionCredentials | null {
+  if (!localSessionToken || !localCsrfToken) return null;
+  return { session: localSessionToken, csrf: localCsrfToken };
 }
 
 export function clearLocalSession(): void {
@@ -1027,7 +1111,10 @@ export function estimateBookProduction(
     `/api/v1/projects/${projectId}/book-production/estimate`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         per_panel_cost_ceiling_anlas: perPanelCostCeilingAnlas,
       }),
@@ -1046,7 +1133,10 @@ export function createBookPlan(
     `/api/v1/projects/${projectId}/book-production/plans`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         per_panel_cost_ceiling_anlas: estimate.per_panel_cost_ceiling_anlas,
         plan_fingerprint: estimate.plan_fingerprint,
@@ -1425,7 +1515,10 @@ export function createGenerationJob(
     `/api/v1/projects/${projectId}/generation/jobs`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         chapter_id: estimate.chapter_id,
         per_panel_cost_ceiling_anlas: estimate.per_panel_cost_ceiling_anlas,
@@ -1557,7 +1650,10 @@ export function createRevisionJob(
     `/api/v1/projects/${projectId}/generation/revisions/jobs`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
       body: JSON.stringify({
         operation: estimate.operation,
         page_id: estimate.page_id,
@@ -2017,9 +2113,29 @@ export function revisePromptBundle(
         character_id: block.character_id,
         tag_set_id: block.tag_set_id,
         variable_tags: block.variable_tags,
+        negative_tags:
+          item.structured_package?.prompt_plan.characters.find(
+            (character) => character.character_id === block.character_id,
+          )?.negative_tags ?? [],
+        action:
+          item.structured_package?.prompt_plan.characters.find(
+            (character) => character.character_id === block.character_id,
+          )?.action ?? "preserve the approved panel action",
+        order:
+          item.structured_package?.prompt_plan.characters.find(
+            (character) => character.character_id === block.character_id,
+          )?.order ?? 0,
+        center:
+          item.structured_package?.prompt_plan.characters.find(
+            (character) => character.character_id === block.character_id,
+          )?.center ?? { x: 0.5, y: 0.5 },
       })),
       style_tags: item.style_tags,
       negative_tags: item.negative_tags,
+      relationship_action:
+        item.structured_package?.prompt_plan.base.relationship_action ?? null,
+      continuity_tags:
+        item.structured_package?.prompt_plan.continuity_tags ?? [],
     })),
   };
   return request(
@@ -2036,8 +2152,20 @@ export function revisePromptBundle(
 export function approvePromptBundle(
   projectId: string,
   versionId: string,
+  snapshotSha256: string,
 ): Promise<PromptArtifactVersion<PromptBundleDocument>> {
-  return promptingApprove(projectId, "prompt-bundles", versionId);
+  return request(
+    `/api/v1/projects/${projectId}/prompting/prompt-bundles/${versionId}/approve`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ snapshot_sha256: snapshotSha256 }),
+    },
+    true,
+  );
 }
 
 function promptingGenerate<T>(

@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
+import secrets
 import warnings
 from dataclasses import dataclass
 from io import BytesIO
@@ -11,6 +13,12 @@ from typing import Any, Literal, Protocol
 import httpx
 from PIL import Image, UnidentifiedImageError
 
+from ..modules.production.adapters.novelai import (
+    NovelAIV4Payload,
+    require_frozen_novelai_payload,
+)
+from ..modules.production.contracts import ProviderExecutionSpec
+from ..modules.production.errors import ProviderMappingError
 from .contracts import (
     CONNECTION_TEST_PATH,
     GENERATION_PATH,
@@ -21,6 +29,13 @@ from .contracts import (
 
 MAX_GENERATED_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_GENERATED_PIXELS = 4_000_000
+NOVELAI_CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9]{6}$")
+
+
+def novelai_correlation_id() -> str:
+    """Return the six-character request id required by the Image API contract."""
+
+    return secrets.token_hex(3)
 
 
 class NovelAIError(Exception):
@@ -95,8 +110,29 @@ class NovelAIImageRequest:
     source_image_base64: str | None = None
     mask_base64: str | None = None
     inpaint_strength: float | None = None
+    provider_execution_spec: ProviderExecutionSpec | None = None
+    frozen_payload: NovelAIV4Payload | None = None
 
     def __post_init__(self) -> None:
+        if (self.provider_execution_spec is None) != (self.frozen_payload is None):
+            raise NovelAIConfigurationError(
+                "provider execution spec and frozen payload must be provided together"
+            )
+        if self.provider_execution_spec is not None and self.frozen_payload is not None:
+            try:
+                payload = require_frozen_novelai_payload(
+                    self.provider_execution_spec,
+                    self.frozen_payload,
+                )
+            except ProviderMappingError as exc:
+                raise NovelAIConfigurationError(exc.message) from exc
+            if str(self.provider_execution_spec.generation_spec_id) == str(
+                self.provider_execution_spec.provider_execution_spec_id
+            ):
+                raise NovelAIConfigurationError("provider execution identifiers must differ")
+            frozen_action = "infill" if self.action == "infill" else "generate"
+            if payload.action != frozen_action:
+                raise NovelAIConfigurationError("frozen payload action does not match request")
         if self.action == "generate":
             require_model_profile(self.provider_model_id)
             if (
@@ -115,8 +151,10 @@ class NovelAIImageRequest:
                 )
             if self.inpaint_strength is None or not 0.1 <= self.inpaint_strength <= 1:
                 raise NovelAIConfigurationError("inpaint strength must be between 0.1 and 1")
-        if not self.correlation_id.strip() or len(self.correlation_id) > 100:
-            raise NovelAIConfigurationError("correlation id is invalid")
+        if not NOVELAI_CORRELATION_ID_PATTERN.fullmatch(self.correlation_id):
+            raise NovelAIConfigurationError(
+                "correlation id must contain exactly six alphanumeric characters"
+            )
         if not self.prompt.strip():
             raise NovelAIConfigurationError("image prompt must not be empty")
         if not 64 <= self.width <= 2048 or not 64 <= self.height <= 2048:
@@ -228,8 +266,8 @@ class NovelAIClient:
     async def generate_image(self, request: NovelAIImageRequest) -> NovelAIGeneratedImage:
         if request.provider_model_id != self.configuration.provider_model_id:
             raise NovelAIConfigurationError("request model does not match pinned configuration")
-        secret = self.secret_reader(self.configuration.credential_profile_id)
         payload = image_request_payload(request)
+        secret = self.secret_reader(self.configuration.credential_profile_id)
         try:
             async with httpx.AsyncClient(
                 base_url=IMAGE_API_BASE_URL,
@@ -263,6 +301,15 @@ class NovelAIClient:
 
 
 def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
+    if request.provider_execution_spec is not None and request.frozen_payload is not None:
+        try:
+            payload = require_frozen_novelai_payload(
+                request.provider_execution_spec,
+                request.frozen_payload,
+            )
+        except ProviderMappingError as exc:
+            raise NovelAIConfigurationError(exc.message) from exc
+        return payload.model_dump(mode="json", exclude_none=True)
     is_v4 = "diffusion-4" in request.provider_model_id
     parameters: dict[str, Any] = {
         "width": request.width,

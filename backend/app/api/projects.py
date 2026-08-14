@@ -80,6 +80,7 @@ async def preflight_source(
     file: Annotated[UploadFile, File()],
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    project_service(request).require_writable(project_id)
     content = await file.read(10 * 1024 * 1024 + 1)
     if len(content) > 10 * 1024 * 1024:
         raise ApplicationError(
@@ -98,6 +99,7 @@ def confirm_source(
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    project_service(request).require_writable(project_id)
     return ingestion_service(request).confirm(project_id, body.preflight_id, body.encoding)
 
 
@@ -127,6 +129,7 @@ def draft_story_beats(
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    project_service(request).require_writable(project_id)
     return ingestion_service(request).draft_story_beats(project_id, chapter_id)
 
 
@@ -138,6 +141,7 @@ def replace_chapters(
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    project_service(request).require_writable(project_id)
     boundaries = [
         ChapterBoundary(
             title=chapter.title,
@@ -157,6 +161,7 @@ def create_anchor(
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
+    project_service(request).require_writable(project_id)
     return ingestion_service(request).create_anchor(
         project_id, body.chapter_id, body.start_offset, body.end_offset
     )

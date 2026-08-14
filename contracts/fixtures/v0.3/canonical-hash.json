@@ -1,0 +1,18 @@
+{
+  "value": {
+    "schema_version": "1.0",
+    "title": "上海夜雨",
+    "coordinates": [0, 0.25, 1, 1e-7, 0.000001, 1e20, 1e+21],
+    "emoji": "漫🖋️",
+    "key_order": {
+      "": "private-use",
+      "😀": "astral"
+    },
+    "nested": {
+      "z": null,
+      "a": true
+    }
+  },
+  "canonical_json": "{\"coordinates\":[0,0.25,1,1e-7,0.000001,100000000000000000000,1e+21],\"emoji\":\"漫🖋️\",\"key_order\":{\"😀\":\"astral\",\"\":\"private-use\"},\"nested\":{\"a\":true,\"z\":null},\"schema_version\":\"1.0\",\"title\":\"上海夜雨\"}",
+  "sha256": "8b7800778f0d96c129e86623799597e72d0398f10ae1764cbc3485ca11dab8f7"
+}

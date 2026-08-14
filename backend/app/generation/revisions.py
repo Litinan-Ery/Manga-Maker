@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import sqlite3
@@ -8,20 +9,29 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal, cast
+from uuid import NAMESPACE_URL, uuid5
 
 from PIL import Image, UnidentifiedImageError
 
 from ..database import Database
 from ..errors import ApplicationError
 from ..ids import uuid7
+from ..modules.production.adapters.novelai import map_prompt_plan_to_novelai
+from ..modules.production.errors import ProviderMappingError
+from ..modules.prompting.public import PromptPlan
 from ..pages.models import PageDocument
 from ..pages.service import PageService
+from ..shared_kernel import canonical_sha256
 from .assets import canonical_json, fsync_directory, write_synced
-from .queue import GenerationPlan, GenerationQueueService
+from .queue import GenerationPlan, GenerationQueueService, _redacted_provider_payload
 
 RevisionOperation = Literal["panel_reroll", "page_reroll", "inpaint"]
 MAX_MASK_BYTES = 8 * 1024 * 1024
 MAX_MASK_PIXELS = 4_000_000
+
+
+def _base64(raw: bytes) -> str:
+    return base64.b64encode(raw).decode("ascii")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +46,22 @@ class RevisionTarget:
     edit_prompt: str | None
     inpaint_strength: float | None
     cost_ceiling_anlas: int
+    layout_panel: dict[str, Any]
+    prompt_package_id: str
+    prompt_package_sha256: str
+    prompt_plan_id: str
+    prompt_plan_version: int
+    prompt_plan_sha256: str
+    prompt_plan: dict[str, Any]
+    character_tag_set_refs: tuple[dict[str, Any], ...]
+    provider_execution_spec_id: str
+    provider_execution_spec: dict[str, Any]
+    provider_execution_spec_sha256: str
+    provider_payload_sha256: str
+    provider_payload: dict[str, Any]
+    provider_seed: int
+    candidate_count: int
+    reference_use: dict[str, Any] | None
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -49,7 +75,28 @@ class RevisionTarget:
             "edit_prompt": self.edit_prompt,
             "inpaint_strength": self.inpaint_strength,
             "cost_ceiling_anlas": self.cost_ceiling_anlas,
+            "layout_panel": self.layout_panel,
+            "prompt_package_id": self.prompt_package_id,
+            "prompt_package_sha256": self.prompt_package_sha256,
+            "prompt_plan_id": self.prompt_plan_id,
+            "prompt_plan_version": self.prompt_plan_version,
+            "prompt_plan_sha256": self.prompt_plan_sha256,
+            "prompt_plan": self.prompt_plan,
+            "character_tag_set_refs": list(self.character_tag_set_refs),
+            "provider_execution_spec_id": self.provider_execution_spec_id,
+            "provider_execution_spec": self.provider_execution_spec,
+            "provider_execution_spec_sha256": self.provider_execution_spec_sha256,
+            "provider_payload_sha256": self.provider_payload_sha256,
+            "provider_payload": _redacted_provider_payload(self.provider_payload),
+            "provider_seed": self.provider_seed,
+            "candidate_count": self.candidate_count,
+            "reference_use": self.reference_use,
         }
+
+    def freeze_payload(self) -> dict[str, Any]:
+        payload = self.payload()
+        payload["provider_payload"] = self.provider_payload
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +334,8 @@ class RevisionService:
         max_calls: int,
         max_cost_anlas: int,
         confirmed: bool,
+        idempotency_key: str,
+        request_sha256: str,
     ) -> dict[str, Any]:
         if not confirmed:
             raise ApplicationError(
@@ -315,10 +364,83 @@ class RevisionService:
             raise ApplicationError(
                 "GENERATION_COST_LIMIT_INVALID", "成本上限未覆盖预留或超出安全范围。", 422
             )
+        with self.database.reader() as connection:
+            existing = connection.execute(
+                """
+                SELECT ga.request_sha256, ga.plan_fingerprint, gj.job_id
+                FROM generation_approvals ga
+                LEFT JOIN generation_jobs gj
+                  ON gj.generation_approval_id = ga.generation_approval_id
+                WHERE ga.project_id = ? AND ga.idempotency_key = ?
+                """,
+                (project_id, idempotency_key),
+            ).fetchone()
+        if existing is not None:
+            if (
+                str(existing["request_sha256"]) != request_sha256
+                or str(existing["plan_fingerprint"]) != plan.fingerprint
+            ):
+                raise ApplicationError(
+                    "GENERATION_APPROVAL_IDEMPOTENCY_CONFLICT",
+                    "Idempotency-Key 已绑定到另一份修订批准。",
+                    409,
+                )
+            if existing["job_id"] is None:
+                raise ApplicationError(
+                    "GENERATION_APPROVAL_INCOMPLETE",
+                    "修订批准已存在但 Job 尚未完整创建，请进行恢复。",
+                    409,
+                )
+            return self.queue.get_job(project_id, str(existing["job_id"]))
         job_id = str(uuid7())
         user_action_id = str(uuid7())
+        generation_approval_id = str(uuid7())
+        approval_snapshot = {
+            "schema_version": "1.0",
+            "project_id": project_id,
+            "chapter_id": plan.base.chapter_id,
+            "operation": operation,
+            "page_id": page_id,
+            "page_version_id": plan.page_version_id,
+            "plan_fingerprint": plan.fingerprint,
+            "prompt_approval_hash": plan.base.prompt_approval_hash,
+            "prompt_snapshot_sha256": plan.base.prompt_snapshot_sha256,
+            "layout_snapshot_sha256": plan.base.layout_snapshot_sha256,
+            "character_tag_bundle_version_id": plan.base.character_tag_bundle_version_id,
+            "provider_model_id": plan.provider_model_id,
+            "mapping_version": plan.base.mapping_version,
+            "contract_sha256": plan.base.contract_sha256,
+            "candidate_count_per_panel": 1,
+            "quality_rule_version": plan.base.quality_rule_version,
+            "max_calls": max_calls,
+            "max_cost_anlas": max_cost_anlas,
+            "targets": [target.freeze_payload() for target in plan.targets],
+        }
+        approval_sha256 = canonical_sha256(approval_snapshot)
         try:
             with self.database.writer() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO generation_approvals(
+                        generation_approval_id, project_id, chapter_id,
+                        plan_fingerprint, approval_sha256, snapshot_json,
+                        idempotency_key, request_sha256, candidate_count_per_panel,
+                        quality_rule_version, user_action_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        generation_approval_id,
+                        project_id,
+                        plan.base.chapter_id,
+                        plan.fingerprint,
+                        approval_sha256,
+                        canonical_json(approval_snapshot),
+                        idempotency_key,
+                        request_sha256,
+                        plan.base.quality_rule_version,
+                        user_action_id,
+                    ),
+                )
                 connection.execute(
                     """
                     INSERT INTO generation_jobs(
@@ -328,12 +450,17 @@ class RevisionService:
                         text_model_config_revision,
                         novelai_config_revision, provider_model_id, mapping_version,
                         contract_sha256, credential_profile_id, timeout_seconds,
-                        plan_fingerprint, status, user_action_id, page_count,
+                        layout_snapshot_sha256, plan_fingerprint, status,
+                        user_action_id, page_count,
                         panel_count, max_calls, max_cost_anlas,
                         estimated_cost_upper_anlas, cost_basis, operation_kind,
-                        target_page_id, target_page_version_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 1,
-                              ?, ?, ?, ?, 'user_confirmed_per_panel_ceiling', ?, ?, ?)
+                        target_page_id, target_page_version_id,
+                        generation_approval_id, generation_approval_sha256,
+                        prompt_approval_hash, prompt_snapshot_sha256,
+                        candidate_count_per_panel, quality_rule_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 1,
+                              ?, ?, ?, ?, 'user_confirmed_per_panel_ceiling', ?, ?, ?,
+                              ?, ?, ?, ?, 1, ?)
                     """,
                     (
                         job_id,
@@ -351,6 +478,7 @@ class RevisionService:
                         plan.base.contract_sha256,
                         plan.base.credential_profile_id,
                         plan.base.timeout_seconds,
+                        plan.base.layout_snapshot_sha256,
                         plan.fingerprint,
                         user_action_id,
                         panel_count,
@@ -360,6 +488,11 @@ class RevisionService:
                         operation,
                         page_id,
                         plan.page_version_id,
+                        generation_approval_id,
+                        approval_sha256,
+                        plan.base.prompt_approval_hash,
+                        plan.base.prompt_snapshot_sha256,
+                        plan.base.quality_rule_version,
                     ),
                 )
                 for target in plan.targets:
@@ -369,8 +502,27 @@ class RevisionService:
                             item_id, job_id, ordinal, page_id, page_number,
                             panel_id, status, cost_ceiling_anlas, operation_kind,
                             parent_asset_version_id, mask_asset_id, edit_prompt,
-                            inpaint_strength
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+                            inpaint_strength, page_layout_draft_id,
+                            page_layout_draft_version_id, layout_version,
+                            layout_content_sha256, layout_approval_id,
+                            layout_approval_sha256, frame_id, frame_content_sha256,
+                            dimension_selection_id, dimension_selection_sha256,
+                            selected_width, selected_height, expected_crop_ratio,
+                            dimension_rule_version, capability_snapshot_sha256,
+                            prompt_plan_id, prompt_plan_version, prompt_plan_sha256,
+                            prompt_plan_json, prompt_package_sha256,
+                            character_tag_set_refs_json,
+                            provider_execution_spec_id, provider_execution_spec_json,
+                            provider_execution_spec_sha256,
+                            provider_payload_sha256, provider_payload_json,
+                            provider_seed, candidate_count, reference_use_json
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, 'queued',
+                            ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?
+                        )
                         """,
                         (
                             str(uuid7()),
@@ -385,6 +537,39 @@ class RevisionService:
                             target.mask_asset_id,
                             target.edit_prompt,
                             target.inpaint_strength,
+                            target.layout_panel["page_layout_draft_id"],
+                            target.layout_panel["page_layout_draft_version_id"],
+                            target.layout_panel["layout_version"],
+                            target.layout_panel["layout_content_sha256"],
+                            target.layout_panel["layout_approval_id"],
+                            target.layout_panel["layout_approval_sha256"],
+                            target.layout_panel["frame_id"],
+                            target.layout_panel["frame_content_sha256"],
+                            target.layout_panel["dimension_selection_id"],
+                            target.layout_panel["dimension_selection_sha256"],
+                            target.layout_panel["selected_width"],
+                            target.layout_panel["selected_height"],
+                            target.layout_panel["expected_crop_ratio"],
+                            target.layout_panel["dimension_rule_version"],
+                            target.layout_panel["capability_snapshot_sha256"],
+                            target.prompt_plan_id,
+                            target.prompt_plan_version,
+                            target.prompt_plan_sha256,
+                            canonical_json(target.prompt_plan),
+                            target.prompt_package_sha256,
+                            canonical_json(list(target.character_tag_set_refs)),
+                            target.provider_execution_spec_id,
+                            canonical_json(target.provider_execution_spec),
+                            target.provider_execution_spec_sha256,
+                            target.provider_payload_sha256,
+                            canonical_json(target.provider_payload),
+                            target.provider_seed,
+                            target.candidate_count,
+                            (
+                                canonical_json(target.reference_use)
+                                if target.reference_use is not None
+                                else None
+                            ),
                         ),
                     )
                 self._audit(
@@ -523,7 +708,9 @@ class RevisionService:
                 raise ApplicationError(
                     "REVISION_PANEL_STALE", "目标面板不在当前生成计划中。", 409
                 )
-            self._asset_row(project_id, placement.panel_id, placement.asset_version_id)
+            parent_asset = self._asset_row(
+                project_id, placement.panel_id, placement.asset_version_id
+            )
             selected_mask: str | None = None
             if operation == "inpaint":
                 if not mask_asset_id:
@@ -537,6 +724,73 @@ class RevisionService:
                         "MASK_PARENT_MISMATCH", "蒙版没有绑定当前页所用的父素材。", 409
                     )
                 selected_mask = mask_asset_id
+            prompt_plan = PromptPlan.model_validate(base_panel.prompt_plan)
+            provider_seed = self._revision_seed(
+                base_panel.provider_seed,
+                operation,
+                placement.asset_version_id,
+                selected_mask,
+                normalized_edit,
+                inpaint_strength,
+            )
+            provider_spec_id = uuid5(
+                NAMESPACE_URL,
+                "manga-maker:revision-provider-preview:"
+                f"{operation}:{page['page_version_id']}:{placement.panel_id}:"
+                f"{provider_seed}:{selected_mask or ''}:{normalized_edit or ''}",
+            )
+            generation_preview_id = uuid5(
+                NAMESPACE_URL,
+                "manga-maker:revision-generation-preview:"
+                f"{operation}:{page['page_version_id']}:{placement.panel_id}:"
+                f"{provider_seed}:{selected_mask or ''}:{normalized_edit or ''}",
+            )
+            source_image_base64: str | None = None
+            mask_base64: str | None = None
+            if operation == "inpaint":
+                assert selected_mask is not None
+                parent_raw = self._verified_asset_bytes(parent_asset)
+                mask_row = self._mask_row(project_id, selected_mask)
+                mask_raw = self._verified_mask_bytes(parent_asset, mask_row)
+                source_image_base64 = _base64(parent_raw)
+                mask_base64 = _base64(mask_raw)
+            try:
+                mapped = map_prompt_plan_to_novelai(
+                    prompt_plan=prompt_plan,
+                    generation_spec_id=generation_preview_id,
+                    provider_execution_spec_id=provider_spec_id,
+                    seed_material=str(provider_spec_id),
+                    model_id=(
+                        base.inpaint_model_id
+                        if operation == "inpaint"
+                        else base.provider_model_id
+                    ),
+                    contract_sha256=base.contract_sha256,
+                    capability_snapshot_sha256=base_panel.capability_snapshot_sha256,
+                    page_layout_draft_sha256=base_panel.layout_content_sha256,
+                    width=base_panel.selected_width,
+                    height=base_panel.selected_height,
+                    seed=provider_seed,
+                    steps=28,
+                    scale=5.0,
+                    sampler="k_euler_ancestral",
+                    noise_schedule="karras",
+                    mapping_version=base.mapping_version,
+                    action="infill" if operation == "inpaint" else "generate",
+                    reference=(
+                        self._reference_payload(base_panel.provider_payload)
+                        if operation != "inpaint"
+                        else None
+                    ),
+                    source_image_base64=source_image_base64,
+                    mask_base64=mask_base64,
+                    inpaint_strength=(
+                        inpaint_strength if operation == "inpaint" else None
+                    ),
+                    edit_prompt=normalized_edit,
+                )
+            except ProviderMappingError as exc:
+                raise ApplicationError(exc.code, exc.message, 409, exc.details) from exc
             targets.append(
                 RevisionTarget(
                     ordinal=ordinal,
@@ -549,6 +803,53 @@ class RevisionService:
                     edit_prompt=normalized_edit,
                     inpaint_strength=inpaint_strength if operation == "inpaint" else None,
                     cost_ceiling_anlas=per_panel_cost_ceiling_anlas,
+                    layout_panel={
+                        key: value
+                        for key, value in base_panel.payload().items()
+                        if key
+                        in {
+                            "page_layout_draft_id",
+                            "page_layout_draft_version_id",
+                            "layout_version",
+                            "layout_content_sha256",
+                            "layout_approval_id",
+                            "layout_approval_sha256",
+                            "frame_id",
+                            "frame_content_sha256",
+                            "dimension_selection_id",
+                            "dimension_selection_sha256",
+                            "selected_width",
+                            "selected_height",
+                            "expected_crop_ratio",
+                            "dimension_rule_version",
+                            "capability_snapshot_sha256",
+                        }
+                    },
+                    prompt_package_id=base_panel.prompt_package_id,
+                    prompt_package_sha256=base_panel.prompt_package_sha256,
+                    prompt_plan_id=base_panel.prompt_plan_id,
+                    prompt_plan_version=base_panel.prompt_plan_version,
+                    prompt_plan_sha256=base_panel.prompt_plan_sha256,
+                    prompt_plan=base_panel.prompt_plan,
+                    character_tag_set_refs=base_panel.character_tag_set_refs,
+                    provider_execution_spec_id=str(
+                        mapped.execution_spec.provider_execution_spec_id
+                    ),
+                    provider_execution_spec=mapped.execution_spec.model_dump(mode="json"),
+                    provider_execution_spec_sha256=hashlib.sha256(
+                        canonical_json(
+                            mapped.execution_spec.model_dump(mode="json")
+                        ).encode()
+                    ).hexdigest(),
+                    provider_payload_sha256=mapped.execution_spec.payload_sha256,
+                    provider_payload=mapped.payload.model_dump(
+                        mode="json", exclude_none=True
+                    ),
+                    provider_seed=provider_seed,
+                    candidate_count=1,
+                    reference_use=(
+                        base_panel.reference_use if operation != "inpaint" else None
+                    ),
                 )
             )
         provider_model_id = (
@@ -592,6 +893,82 @@ class RevisionService:
                 "REVISION_PARENT_ASSET_INVALID", "父素材不存在或与目标面板不匹配。", 409
             )
         return cast(sqlite3.Row, row)
+
+    @staticmethod
+    def _revision_seed(
+        base_seed: int,
+        operation: RevisionOperation,
+        parent_asset_version_id: str,
+        mask_asset_id: str | None,
+        edit_prompt: str | None,
+        inpaint_strength: float | None,
+    ) -> int:
+        material = "|".join(
+            (
+                str(base_seed),
+                operation,
+                parent_asset_version_id,
+                mask_asset_id or "",
+                edit_prompt or "",
+                str(inpaint_strength or ""),
+            )
+        )
+        return int(hashlib.sha256(material.encode()).hexdigest()[:8], 16) % 4_294_967_288
+
+    @staticmethod
+    def _reference_payload(provider_payload: dict[str, Any]) -> dict[str, Any] | None:
+        parameters = cast(dict[str, Any], provider_payload.get("parameters", {}))
+        images = parameters.get("director_reference_images")
+        descriptions = parameters.get("director_reference_descriptions")
+        strengths = parameters.get("director_reference_strength_values")
+        fidelities = parameters.get("director_reference_secondary_strength_values")
+        if not images:
+            return None
+        try:
+            if (
+                not isinstance(descriptions, list)
+                or not isinstance(strengths, list)
+                or not isinstance(fidelities, list)
+            ):
+                raise TypeError("reference arrays missing")
+            return {
+                "png_base64": images[0],
+                "description": descriptions[0]["caption"]["base_caption"],
+                "strength": strengths[0],
+                "fidelity": fidelities[0],
+            }
+        except (IndexError, KeyError, TypeError) as exc:
+            raise ApplicationError(
+                "GENERATION_REFERENCE_FREEZE_INVALID",
+                "冻结 Precise Reference 载荷不完整。",
+                409,
+            ) from exc
+
+    @staticmethod
+    def _verified_asset_bytes(row: sqlite3.Row) -> bytes:
+        workspace = Path(str(row["workspace_path"])).resolve()
+        path = (workspace / str(row["original_relative_path"])).resolve()
+        if not path.is_relative_to(workspace) or not path.is_file():
+            raise ApplicationError(
+                "REVISION_PARENT_ASSET_FILE_MISSING", "父素材文件缺失。", 409
+            )
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != str(row["image_sha256"]):
+            raise ApplicationError(
+                "REVISION_PARENT_ASSET_HASH_MISMATCH", "父素材哈希不一致。", 409
+            )
+        return raw
+
+    @staticmethod
+    def _verified_mask_bytes(parent: sqlite3.Row, mask: sqlite3.Row) -> bytes:
+        workspace = Path(str(parent["workspace_path"])).resolve()
+        path = (workspace / str(mask["relative_path"])).resolve()
+        if not path.is_relative_to(workspace) or not path.is_file():
+            raise ApplicationError("MASK_FILE_MISSING", "蒙版文件缺失。", 409)
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != str(mask["sha256"]):
+            raise ApplicationError("MASK_HASH_MISMATCH", "蒙版哈希不一致。", 409)
+        return raw
 
     def _mask_row(self, project_id: str, mask_asset_id: str) -> sqlite3.Row:
         with self.database.reader() as connection:
