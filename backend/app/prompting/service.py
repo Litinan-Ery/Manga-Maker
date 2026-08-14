@@ -357,7 +357,7 @@ class PromptingService:
             else:
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO prompt_bundle_approvals(
+                    INSERT INTO prompt_bundle_approvals(
                         approval_id, prompt_bundle_version_id, approval_hash,
                         snapshot_sha256, idempotency_key, request_sha256
                     ) VALUES (?, ?, ?, ?, ?, ?)

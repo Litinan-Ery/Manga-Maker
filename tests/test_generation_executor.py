@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import errno
 import json
 from io import BytesIO
@@ -182,6 +183,51 @@ def test_layout_change_after_job_creation_blocks_before_secret_read(
             ).fetchone()[0]
             == 0
         )
+
+
+def test_tag_revision_after_job_creation_blocks_before_secret_read(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="标签审批过期")
+    project_id = prepared["project_id"]
+    chapter_id = prepared["chapter"]["chapter_id"]
+    workflow = client.get(
+        f"/api/v1/projects/{project_id}/prompting",
+        params={"chapter_id": chapter_id},
+    ).json()
+    tag_version = workflow["character_tags"]
+    changed = copy.deepcopy(tag_version["document"])
+    changed["tag_sets"][0]["fixed_tags"].append("new unapproved identity marker")
+    revised = client.post(
+        f"/api/v1/projects/{project_id}/prompting/character-tags/"
+        f"{tag_version['version_id']}/revisions",
+        headers=session_headers,
+        json={"document": changed},
+    )
+    assert revised.status_code == 201, revised.text
+
+    started = transition(
+        client, session_headers, project_id, prepared["job"], "start"
+    )
+    provider = MockNovelAIClient()
+    install_image_provider(client, provider)
+    secret_reads = 0
+    original_get_secret = client.app.state.vault.get_secret
+
+    def counted_get_secret(profile_id: str) -> str:
+        nonlocal secret_reads
+        secret_reads += 1
+        return original_get_secret(profile_id)
+
+    client.app.state.vault.get_secret = counted_get_secret
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    failed = client.app.state.generation_queue.get_job(project_id, started["job_id"])
+    assert failed["status"] == "failed"
+    assert failed["calls_started"] == 0
+    assert failed["items"][0]["last_error_code"] == "GENERATION_APPROVAL_STALE"
+    assert secret_reads == 0
+    assert provider.generation_calls == 0
 
 
 def test_tampered_frozen_provider_payload_blocks_before_secret_read(

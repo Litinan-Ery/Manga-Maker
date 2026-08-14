@@ -22,9 +22,11 @@ from ..ids import uuid7
 from ..pages.models import PageDocument
 from ..projects import PROJECT_DIRECTORIES, ProjectService
 from ..safety import SecretScanner
+from .repair import repair_remapped_v15_records
 
 EXPORT_SCHEMA_VERSION = "1.1"
-PACKAGE_SCHEMA_VERSION = "1.4"
+PACKAGE_SCHEMA_VERSION = "1.5"
+LEGACY_PACKAGE_SCHEMA_VERSION = "1.4"
 MAX_PACKAGE_COMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_PACKAGE_FILES = 20_000
 MAX_PACKAGE_FILE_BYTES = 512 * 1024 * 1024
@@ -32,6 +34,8 @@ MAX_PACKAGE_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 CREDENTIAL_REENTRY_PROFILE_ID = "restore-required"
+PORTABLE_LOGICAL_ID_COLUMNS = frozenset({"page_layout_draft_id"})
+PORTABLE_LINEAGE_ARTIFACT_TYPES = frozenset({"frame", "prompt_package", "prompt_plan"})
 
 # Tables are listed in dependency order. Original credential profile references are replaced
 # by a non-secret reconfiguration marker; the encrypted vault is outside every project.
@@ -193,6 +197,41 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
            WHERE p.project_id = ?""",
     ),
     ("mask_assets", "SELECT * FROM mask_assets WHERE project_id = ?"),
+    ("page_layout_drafts", "SELECT * FROM page_layout_drafts WHERE project_id = ?"),
+    ("layout_approvals", "SELECT * FROM layout_approvals WHERE project_id = ?"),
+    (
+        "dimension_selections",
+        """SELECT d.* FROM dimension_selections d JOIN page_layout_drafts l
+           ON l.page_layout_draft_version_id = d.page_layout_draft_version_id
+           WHERE l.project_id = ?""",
+    ),
+    (
+        "layout_command_receipts",
+        "SELECT * FROM layout_command_receipts WHERE project_id = ?",
+    ),
+    (
+        "layout_approval_dimension_selections",
+        """SELECT s.* FROM layout_approval_dimension_selections s
+           JOIN layout_approvals a ON a.approval_id = s.approval_id
+           WHERE a.project_id = ?""",
+    ),
+    ("artifact_versions", "SELECT * FROM artifact_versions WHERE project_id = ?"),
+    ("artifact_dependencies", "SELECT * FROM artifact_dependencies WHERE project_id = ?"),
+    ("invalidation_events", "SELECT * FROM invalidation_events WHERE project_id = ?"),
+    (
+        "invalidation_impacts",
+        """SELECT i.* FROM invalidation_impacts i JOIN invalidation_events e
+           ON e.invalidation_event_id = i.invalidation_event_id
+           WHERE e.project_id = ?""",
+    ),
+    ("generation_approvals", "SELECT * FROM generation_approvals WHERE project_id = ?"),
+    (
+        "provider_execution_specs",
+        """SELECT p.* FROM provider_execution_specs p JOIN generation_specs s
+           ON s.spec_id = p.generation_spec_id JOIN generation_job_items i
+           ON i.item_id = s.item_id JOIN generation_jobs j ON j.job_id = i.job_id
+           WHERE j.project_id = ?""",
+    ),
 )
 
 
@@ -527,6 +566,7 @@ class ExportService:
                 "source_project_id": source_project_id,
                 "title": local_title,
                 "status": str(source_project["status"]),
+                "workflow_version": str(source_project.get("workflow_version", "legacy_v02")),
             }
             manifest_path = staging / "manifest.json"
             if manifest_path.exists():
@@ -860,6 +900,7 @@ class ExportService:
             "manifest.json",
             "source",
             "storyboard",
+            "layouts",
             "bibles",
             "assets",
             "pages",
@@ -988,6 +1029,7 @@ class ExportService:
                     "PROJECT_PACKAGE_MANIFEST_INVALID", "工程包清单无效。", 422
                 ) from exc
             self._validate_package_documents(manifest, records)
+            package_schema = str(manifest["schema_version"])
             listed = {item["path"]: item for item in manifest["files"]}
             actual = {name for name in seen if name != "manifest.json" and not name.endswith("/")}
             if set(listed) != actual:
@@ -995,7 +1037,9 @@ class ExportService:
                     "PROJECT_PACKAGE_FILE_LIST_MISMATCH", "工程包文件清单不一致。", 422
                 )
             for name in actual:
-                self._validate_package_file_scope(name)
+                self._validate_package_file_scope(
+                    name, allow_layouts=package_schema == PACKAGE_SCHEMA_VERSION
+                )
             for name, item in listed.items():
                 payload = archive.read(name)
                 if (
@@ -1038,7 +1082,8 @@ class ExportService:
     def _validate_package_documents(manifest: Any, records: Any) -> None:
         if (
             not isinstance(manifest, dict)
-            or manifest.get("schema_version") != PACKAGE_SCHEMA_VERSION
+            or manifest.get("schema_version")
+            not in (LEGACY_PACKAGE_SCHEMA_VERSION, PACKAGE_SCHEMA_VERSION)
         ):
             raise ApplicationError(
                 "PROJECT_PACKAGE_SCHEMA_UNSUPPORTED", "工程包版本不受支持。", 422
@@ -1055,14 +1100,27 @@ class ExportService:
             or manifest.get("credentials_included") is not False
         ):
             raise ApplicationError("PROJECT_PACKAGE_MANIFEST_INVALID", "工程包清单字段无效。", 422)
-        if not isinstance(records, dict) or records.get("schema_version") != PACKAGE_SCHEMA_VERSION:
+        if (
+            not isinstance(records, dict)
+            or records.get("schema_version") != manifest.get("schema_version")
+        ):
             raise ApplicationError(
                 "PROJECT_PACKAGE_SCHEMA_UNSUPPORTED", "工程记录版本不受支持。", 422
             )
         tables = records.get("tables")
         expected_tables = [table for table, _query in PROJECT_TABLE_QUERIES]
-        if not isinstance(tables, dict) or set(tables) != set(expected_tables):
+        if not isinstance(tables, dict):
             raise ApplicationError("PROJECT_PACKAGE_RECORDS_INVALID", "工程记录表清单无效。", 422)
+        if manifest["schema_version"] == PACKAGE_SCHEMA_VERSION:
+            if set(tables) != set(expected_tables):
+                raise ApplicationError(
+                    "PROJECT_PACKAGE_RECORDS_INVALID", "工程记录表清单无效。", 422
+                )
+        elif not set(tables).issubset(expected_tables):
+            raise ApplicationError(
+                "PROJECT_PACKAGE_RECORDS_INVALID", "旧工程记录包含未知表。", 422
+            )
+        expected_tables = list(tables)
         if len(tables["projects"]) != 1:
             raise ApplicationError(
                 "PROJECT_PACKAGE_RECORDS_INVALID", "工程包必须包含一个项目。", 422
@@ -1124,21 +1182,26 @@ class ExportService:
         remap_all: bool,
     ) -> None:
         tables: dict[str, list[dict[str, Any]]] = records["tables"]
+        restore_tables = [
+            (table, query) for table, query in PROJECT_TABLE_QUERIES if table in tables
+        ]
         with self.database.writer() as connection:
             connection.execute("PRAGMA defer_foreign_keys = ON")
             primary_keys: dict[str, str] = {}
             mappings: dict[str, dict[Any, Any]] = {}
-            for table, _query in PROJECT_TABLE_QUERIES:
+            for table, _query in restore_tables:
                 columns = connection.execute(f"PRAGMA table_info({table})").fetchall()
                 pk_columns = [str(col["name"]) for col in columns if int(col["pk"]) > 0]
-                if len(pk_columns) != 1:
+                if not pk_columns:
                     raise ApplicationError(
                         "RESTORE_SCHEMA_MISMATCH", f"{table} 主键结构不受支持。", 409
                     )
-                pk = pk_columns[0]
+                pk = pk_columns[0] if len(pk_columns) == 1 else ""
                 primary_keys[table] = pk
                 mappings[table] = {}
                 for row in tables[table]:
+                    if not pk:
+                        continue
                     old = row[pk]
                     if table in ("projects", "text_model_configs", "novelai_configs"):
                         new = restored_project_id
@@ -1150,7 +1213,7 @@ class ExportService:
 
             foreign_keys: dict[str, list[sqlite3.Row]] = {
                 table: connection.execute(f"PRAGMA foreign_key_list({table})").fetchall()
-                for table, _query in PROJECT_TABLE_QUERIES
+                for table, _query in restore_tables
             }
             value_mapping = {
                 old: new
@@ -1158,7 +1221,27 @@ class ExportService:
                 for old, new in table_mapping.items()
                 if old != new
             }
-            for table, _query in PROJECT_TABLE_QUERIES:
+            if remap_all:
+                for rows in tables.values():
+                    for row in rows:
+                        for column in PORTABLE_LOGICAL_ID_COLUMNS:
+                            value = row.get(column)
+                            if (
+                                isinstance(value, str)
+                                and value
+                                and value not in value_mapping
+                            ):
+                                value_mapping[value] = str(uuid7())
+                for row in tables.get("artifact_versions", []):
+                    artifact_id = row.get("artifact_id")
+                    if (
+                        row.get("artifact_type") in PORTABLE_LINEAGE_ARTIFACT_TYPES
+                        and isinstance(artifact_id, str)
+                        and artifact_id
+                        and artifact_id not in value_mapping
+                    ):
+                        value_mapping[artifact_id] = str(uuid7())
+            for table, _query in restore_tables:
                 pk = primary_keys[table]
                 valid_columns = {
                     str(col["name"])
@@ -1166,13 +1249,19 @@ class ExportService:
                 }
                 for original in tables[table]:
                     row = dict(original)
-                    row[pk] = mappings[table][original[pk]]
+                    if pk:
+                        row[pk] = mappings[table][original[pk]]
                     for foreign in foreign_keys[table]:
                         column = str(foreign["from"])
                         target_table = str(foreign["table"])
                         value = row.get(column)
                         if value is not None and target_table in mappings:
                             row[column] = mappings[target_table].get(value, value)
+                    if "project_id" in row and table != "projects":
+                        row["project_id"] = restored_project_id
+                    for column, value in tuple(row.items()):
+                        if column.endswith("_id") and value in value_mapping:
+                            row[column] = value_mapping[value]
                     if table == "projects":
                         row["workspace_path"] = str(new_workspace)
                         row["title"] = local_title
@@ -1190,11 +1279,6 @@ class ExportService:
                         row["request_sha256"] = hashlib.sha256(
                             f"{restored_version_id}|{row['snapshot_sha256']}".encode()
                         ).hexdigest()
-                    if table == "generation_jobs":
-                        # GenerationApproval portability is introduced by MM-059.
-                        # Until then imported history is intentionally non-runnable;
-                        # remove the live-only FK and require a fresh estimate/approval.
-                        row["generation_approval_id"] = None
                     if table in ("source_preflights", "source_files"):
                         for column in ("staging_path", "original_path", "normalized_path"):
                             if row.get(column):
@@ -1209,10 +1293,18 @@ class ExportService:
                             ),
                             "page_versions": ("rendered_relative_path",),
                             "mask_assets": ("relative_path",),
+                            "page_layout_drafts": ("snapshot_relative_path",),
+                            "layout_approvals": ("snapshot_relative_path",),
                         }.get(table, ())
                         for column in relative_columns:
                             old_relative = str(row[column])
-                            restored_root = "pages" if table == "page_versions" else "assets"
+                            restored_root = (
+                                "layouts"
+                                if table in ("page_layout_drafts", "layout_approvals")
+                                else "pages"
+                                if table == "page_versions"
+                                else "assets"
+                            )
                             new_relative = str(
                                 Path(restored_root)
                                 / "restored"
@@ -1245,6 +1337,19 @@ class ExportService:
                         f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
                         tuple(row[column] for column in columns),
                     )
+            if value_mapping and str(records.get("schema_version")) == PACKAGE_SCHEMA_VERSION:
+                try:
+                    repair_remapped_v15_records(
+                        connection,
+                        project_id=restored_project_id,
+                        workspace=new_workspace,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ApplicationError(
+                        "PROJECT_PACKAGE_RECORDS_INVALID",
+                        "工程包中的不可变记录无法安全重建。",
+                        422,
+                    ) from exc
             connection.execute(
                 """INSERT INTO audit_events(event_id, project_id, event_type, payload_json)
                    VALUES (?, ?, 'project.restored', ?)""",
@@ -1394,7 +1499,7 @@ class ExportService:
         visit(document)
 
     @staticmethod
-    def _validate_package_file_scope(name: str) -> None:
+    def _validate_package_file_scope(name: str, *, allow_layouts: bool = False) -> None:
         if name == "records.json":
             return
         path = PurePosixPath(name)
@@ -1411,6 +1516,8 @@ class ExportService:
             "pages",
             "audit",
         }
+        if allow_layouts:
+            allowed_roots.add("layouts")
         if path.parts[1] not in allowed_roots or path.parts[1:3] == (
             "assets",
             "staging",

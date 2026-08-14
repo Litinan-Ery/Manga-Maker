@@ -163,6 +163,14 @@ class ProjectService:
             )
         return candidate
 
+    def require_writable(self, project_id: str) -> None:
+        if self.get(project_id).workflow_version != "v03":
+            raise ApplicationError(
+                code="LEGACY_PROJECT_READ_ONLY",
+                message="v0.2 历史工程在完成迁移前仅允许查看。",
+                status_code=409,
+            )
+
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
         content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")

@@ -328,35 +328,6 @@ class GenerationQueueService:
                 status_code=422,
             )
 
-        with self.database.reader() as connection:
-            existing = connection.execute(
-                """
-                SELECT ga.request_sha256, ga.plan_fingerprint, gj.job_id
-                FROM generation_approvals ga
-                LEFT JOIN generation_jobs gj
-                  ON gj.generation_approval_id = ga.generation_approval_id
-                WHERE ga.project_id = ? AND ga.idempotency_key = ?
-                """,
-                (project_id, idempotency_key),
-            ).fetchone()
-        if existing is not None:
-            if (
-                str(existing["request_sha256"]) != request_sha256
-                or str(existing["plan_fingerprint"]) != plan.fingerprint
-            ):
-                raise ApplicationError(
-                    "GENERATION_APPROVAL_IDEMPOTENCY_CONFLICT",
-                    "Idempotency-Key 已绑定到另一份生成批准。",
-                    409,
-                )
-            if existing["job_id"] is None:
-                raise ApplicationError(
-                    "GENERATION_APPROVAL_INCOMPLETE",
-                    "生成批准已存在但 Job 尚未完整创建，请进行恢复。",
-                    409,
-                )
-            return self.get_job(project_id, str(existing["job_id"]))
-
         job_id = str(uuid7())
         user_action_id = str(uuid7())
         generation_approval_id = str(uuid7())
@@ -381,6 +352,37 @@ class GenerationQueueService:
         approval_sha256 = canonical_sha256(approval_snapshot)
         try:
             with self.database.writer() as connection:
+                existing = connection.execute(
+                    """
+                    SELECT ga.request_sha256, ga.plan_fingerprint, gj.job_id
+                    FROM generation_approvals ga
+                    LEFT JOIN generation_jobs gj
+                      ON gj.generation_approval_id = ga.generation_approval_id
+                    WHERE ga.project_id = ? AND ga.idempotency_key = ?
+                    """,
+                    (project_id, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        str(existing["request_sha256"]) != request_sha256
+                        or str(existing["plan_fingerprint"]) != plan.fingerprint
+                    ):
+                        raise ApplicationError(
+                            "GENERATION_APPROVAL_IDEMPOTENCY_CONFLICT",
+                            "Idempotency-Key 已绑定到另一份生成批准。",
+                            409,
+                        )
+                    if existing["job_id"] is None:
+                        raise ApplicationError(
+                            "GENERATION_APPROVAL_INCOMPLETE",
+                            "生成批准已存在但 Job 尚未完整创建，请进行恢复。",
+                            409,
+                        )
+                    existing_job_id = str(existing["job_id"])
+                else:
+                    existing_job_id = None
+                if existing_job_id is not None:
+                    return self.get_job(project_id, existing_job_id)
                 connection.execute(
                     """
                     INSERT INTO generation_approvals(

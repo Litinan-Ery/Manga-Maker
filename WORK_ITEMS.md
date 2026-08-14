@@ -29,7 +29,7 @@
 | 代码面 | v0.2 当前状态 | v0.3 差距 |
 |---|---|---|
 | 应用组装 | typed `AppContainer`、module installer 与 compatibility seam 已建立 | 旧 v0.2 service 仍需按后续工单收口 |
-| 数据库 | schema 29；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval 已落地 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
+| 数据库 | schema 30；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval 已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
 | 后端能力 | 公开模块契约、版式门禁、结构化多角色 mapper、审批冻结和发送前复验已实现 | 缺少候选/质检/接受、PageApproval 与正式导出门禁 |
 | 前端 | feature boundary、Layout Workbench 与 Prompt Inspector 已实现 | 缺少 Candidate Review、页面批准和真实导出预检状态 |
 | 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、真实双角色与授权章节证据仍未完成 |
@@ -128,7 +128,7 @@ uv run pytest -q tests/architecture tests/contracts tests/modules tests/workflow
 | 4 | MM-043 ExportPreflight 引擎与 TOCTOU 门禁 | P0 | Todo | 1–2d | MM-042 |
 | 4 | MM-058 Export Center 预检交互与问题定位 | P0 | Todo | 1–2d | MM-043、MM-053、MM-065 |
 | 5 | MM-044 v0.2→v0.3 数据迁移与只读恢复 | P0 | Todo | 1–2d | MM-034、MM-037、MM-043 |
-| 5 | MM-059 工程包升级、恢复与 v0.2 回滚演练 | P0 | Todo | 1–2d | MM-044 |
+| 5 | MM-059 工程包升级、恢复与 v0.2 回滚演练 | P0 | In Progress | 1–2d | MM-044 |
 | 5 | MM-045 P0 架构与契约测试门禁 | P0 / Release Gate | Todo | 1–2d | MM-027、MM-036、MM-039、MM-043、MM-044 |
 | 5 | MM-060 P0 Mock 产品 E2E 与 v0.2 回归 | P0 / Release Gate | Todo | 1–2d | MM-034、MM-037、MM-041、MM-056、MM-057、MM-058、MM-059、MM-062、MM-064、MM-065 |
 | 5 | MM-063 崩溃注入、恢复与未知结果矩阵 | P0 / Release Gate | Todo | 1–2d | MM-030、MM-043、MM-055、MM-059 |
@@ -313,8 +313,9 @@ limit，另有领域状态与工作意图同事务回滚、not-before、人工�
 级别、handler registry、确定性退避、进程内 wakeup 与单写者 `DurableWorker`；真实双线程
 竞争仅一个租约，本地租约过期可换 owner，可能外发的 attempt 进入 `needs_review`，人工动作、
 暂停、取消及丢失 wake signal 均不产生越权执行。全量后端 177 项、架构/契约/模块门禁 56
-项、前端 17 个文件/27 项、Ruff、Mypy 与 production build 通过；未接入 Outbox/SSE，未
-执行真实供应商调用。
+项、前端 17 个文件/27 项、Ruff、Mypy 与 production build 通过。当前 runtime 已交付可复用
+worker 机制和恢复验证，但尚无业务 work kind/handler 接入，因此 lifespan 不启动空 worker；
+待首个业务 durable command 接入时同票注册 handler 并启动 serve loop。未执行真实供应商调用。
 
 ### MM-029 Outbox 与 SSE replay
 
@@ -334,8 +335,9 @@ limit，另有领域状态与工作意图同事务回滚、not-before、人工�
 事务内 append、幂等 publisher、同事务 handler receipt 与按项目 `Last-Event-ID` SSE replay；
 并发写入序列 1～12 无重号，publisher 失败后跨实例重放不回滚领域事实，重复 handler 只执行
 一次，跨项目事件不可见。事件只保存版本、引用、哈希和安全标量。全量后端 183 项、架构/
-契约/模块门禁 62 项、前端 17 个文件/27 项、Ruff、Mypy 与 production build 通过；未接入
-WebSocket/云端总线，未执行真实供应商调用。
+契约/模块门禁 62 项、前端 17 个文件/27 项、Ruff、Mypy 与 production build 通过。SSE replay
+端点已接入；现有 legacy 业务命令尚未迁移为 outbox 写入者，前端 EventSource 消费随首个业务
+事件接入交付。未接入 WebSocket/云端总线，未执行真实供应商调用。
 
 ### MM-055 Durable Work/Outbox 重启恢复
 
@@ -564,7 +566,7 @@ Mock 覆盖供应商成功及现有错误分类；未读取真实 Token、未发
 - 不包含：Prompt Inspector UI、候选质量判断和页面批准。
 
 完成证据（2026-08-14）：schema 28/29 增加 Prompt 审批幂等快照和
-GenerationApproval；Job/Item 原子冻结 PromptPlan/PromptPackage/CharacterTagSet、
+GenerationApproval，schema 30 将幂等键唯一性安全迁移到审批对象作用域；Job/Item 原子冻结 PromptPlan/PromptPackage/CharacterTagSet、
 ProviderExecutionSpec/payload、Layout/frame/dimension、模型、mapping/contract、seed、参考图
 provenance、候选数和质量规则版本，并只对外返回审计 ID/哈希而不返回完整 payload。
 approve/Job create 重放不创建第二份批准或 Job；executor 在读取凭证前重算并复验全部哈希，
@@ -764,6 +766,11 @@ reference base64；界面展示 mapping/model/hash、影响对象、候选数/�
   - 回滚演练使用 MM-044 的迁移前 schema 16 备份和 `main@40f2cb9` 兼容代码，只读打开项目、恢复 v1.4 包并核对全部历史素材哈希；
   - 回滚报告明确 v0.3 新写入数据不会反向写入 schema 16；切换前保留 v0.3 数据副本，禁止就地降级或删除新表。
 - 不包含：自动逆向迁移、覆盖现有项目或外部备份服务。
+
+阶段证据（2026-08-14）：工程包 schema v1.5 已加入 layout、lineage、ProviderExecutionSpec、
+GenerationApproval 记录和 `layouts/` 文件，完成同库 ID 冲突全量重映射与 v0.3 round-trip；
+v1.4 compatibility reader 继续通过。schema 16 迁移前备份、旧主版本只读回滚演练尚依赖
+MM-044，因此本工单保持 In Progress，不标记 Done。
 
 ### MM-045 P0 架构与契约测试门禁
 

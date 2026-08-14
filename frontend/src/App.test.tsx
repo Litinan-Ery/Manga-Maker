@@ -95,6 +95,7 @@ describe("App", () => {
             title: "雨夜侦探",
             status: "draft",
             revision: 1,
+            workflow_version: "v03",
             created_at: "2026-08-09T00:00:00Z",
             updated_at: "2026-08-09T00:00:00Z",
           },
@@ -127,6 +128,87 @@ describe("App", () => {
     const headers = new Headers(createInit?.headers);
     expect(headers.get("X-Manga-Maker-Session")).toBe("session-test");
     expect(headers.get("X-CSRF-Token")).toBe("csrf-test");
+  });
+
+  it("keeps legacy v0.2 projects read-only", async () => {
+    window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/health") {
+        return Promise.resolve(
+          jsonResponse({
+            status: "ok",
+            version: "0.2.0",
+            environment: "test",
+            database: "ok",
+            schema_version: 30,
+            vault_configured: true,
+            vault_unlocked: false,
+          }),
+        );
+      }
+      if (path === "/api/v1/projects") {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              project_id: "legacy-project",
+              title: "历史工程",
+              status: "draft",
+              revision: 1,
+              workflow_version: "legacy_v02",
+              created_at: "2026-08-09T00:00:00Z",
+              updated_at: "2026-08-09T00:00:00Z",
+            },
+          ]),
+        );
+      }
+      if (path === "/api/v1/vault") {
+        return Promise.resolve(
+          jsonResponse({ configured: true, unlocked: false, profiles: [] }),
+        );
+      }
+      if (path === "/api/v1/system/recovery") {
+        return Promise.resolve(
+          jsonResponse({
+            recovery_run_id: "recovery-legacy",
+            trigger: "startup",
+            status: "healthy",
+            integrity: { critical_findings: 0, staging_items: 0 },
+            external_requests_started: 0,
+          }),
+        );
+      }
+      if (path.endsWith("/source/chapters")) {
+        return Promise.resolve(
+          jsonResponse({
+            source_file_id: "source-1",
+            chapter_set_id: "chapters-1",
+            chapter_set_version: 1,
+            chapters: [
+              {
+                chapter_id: "chapter-1",
+                version: 1,
+                ordinal: 1,
+                title: "旧章节",
+                start_offset: 0,
+                end_offset: 10,
+                text_sha256: "a".repeat(64),
+              },
+            ],
+          }),
+        );
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    const notice = await screen.findByText(/v0.2 历史工程/);
+    const appRoot = notice.closest("main");
+    expect(appRoot).not.toBeNull();
+    expect(appRoot).not.toHaveTextContent("选择 TXT 文件");
+    expect(appRoot).not.toHaveTextContent("识别结果");
   });
 });
 

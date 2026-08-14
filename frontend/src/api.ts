@@ -19,6 +19,7 @@ export interface Project {
   title: string;
   status: string;
   revision: number;
+  workflow_version: "v03" | "legacy_v02";
   created_at: string;
   updated_at: string;
 }

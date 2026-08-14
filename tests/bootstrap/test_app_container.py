@@ -52,7 +52,7 @@ def test_create_app_installs_typed_container_and_exact_legacy_seam(tmp_path: Pat
             if expected is None:
                 expected = getattr(container.legacy, name)
             assert state[name] is expected
-        assert container.database.schema_version() == 29
+        assert container.database.schema_version() == 30
         assert client.get("/health").status_code == 200
 
     assert container.durable_worker.stopped

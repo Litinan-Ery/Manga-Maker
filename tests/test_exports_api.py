@@ -74,6 +74,13 @@ def test_four_format_export_is_pinned_and_package_restores_with_remapped_ids(
             for row in rows
         )
         assert not any(name.startswith("secrets/") for name in archive.namelist())
+        assert records["tables"]["generation_approvals"]
+        assert records["tables"]["provider_execution_specs"]
+        assert records["tables"]["page_layout_drafts"]
+        assert records["tables"]["layout_approvals"]
+        assert records["tables"]["dimension_selections"]
+        assert records["tables"]["artifact_versions"]
+        assert any(name.startswith("project/layouts/") for name in archive.namelist())
 
     original_download_hashes = {
         kind: hashlib.sha256(content).hexdigest() for kind, content in downloads.items()
@@ -134,6 +141,80 @@ def test_four_format_export_is_pinned_and_package_restores_with_remapped_ids(
         headers=session_headers,
     )
     assert restored_content.content == downloads["png"]
+    restored_layouts = client.get(
+        f"/api/v1/projects/{restored['project_id']}/layouts",
+        params={"chapter_id": restored_chapters["chapters"][0]["chapter_id"]},
+    )
+    assert restored_layouts.status_code == 200, restored_layouts.text
+    assert len(restored_layouts.json()) == 1
+    restored_layout = restored_layouts.json()[0]
+    restored_approval = client.get(
+        f"/api/v1/projects/{restored['project_id']}/layouts/"
+        f"{restored_layout['page_layout_draft_version_id']}/approval"
+    )
+    assert restored_approval.status_code == 200, restored_approval.text
+    assert restored_approval.json()["state"] == "active"
+    restored_prompting = client.get(
+        f"/api/v1/projects/{restored['project_id']}/prompting",
+        params={"chapter_id": restored_chapters["chapters"][0]["chapter_id"]},
+    )
+    assert restored_prompting.status_code == 200, restored_prompting.text
+    restored_workflow = restored_prompting.json()
+    assert restored_workflow["prompt_bundle"]["approval_status"] == "approved"
+    assert restored_workflow["prompt_bundle"]["compatibility"]["kind"] == "prompt_plan_v2"
+    assert restored_workflow["generation_readiness"]["structured_prompt_ready"] is True
+    with client.app.state.database.reader() as connection:
+        source_counts = {
+            table: connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+            for table in (
+                "generation_approvals",
+                "page_layout_drafts",
+                "layout_approvals",
+                "artifact_versions",
+            )
+        }
+        restored_counts = {
+            table: connection.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE project_id = ?",
+                (restored["project_id"],),
+            ).fetchone()[0]
+            for table in source_counts
+        }
+        restored_job = connection.execute(
+            """SELECT j.generation_approval_id, j.provider_model_id,
+                      a.state AS generation_approval_state
+               FROM generation_jobs j JOIN generation_approvals a
+                 ON a.generation_approval_id = j.generation_approval_id
+               WHERE j.project_id = ? LIMIT 1""",
+            (restored["project_id"],),
+        ).fetchone()
+        source_layout = connection.execute(
+            "SELECT page_layout_draft_id FROM page_layout_drafts WHERE project_id = ? LIMIT 1",
+            (project_id,),
+        ).fetchone()
+        restored_layout = connection.execute(
+            "SELECT page_layout_draft_id FROM page_layout_drafts WHERE project_id = ? LIMIT 1",
+            (restored["project_id"],),
+        ).fetchone()
+        restored_item = connection.execute(
+            """SELECT i.page_layout_draft_id
+               FROM generation_job_items i JOIN generation_jobs j ON j.job_id = i.job_id
+               WHERE j.project_id = ? LIMIT 1""",
+            (restored["project_id"],),
+        ).fetchone()
+        source_config = connection.execute(
+            "SELECT provider_model_id FROM novelai_configs WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()
+    assert restored_counts == source_counts
+    assert restored_job["generation_approval_id"] is not None
+    assert restored_job["generation_approval_state"] == "stale"
+    assert restored_job["provider_model_id"] == source_config["provider_model_id"]
+    assert restored_layout["page_layout_draft_id"] != source_layout["page_layout_draft_id"]
+    assert restored_item["page_layout_draft_id"] == restored_layout["page_layout_draft_id"]
     assert provider.generation_calls == calls_before
 
 
@@ -175,9 +256,7 @@ def test_color_vertical_strip_exports_preserve_profile_and_dimensions(
 ) -> None:
     prepared, provider, page = prepare_page(client, session_headers)
     project_id = prepared["project_id"]
-    templates = client.get(
-        f"/api/v1/projects/{project_id}/pages/templates"
-    ).json()
+    templates = client.get(f"/api/v1/projects/{project_id}/pages/templates").json()
     strip = next(item for item in templates if item["template_id"] == "strip-1")
     document = copy.deepcopy(page["document"])
     document.update(
@@ -227,9 +306,7 @@ def test_color_vertical_strip_exports_preserve_profile_and_dimensions(
     )
     assert exported.status_code == 201, exported.text
     png_file = next(item for item in exported.json()["files"] if item["kind"] == "png")
-    payload = download_file(
-        client, session_headers, project_id, exported.json(), png_file
-    )
+    payload = download_file(client, session_headers, project_id, exported.json(), png_file)
     with Image.open(io.BytesIO(payload)) as image:
         assert image.size == (1440, 1804)
     assert provider.generation_calls == 1

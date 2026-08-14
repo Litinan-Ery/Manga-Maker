@@ -153,6 +153,54 @@ def test_prompt_packages_inject_fixed_tags_and_freeze_all_versions(
     assert blocked.json()["error"]["code"] == "GENERATION_PROMPTS_NOT_APPROVED"
 
 
+def test_prompt_approval_idempotency_key_is_scoped_to_project(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    projects: list[tuple[str, dict[str, object]]] = []
+    for suffix in ("甲", "乙"):
+        project_id, chapter, _bundle = prepare_generation_inputs(
+            client, session_headers, title_suffix=f"审批键{suffix}"
+        )
+        projects.append((project_id, chapter))
+
+    shared_key = "same-user-action-in-different-projects"
+    for project_id, chapter in projects:
+        workflow = client.get(
+            f"/api/v1/projects/{project_id}/prompting",
+            params={"chapter_id": chapter["chapter_id"]},
+        ).json()
+        prompt = workflow["prompt_bundle"]
+        with client.app.state.database.writer() as connection:
+            connection.execute(
+                "DELETE FROM prompt_bundle_approvals WHERE prompt_bundle_version_id = ?",
+                (prompt["version_id"],),
+            )
+        approved = client.post(
+            f"/api/v1/projects/{project_id}/prompting/prompt-bundles/"
+            f"{prompt['version_id']}/approve",
+            headers={**session_headers, "Idempotency-Key": shared_key},
+            json={"snapshot_sha256": prompt["snapshot_sha256"]},
+        )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["approval_status"] == "approved"
+
+    with client.app.state.database.reader() as connection:
+        rows = connection.execute(
+            """
+            SELECT b.project_id
+            FROM prompt_bundle_approvals a
+            JOIN prompt_bundle_versions v
+              ON v.prompt_bundle_version_id = a.prompt_bundle_version_id
+            JOIN prompt_bundles b ON b.prompt_bundle_id = v.prompt_bundle_id
+            WHERE a.idempotency_key = ? ORDER BY b.project_id
+            """,
+            (shared_key,),
+        ).fetchall()
+    assert [str(row["project_id"]) for row in rows] == sorted(
+        project_id for project_id, _chapter in projects
+    )
+
+
 def test_prompt_inspector_maps_current_snapshot_without_secrets_or_external_requests(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:

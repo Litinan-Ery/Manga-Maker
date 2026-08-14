@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -27,7 +28,7 @@ from ..api.prompting import router as prompting_router
 from ..api.recovery import router as recovery_router
 from ..api.vault import router as vault_router
 from ..config import Settings, get_settings
-from ..errors import install_error_handlers
+from ..errors import ApplicationError, install_error_handlers
 from .composition_root import build_app_container
 from .container import AppContainer
 from .installers import ModuleInstaller, default_module_installers
@@ -56,7 +57,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     )
     for installer in installers:
         installer.install(app, container)
-    install_http_entrypoints(app)
+    install_http_entrypoints(app, container)
     install_frontend(app, container.settings.frontend_dist_dir)
     return app
 
@@ -77,12 +78,37 @@ async def stop_application(
         await installer.stop(container)
 
 
-def install_http_entrypoints(app: FastAPI) -> None:
+PROJECT_SCOPED_PATH = re.compile(r"^/api/v1/projects/([^/]+)(?:/|$)")
+SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def install_http_entrypoints(app: FastAPI, container: AppContainer) -> None:
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "[::1]", "testserver"],
     )
     install_error_handlers(app)
+
+    @app.middleware("http")
+    async def reject_legacy_project_writes(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        match = PROJECT_SCOPED_PATH.match(request.url.path)
+        if match is not None and request.method not in SAFE_HTTP_METHODS:
+            try:
+                container.local_session.verify(
+                    request.headers.get("X-Manga-Maker-Session"),
+                    request.headers.get("X-CSRF-Token"),
+                )
+                container.legacy.projects.require_writable(match.group(1))
+            except ApplicationError as exc:
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content={"error": {"code": exc.code, "message": exc.message}},
+                )
+        return await call_next(request)
+
     for router in (
         health_router,
         events_router,

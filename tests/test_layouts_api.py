@@ -82,6 +82,16 @@ def layout_api(tmp_path: Path) -> Iterator[tuple[TestClient, dict[str, str], Pat
         str(draft["page_id"]), panels
     )
     with TestClient(app) as client:
+        workspace = tmp_path / "app-data" / "projects" / str(PROJECT_ID)
+        workspace.mkdir(mode=0o700, parents=True)
+        with client.app.state.database.writer() as connection:
+            connection.execute(
+                """
+                INSERT INTO projects(project_id, title, workspace_path, workflow_version)
+                VALUES (?, 'Layout API fixture', ?, 'v03')
+                """,
+                (str(PROJECT_ID), str(workspace)),
+            )
         headers = {
             "X-Manga-Maker-Session": client.app.state.local_session.token,
             "X-CSRF-Token": client.app.state.local_session.csrf_token,

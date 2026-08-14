@@ -374,6 +374,7 @@ class GenerationSpecCompiler:
                        gj.character_bible_version_id, gj.style_bible_version_id,
                        gj.character_tag_bundle_version_id, gj.prompt_bundle_version_id,
                        gj.text_model_config_revision,
+                       gj.novelai_config_revision,
                        gj.provider_model_id, gj.mapping_version, gj.contract_sha256,
                        gj.credential_profile_id, gj.timeout_seconds,
                        gj.layout_snapshot_sha256, gj.plan_fingerprint,
@@ -386,6 +387,18 @@ class GenerationSpecCompiler:
                        gap.state AS generation_approval_state,
                        pba.approval_hash AS current_prompt_approval_hash,
                        pba.snapshot_sha256 AS current_prompt_snapshot_sha256,
+                       sv.is_current AS storyboard_is_current,
+                       cbv.is_current AS character_bible_is_current,
+                       sbv.is_current AS style_bible_is_current,
+                       ctv.is_current AS tag_bundle_is_current,
+                       pbv.is_current AS prompt_bundle_is_current,
+                       tmc.revision AS current_text_model_config_revision,
+                       nc.revision AS current_novelai_config_revision,
+                       nc.provider_model_id AS current_provider_model_id,
+                       nc.inpaint_model_id AS current_inpaint_model_id,
+                       nc.mapping_version AS current_mapping_version,
+                       nc.contract_sha256 AS current_contract_sha256,
+                       nc.credential_profile_id AS current_credential_profile_id,
                        sv.document_json AS storyboard_json,
                        cbv.document_json AS character_json,
                        sbv.document_json AS style_json,
@@ -409,6 +422,8 @@ class GenerationSpecCompiler:
                   ON gap.generation_approval_id = gj.generation_approval_id
                 JOIN prompt_bundle_approvals pba
                   ON pba.prompt_bundle_version_id = gj.prompt_bundle_version_id
+                JOIN text_model_configs tmc ON tmc.project_id = gj.project_id
+                JOIN novelai_configs nc ON nc.project_id = gj.project_id
                 JOIN projects p ON p.project_id = gj.project_id
                 WHERE ga.attempt_id = ? AND ga.status = 'running'
                 """,
@@ -591,8 +606,32 @@ class GenerationSpecCompiler:
                 "生成任务缺少完整冻结批准，请重新估算并创建 Job。",
                 409,
             )
+        current_model_id = (
+            context["current_inpaint_model_id"]
+            if str(context["operation_kind"]) == "inpaint"
+            else context["current_provider_model_id"]
+        )
         if (
             str(context["generation_approval_state"]) != "active"
+            or not all(
+                bool(context[field])
+                for field in (
+                    "storyboard_is_current",
+                    "character_bible_is_current",
+                    "style_bible_is_current",
+                    "tag_bundle_is_current",
+                    "prompt_bundle_is_current",
+                )
+            )
+            or int(context["text_model_config_revision"])
+            != int(context["current_text_model_config_revision"])
+            or int(context["current_novelai_config_revision"])
+            != int(context["novelai_config_revision"])
+            or str(current_model_id) != str(context["provider_model_id"])
+            or str(context["current_mapping_version"]) != str(context["mapping_version"])
+            or str(context["current_contract_sha256"]) != str(context["contract_sha256"])
+            or str(context["current_credential_profile_id"])
+            != str(context["credential_profile_id"])
             or str(context["generation_approval_sha256"])
             != str(context["stored_generation_approval_sha256"])
             or str(context["plan_fingerprint"])

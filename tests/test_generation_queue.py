@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -101,6 +103,43 @@ def test_estimate_and_job_freeze_exact_approved_versions_and_limits(
     with client.app.state.database.reader() as connection:
         assert connection.execute("SELECT COUNT(*) FROM generation_approvals").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 1
+
+
+def test_concurrent_idempotent_job_creation_returns_the_same_job(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(client, session_headers)
+    estimate = estimate_plan(client, session_headers, project_id, chapter["chapter_id"])
+    service = client.app.state.generation_queue
+    barrier = threading.Barrier(2)
+
+    def create() -> dict[str, Any]:
+        barrier.wait()
+        return service.create_job(
+            project_id,
+            chapter["chapter_id"],
+            plan_fingerprint=estimate["plan_fingerprint"],
+            per_panel_cost_ceiling_anlas=estimate["per_panel_cost_ceiling_anlas"],
+            max_calls=estimate["panel_count"],
+            max_cost_anlas=estimate["estimated_cost_upper_anlas"],
+            confirmed=True,
+            idempotency_key="concurrent-create-job",
+            request_sha256="a" * 64,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: create(), range(2)))
+
+    assert results[0]["job_id"] == results[1]["job_id"]
+    with client.app.state.database.reader() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM generation_approvals WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM generation_jobs WHERE project_id = ?",
+            (project_id,),
+        ).fetchone()[0] == 1
 
 
 def test_plan_change_and_stale_revision_fail_closed(
