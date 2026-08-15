@@ -154,7 +154,7 @@ def test_schema29_database_rebuilds_prompt_idempotency_index_at_schema30(
             str(row[2])
             for row in connection.execute("PRAGMA index_info(prompt_approval_idempotency)")
         ]
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 31
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 32
     assert after == ["prompt_bundle_version_id", "idempotency_key"]
 
 
@@ -180,9 +180,50 @@ def test_schema30_database_adds_generation_verification_call_audit_at_schema31(
         attempt_columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(generation_attempts)")
         }
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 31
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 32
     assert {"verification_calls_started", "verification_calls_completed"} <= job_columns
     assert {"verification_request_started", "verification_request_completed"} <= attempt_columns
+
+
+def test_schema31_database_adds_optional_text_model_remark_at_schema32(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "schema31.db"
+    schema31 = MigrationRegistry(DATABASE_MIGRATION_REGISTRY.migrations[:31])
+    with sqlite3.connect(target) as connection:
+        ModuleMigrationRunner(schema31).migrate(connection)
+        project_id = "018f0f65-8f2f-7e65-8000-123456789abc"
+        connection.execute(
+            """
+            INSERT INTO projects(project_id, title, workspace_path)
+            VALUES (?, '迁移测试', '/tmp/manga-maker-migration-test')
+            """,
+            (project_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO text_model_configs(
+                project_id, base_url, model, credential_profile_id,
+                timeout_seconds, temperature
+            ) VALUES (?, 'https://models.example.test/v1', 'legacy-model',
+                      'text-model-legacy', 60, 0.2)
+            """,
+            (project_id,),
+        )
+        columns_before = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(text_model_configs)")
+        }
+    assert "remark_name" not in columns_before
+
+    Database(target).migrate()
+
+    assert target.with_name("schema31.db.pre-migration-v31.bak").is_file()
+    with sqlite3.connect(target) as connection:
+        row = connection.execute(
+            "SELECT model, remark_name FROM text_model_configs"
+        ).fetchone()
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 32
+    assert row == ("legacy-model", None)
 
 
 def test_legacy_project_remains_readable_but_generation_requires_migration(

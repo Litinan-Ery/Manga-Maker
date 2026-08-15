@@ -72,6 +72,7 @@ class AdaptationService:
         self,
         project_id: str,
         *,
+        remark_name: str | None = None,
         base_url: str,
         model: str,
         api_key: str | None = None,
@@ -80,11 +81,27 @@ class AdaptationService:
         temperature: float = 0.2,
     ) -> dict[str, Any]:
         self._require_project(project_id)
-        profile_id = (
-            f"text-model-{project_id}"
-            if api_key is not None
-            else (credential_profile_id or "")
+        normalized_remark_name = self._normalize_remark_name(remark_name)
+        with self.database.reader() as connection:
+            existing = connection.execute(
+                "SELECT credential_profile_id FROM text_model_configs WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+        existing_profile_id = (
+            str(existing["credential_profile_id"]) if existing is not None else None
         )
+        profile_id: str
+        if api_key is not None:
+            profile_id = f"text-model-{project_id}"
+        else:
+            selected_profile_id = credential_profile_id or existing_profile_id
+            if selected_profile_id is None:
+                raise ApplicationError(
+                    code="TEXT_MODEL_CREDENTIAL_REQUIRED",
+                    message="首次保存文本模型配置时必须填写 Key/Password。",
+                    status_code=422,
+                )
+            profile_id = selected_profile_id
         configuration = self._validated_configuration(
             base_url=base_url,
             model=model,
@@ -130,11 +147,12 @@ class AdaptationService:
                 connection.execute(
                     """
                     INSERT INTO text_model_configs(
-                        project_id, provider, base_url, model, credential_profile_id,
+                        project_id, provider, remark_name, base_url, model, credential_profile_id,
                         timeout_seconds, temperature, revision
-                    ) VALUES (?, 'openai-compatible', ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, 'openai-compatible', ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(project_id) DO UPDATE SET
                         provider = excluded.provider,
+                        remark_name = excluded.remark_name,
                         base_url = excluded.base_url,
                         model = excluded.model,
                         credential_profile_id = excluded.credential_profile_id,
@@ -145,6 +163,7 @@ class AdaptationService:
                     """,
                     (
                         project_id,
+                        normalized_remark_name,
                         configuration.base_url,
                         configuration.model,
                         configuration.credential_profile_id,
@@ -159,11 +178,13 @@ class AdaptationService:
                     "text_model.configuration_saved",
                     {
                         "provider": "openai-compatible",
+                        "remark_name": normalized_remark_name,
                         "endpoint_host": urlparse(configuration.base_url).hostname,
                         "model": configuration.model,
                         "credential_profile_id": configuration.credential_profile_id,
                         "revision": revision,
                         "secret_persisted_locally": True,
+                        "secret_updated": api_key is not None,
                     },
                 )
         except Exception:
@@ -181,12 +202,13 @@ class AdaptationService:
         return self._configuration_payload(
             project_id,
             configuration,
+            remark_name=normalized_remark_name,
             revision=revision,
             credential_fingerprint=profile["fingerprint"],
         )
 
     def get_configuration(self, project_id: str) -> dict[str, Any]:
-        configuration, revision = self._load_configuration(project_id)
+        configuration, revision, remark_name = self._load_configuration_details(project_id)
         fingerprint: str | None = None
         credential_status = "locked"
         if self.vault.is_unlocked:
@@ -207,6 +229,7 @@ class AdaptationService:
         return self._configuration_payload(
             project_id,
             configuration,
+            remark_name=remark_name,
             revision=revision,
             credential_fingerprint=fingerprint,
             credential_status=credential_status,
@@ -654,6 +677,12 @@ class AdaptationService:
         )
 
     def _load_configuration(self, project_id: str) -> tuple[TextModelConfiguration, int]:
+        configuration, revision, _remark_name = self._load_configuration_details(project_id)
+        return configuration, revision
+
+    def _load_configuration_details(
+        self, project_id: str
+    ) -> tuple[TextModelConfiguration, int, str | None]:
         self._require_project(project_id)
         with self.database.reader() as connection:
             row = connection.execute(
@@ -672,7 +701,23 @@ class AdaptationService:
             timeout_seconds=float(row["timeout_seconds"]),
             temperature=float(row["temperature"]),
         )
-        return configuration, int(row["revision"])
+        remark_name = str(row["remark_name"]) if row["remark_name"] is not None else None
+        return configuration, int(row["revision"]), remark_name
+
+    @staticmethod
+    def _normalize_remark_name(remark_name: str | None) -> str | None:
+        if remark_name is None:
+            return None
+        normalized = remark_name.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 200:
+            raise ApplicationError(
+                code="INVALID_TEXT_MODEL_CONFIGURATION",
+                message="备注名称不能超过 200 个字符。",
+                status_code=422,
+            )
+        return normalized
 
     @staticmethod
     def _validated_configuration(
@@ -754,6 +799,7 @@ class AdaptationService:
         project_id: str,
         configuration: TextModelConfiguration,
         *,
+        remark_name: str | None,
         revision: int,
         credential_fingerprint: str | None,
         credential_status: str = "available",
@@ -762,9 +808,12 @@ class AdaptationService:
             "project_id": project_id,
             "text_model_profile_id": project_id,
             "provider": "openai-compatible",
+            "remark_name": remark_name,
+            "url": configuration.base_url,
             "provider_api_url": configuration.base_url,
             "base_url": configuration.base_url,
             "endpoint_host": urlparse(configuration.base_url).hostname,
+            "request_model": configuration.model,
             "model_name": configuration.model,
             "model": configuration.model,
             "credential_profile_id": configuration.credential_profile_id,

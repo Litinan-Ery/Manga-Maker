@@ -110,9 +110,12 @@ export interface TextModelConfiguration {
   project_id: string;
   text_model_profile_id: string;
   provider: "openai-compatible";
+  remark_name: string | null;
+  url: string;
   provider_api_url: string;
   base_url: string;
   endpoint_host: string;
+  request_model: string;
   model_name: string;
   model: string;
   credential_profile_id: string;
@@ -1445,9 +1448,10 @@ export function getTextModelConfiguration(projectId: string): Promise<TextModelC
 export function saveTextModelConfiguration(
   projectId: string,
   configuration: {
-    provider_api_url: string;
-    model_name: string;
-    api_key: string;
+    remark_name?: string | null;
+    url: string;
+    key_password?: string;
+    request_model: string;
   },
 ): Promise<TextModelConfiguration> {
   return request<TextModelConfiguration>(

@@ -29,7 +29,7 @@
 | 代码面 | v0.2 当前状态 | v0.3 差距 |
 |---|---|---|
 | 应用组装 | typed `AppContainer`、module installer 与 compatibility seam 已建立 | 旧 v0.2 service 仍需按后续工单收口 |
-| 数据库 | schema 31；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval 与生成核验调用审计已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
+| 数据库 | schema 32；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval、生成核验调用审计与文本模型备注迁移已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
 | 后端能力 | 公开模块契约、版式门禁、结构化多角色 mapper、审批冻结和发送前复验已实现 | 缺少候选/质检/接受、PageApproval 与正式导出门禁 |
 | 前端 | feature boundary、Layout Workbench 与 Prompt Inspector 已实现 | 缺少 Candidate Review、页面批准和真实导出预检状态 |
 | 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、真实双角色与授权章节证据仍未完成 |
@@ -943,7 +943,7 @@ MM-044，因此本工单保持 In Progress，不标记 Done。
 
 | 功能域 | 功能点 | 验收结果 |
 |---|---|---|
-| 文本模型设置 | 设置表单只包含服务商 API 链接、模型名称、密钥三项；三项一次保存，重启后仍可使用 | 非敏感配置进入本地 SQLite，密钥只写入已解锁的应用加密凭证库；任何读取响应不返回密钥 |
+| 文本模型设置 | 设置表单包含备注名称（可选）、URL、Key/Password、Request Model；首次一次保存，后续修改非秘密字段可留空保留原 Key/Password | 非敏感配置进入本地 SQLite，Key/Password 只写入已解锁的应用加密凭证库；任何读取响应不返回秘密 |
 | 统一文本模型来源 | 结构化改编、角色/风格设定草拟、角色固定 Tags、NovelAI Prompt 与结构修复使用同一当前配置版本 | 每个模型产物记录配置版本、模型、端点主机、模板版本、token 与耗时，不静默回退 |
 | 模型化角色与风格草拟 | 使用配置的文本模型，从已审批 Storyboard 生成结构化 CharacterBible 与 StyleBible | 通过版本化 Schema、来源版本校验、人工编辑和独立审批后才能继续 |
 | 角色固定 Tags | 为每个角色/造型生成有序固定 Tags 与负向 Tags，区分逐格可变 Tags | CharacterTagSet 独立版本化和审批；固定 Tags 变更只使相关 Prompt 失效 |
@@ -976,7 +976,7 @@ MM-044，因此本工单保持 In Progress，不标记 Done。
 | 18 | MM-101 跨章节状态账本 | P2 | Done | MM-017 |
 | 19 | MM-102 整本预算、按章队列与恢复 | P2 | Done | MM-101 |
 | 20 | MM-201 高级版式、彩色与条漫 | P3 | Done | MM-102 |
-| 21 | MM-018 文本模型三项一体配置 | P1 | Done | MM-004、MM-009 |
+| 21 | MM-018 文本模型四字段配置 | P1 | Done | MM-004、MM-009 |
 | 22 | MM-019 模型化设定与 CharacterTagSet | P1 | Done | MM-018、MM-010 |
 | 23 | MM-020 PromptPackage 与确定性编译 | P1 | Done | MM-019、MM-011 |
 | 24 | MM-021 生成冻结、导出与恢复升级 | P1 | Done | MM-020、MM-012–MM-017 |
@@ -1114,17 +1114,17 @@ MM-044，因此本工单保持 In Progress，不标记 Done。
 - 完成一个授权章节的 mock 闭环；真实调用与真实单章分别取得用户确认。
 - 完成证据：schema v12 增加持久化恢复摘要与导出秘密扫描结果；启动时将未知计费任务转人工审阅、中断导出失败关闭并保留项目/素材半成品，且不会自动调用供应商。生成与导出磁盘耗尽分别归一化并保持旧版本；诊断递归脱敏，默认关闭 access log；已解锁凭证字节会扫描普通文件和 ZIP 条目，命中不回显且阻止发布。自有合成章节完成 TXT 到四格式导出的 Mock 闭环与单格 reroll/恢复，96 项后端、15 项前端测试、ruff、mypy 和生产构建通过。详见 `P0_ACCEPTANCE_REPORT.md`。真实 NovelAI 请求仍为 0，付费 smoke 与代表性授权章节真实生产明确未执行。
 
-### MM-018 文本模型三项一体配置
+### MM-018 文本模型四字段配置
 
-- 目标：把分散的端点、模型与凭证引用改成用户可一次完成的三项设置。
-- 交付：`服务商 API 链接`、`模型名称`、`密钥`三字段 API 与界面；固定项目级本地凭证引用；配置版本和脱敏状态。
+- 目标：把文本模型配置收敛为用户可一次完成的四字段设置，并允许不重复提交秘密地修改非秘密字段。
+- 交付：`备注名称（可选）`、`URL`、`Key/Password`、`Request Model` 四字段 API 与界面；固定项目级本地凭证引用；配置版本和脱敏状态。
 - 验收：
   - 保存时只做本地校验和持久化，不隐式发出网络请求；
-  - API 链接和模型名称保存在本地数据库，密钥只写入已解锁加密凭证库；
-  - 密钥不进入响应、SQLite、日志、工程包、前端状态或浏览器存储；
-  - 保存后清空密钥输入，应用重启后显示脱敏状态；
+  - 备注名称、URL 和 Request Model 保存在本地数据库，Key/Password 只写入已解锁加密凭证库；
+  - Key/Password 不进入响应、SQLite、日志、工程包、前端状态或浏览器存储；
+  - 首次保存要求 Key/Password；保存后清空输入，后续留空则保留原凭证，应用重启后显示脱敏状态；
   - 缺字段、凭证库锁定、非 loopback 明文 HTTP 与任务期间配置变化均失败关闭。
-- 完成证据：设置界面与 API 已收敛为服务商 API 链接、模型名称、密钥三项；密钥写入项目稳定引用的本地加密 vault，保存响应、SQLite 与审计不含原文。保留旧凭证引用仅用于历史工程包兼容恢复，新界面不再暴露该流程；配置修订在模型调用结束前再次核对。
+- 完成证据：设置界面与 API 已收敛为备注名称（可选）、URL、Key/Password、Request Model 四项；schema 32 保存可空备注并从 schema 31 无损迁移。Key/Password 写入项目稳定引用的本地加密 vault，更新非秘密字段时无需重发，保存响应、SQLite 与审计不含原文。旧 `provider_api_url`/`base_url`、`model_name`/`model`、`api_key` 请求别名仅保留兼容；配置修订在模型调用结束前再次核对。
 
 ### MM-019 模型化设定与 CharacterTagSet
 

@@ -615,6 +615,8 @@ SourceChapter / StoryBeat
 
 ### 7.2 文本模型适配器
 
+面向用户的 TextModelProfile 配置契约固定为 `remark_name`（备注名称，可选）、`url`、`key_password`（Key/Password）和 `request_model`。首次保存必须提供 `key_password`；已有配置更新备注、URL 或 Request Model 时可省略它并复用原凭证引用。SQLite 只保存备注、URL、Request Model 与凭证引用，Key/Password 只进入已解锁的本地加密凭证库；读取响应永不返回秘密。后端继续接受旧字段别名用于历史客户端和工程恢复，但新界面只发送新契约。
+
 ```python
 class TextModelProvider(Protocol):
     async def validate_configuration(self) -> ProviderValidationResult: ...

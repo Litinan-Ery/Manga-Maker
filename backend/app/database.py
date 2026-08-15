@@ -13,6 +13,7 @@ from .modules.lineage.migrations import LINEAGE_MIGRATIONS
 from .modules.production.migrations import PRODUCTION_MIGRATIONS
 from .modules.project_source.migrations import PROJECT_SOURCE_MIGRATIONS
 from .modules.prompting.migrations import PROMPTING_MIGRATIONS
+from .modules.text_execution.migrations import TEXT_EXECUTION_MIGRATIONS
 from .platform.durable_work.migrations import DURABLE_WORK_MIGRATIONS
 from .platform.persistence import MigrationRegistry, ModuleMigrationRunner, RegisteredMigration
 from .platform.recovery.migrations import RECOVERY_MIGRATIONS
@@ -971,6 +972,7 @@ MODULE_MIGRATIONS: tuple[RegisteredMigration, ...] = (
     *PRODUCTION_MIGRATIONS[2:3],
     *PROMPTING_MIGRATIONS[1:],
     *PRODUCTION_MIGRATIONS[3:],
+    *TEXT_EXECUTION_MIGRATIONS,
 )
 DATABASE_MIGRATION_REGISTRY = MigrationRegistry((*LEGACY_REGISTERED_MIGRATIONS, *MODULE_MIGRATIONS))
 

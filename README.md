@@ -17,7 +17,7 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | 应用本地加密凭证库 | 已实现 | Argon2id + XChaCha20-Poly1305；支持界面内创建、解锁、锁定和保存凭证 |
 | TXT 导入与章节修正 | 已实现 | UTF-8/BOM/GB18030/GBK 候选；支持改名、拆分、合并 |
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
-| 文本模型与结构化改编 | 已实现（Mock 验收） | 界面只需 API 链接、模型名称、密钥三项；密钥本地加密保存，同一配置生成分镜、角色/风格设定、固定 Tags 和逐格 Prompt；未做真实调用 |
+| 文本模型与结构化改编 | 已实现（Mock 验收） | 界面字段为备注名称（可选）、URL、Key/Password、Request Model；Key/Password 本地加密保存且更新其他字段时可留空保留，同一配置生成分镜、角色/风格设定、固定 Tags 和逐格 Prompt；未做真实调用 |
 | CharacterBible、StyleBible 与参考图 | 已实现（Mock 验收） | 从已审批分镜调用当前文本模型草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
 | CharacterTagSet、PromptPlan 与 ProviderExecutionSpec | v0.3 多角色链路已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；PromptPlan v2 保留每角色正负区块、动作、顺序、版式坐标与关系动作；版本化 mapper 生成并冻结 NovelAI V4 base/正负角色 captions、坐标、payload hash；旧 flat prompt 只读且不能创建新 Job |
 | Prompt Inspector 与生成审批 | v0.3 已实现（Mock 验收） | 逐格显示结构化字段、固定 Tags、映射对照、脱敏 payload、哈希、影响与调用/成本边界；编辑后必须保存并重新预览，审批与 Job 创建均幂等，尚不包含候选审片 |

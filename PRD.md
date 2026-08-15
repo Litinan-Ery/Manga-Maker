@@ -3,12 +3,12 @@
 | 项目 | 内容 |
 |---|---|
 | 文档版本 | v0.3 |
-| 日期 | 2026-08-13 |
+| 日期 | 2026-08-15 |
 | 产品状态 | v0.2 离线 Mock 单章闭环及扩展能力已实现；v0.3 架构底座、版式先行、PromptPlan/PromptPackage v2、NovelAI 多角色映射、审批冻结和 Prompt Inspector 已完成 Mock 验收，候选—质检—接受闭环、迁移发布门禁和分层 Token 流水线尚未完成；真实文本模型、NovelAI 付费调用与代表性授权章节生产仍未验收 |
 | 产品形态 | 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 | 默认成品 | 黑白分页漫画，2:3 竖版，左到右、从上到下，简体中文横排 |
-| 文本模型配置 | 服务商 API 链接、模型名称、密钥三项；配置仅在本机保存 |
+| 文本模型配置 | 备注名称（可选）、URL、Key/Password、Request Model；配置仅在本机保存 |
 | 文本模型职责 | 结构化改编、NovelAI 输入 Prompt、角色固定 Tags 及相关结构化文本任务 |
 | 图像生成 | NovelAI Image Generation API |
 
@@ -18,7 +18,7 @@
 
 Manga Maker 把“把小说交给模型生成几张图”改造成一个可审阅、可修改、可恢复的漫画生产流程。
 
-P0 从一个 TXT 章节开始。用户先在本地设置表单中填写服务商 API 链接、模型名称和密钥。系统使用这一已保存的文本模型配置，以可恢复的“章节 → 场景 → 页面 → 分格”阶段生成带来源锚点的改编方案。用户先批准分镜和 `PageLayoutDraft`，冻结每格比例、阅读顺序、焦点与文字安全区；系统随后草拟角色固定 Tags，并为每格生成供应商无关的结构化 `PromptPlan`。本地编译器必须逐字注入已批准固定 Tags，并把多个角色映射为彼此隔离的正负提示区块。用户确认设定、Prompt、页数、候选数和预计成本后，系统才调用 NovelAI。每次结果先进入候选集，经规则质检与人工选择后才能成为已接受素材；本地排版器再负责格框、裁切、对白、旁白、音效和页码。页面只有在全部目标格已接受、质量阻断项清零并由用户批准后才能进入最终导出。
+P0 从一个 TXT 章节开始。用户先在本地设置表单中填写备注名称（可选）、URL、Key/Password 和 Request Model。系统使用这一已保存的文本模型配置，以可恢复的“章节 → 场景 → 页面 → 分格”阶段生成带来源锚点的改编方案。用户先批准分镜和 `PageLayoutDraft`，冻结每格比例、阅读顺序、焦点与文字安全区；系统随后草拟角色固定 Tags，并为每格生成供应商无关的结构化 `PromptPlan`。本地编译器必须逐字注入已批准固定 Tags，并把多个角色映射为彼此隔离的正负提示区块。用户确认设定、Prompt、页数、候选数和预计成本后，系统才调用 NovelAI。每次结果先进入候选集，经规则质检与人工选择后才能成为已接受素材；本地排版器再负责格框、裁切、对白、旁白、音效和页码。页面只有在全部目标格已接受、质量阻断项清零并由用户批准后才能进入最终导出。
 
 P0 的核心不是“一次生成看起来像漫画的图片”，而是建立以下可验证闭环：
 
@@ -147,7 +147,7 @@ P0 仅服务一名本机创作者。用户：
 | StoryBeat | 必须在改编中处理的剧情信息单位，例如动作、发现、转折或关键对白 |
 | Storyboard | 一个章节的场景、页面、分格、对白和视觉要求集合 |
 | PageLayoutDraft | 出图前冻结的页面版式版本，包含格框比例、阅读顺序、焦点、人物粗略位置和文字安全区 |
-| TextModelProfile | 一个本地文本模型配置版本；用户输入仅包含服务商 API 链接、模型名称和密钥，持久化时密钥与非敏感字段分离保存 |
+| TextModelProfile | 一个本地文本模型配置版本；用户输入为备注名称（可选）、URL、Key/Password 和 Request Model，持久化时 Key/Password 与非敏感字段分离保存 |
 | ModelCapabilitySnapshot | 某一文本模型配置在一次显式能力探测后记录的上下文、输出、结构化输出与 Token 计量能力快照 |
 | TextStageRun | 一次有明确输入版本、TokenBudget、输出 Schema、检查点和结果状态的文本模型阶段调用 |
 | TokenBudget | 某阶段的输入、Schema、预留输出和安全余量预算，以及超限时的确定性裁剪记录 |
@@ -308,9 +308,9 @@ GenerationJob 状态只描述外部任务执行，不承载素材质量。候选
 
 ### 8.10 文本模型设置
 
-- 使用一个设置表单展示且只要求三项：`服务商 API 链接`、`模型名称`、`密钥`。
-- 三项均由用户在本机填写并保存；服务商 API 链接与模型名称保存在应用本地设置中，密钥写入应用本地加密凭证库。
-- 密钥输入为只写字段；保存后仅展示“已配置”和脱敏指纹，不回显、复制或写入浏览器持久存储。
+- 使用一个设置表单展示四个字段：`备注名称（可选）`、`URL`、`Key/Password`、`Request Model`。
+- 首次保存要求 URL、Key/Password 和 Request Model；备注名称可空。备注名称、URL 与 Request Model 保存在应用本地设置中，Key/Password 写入应用本地加密凭证库。
+- Key/Password 为只写字段；保存后仅展示“已配置”和脱敏指纹，不回显、复制或写入浏览器持久存储。已有配置更新其他字段时可留空保留原 Key/Password。
 - “保存配置”只执行本地写入；“测试连接”是独立的显式动作，并清楚提示会向所填服务商发出最小测试请求。
 - 页面展示当前配置版本、最后一次连接测试结果，以及该配置将承担的任务：结构化改编、角色 Tags 草拟、NovelAI Prompt 生成和结构修复。
 - 显示最近一次显式能力探测形成的 ModelCapabilitySnapshot，以及各阶段输入、Schema、预留输出和安全余量的 TokenBudget；无法可靠计量时必须标记估算口径。
@@ -322,7 +322,7 @@ GenerationJob 状态只描述外部任务执行，不承载素材质量。候选
 | 对象 | 稳定标识 | 关键字段 | 权威来源 |
 |---|---|---|---|
 | Project | `project_id` | 标题、创建时间、当前阶段、默认阅读方向 | SQLite |
-| TextModelProfile | `text_model_profile_id` + `version` | 服务商 API 链接、模型名称、凭证引用、连接状态 | 应用本地设置 + 本地加密凭证库 |
+| TextModelProfile | `text_model_profile_id` + `version` | 备注名称、URL、Request Model、凭证引用、连接状态 | 应用本地设置 + 本地加密凭证库 |
 | SourceChapter | `chapter_id` + `version` | 文件哈希、编码、起止字符、正文哈希 | SQLite + 本地文件 |
 | Storyboard | `storyboard_id` + `version` | StoryBeat、Scene、Page、Panel、审批状态 | SQLite + JSON 快照 |
 | PageLayoutDraft | `page_layout_draft_id` + `version` | 页面尺寸、格框、阅读顺序、焦点、位置、文字安全区、审批状态 | SQLite + JSON 快照 |
@@ -366,7 +366,7 @@ GenerationJob 状态只描述外部任务执行，不承载素材质量。候选
 | 生成图片 | 不可变本地素材文件 | 缩略图、合成页 |
 | 候选、质检、接受和页面审批 | SQLite + JSON 快照 | 审片台、导出预检、质量指标 |
 | 页面布局与文字 | PageLayoutDraft + PageVersion JSON | PNG/PDF/CBZ 页面 |
-| 文本模型非敏感配置 | 应用本地设置 | 当前配置、版本、端点主机和模型名称 |
+| 文本模型非敏感配置 | 应用本地设置 | 备注名称、URL、Request Model、版本和端点主机 |
 | 文本模型与 NovelAI 密钥 | 应用本地加密凭证库 | 解锁后的运行时短期凭证 |
 | 审计 | 追加式本地记录 | 成本与运行报告 |
 
@@ -398,10 +398,10 @@ GenerationJob 状态只描述外部任务执行，不承载素材质量。候选
 
 ### FR-04：文本模型配置
 
-- P0 提供 OpenAI-compatible 文本模型适配器。面向用户的配置表单只包含三项必填字段：`服务商 API 链接`（`provider_api_url`）、`模型名称`（`model_name`）和`密钥`（`api_key`）。超时、温度等运行参数使用产品定义的有界默认值，不作为首版必填配置项。
-- 三项配置全部在本机保存：服务商 API 链接、模型名称和配置版本保存在应用本地设置中；密钥存入 Manga Maker 应用数据目录中的本地加密凭证库，并以不含秘密的凭证引用关联配置。
-- 配置必须在应用重启后仍可用，且不得由 Manga Maker 自动同步或上传。服务商 API 链接与模型名称可以作为可移植来源信息进入用户显式导出的工程包；密钥不得进入工程包、成品导出、日志、崩溃报告、源码、浏览器 `localStorage` 或任何 Manga Maker 云端服务，凭证引用在恢复时必须替换为“需要重新录入”。
-- 密钥字段只写；界面只显示已配置状态和末四位指纹，不回显完整密钥。更新密钥必须显式重新输入。
+- P0 提供 OpenAI-compatible 文本模型适配器。面向用户的配置表单固定为四个字段：`备注名称（可选）`（`remark_name`）、`URL`（`url`）、`Key/Password`（`key_password`）和 `Request Model`（`request_model`）。首次保存时后三项必填；已有配置更新备注、URL 或 Request Model 时可省略 Key/Password。超时、温度等运行参数使用产品定义的有界默认值，不作为首版配置字段。
+- 四字段配置全部在本机处理：备注名称、URL、Request Model 和配置版本保存在应用本地设置中；Key/Password 存入 Manga Maker 应用数据目录中的本地加密凭证库，并以不含秘密的凭证引用关联配置。
+- 配置必须在应用重启后仍可用，且不得由 Manga Maker 自动同步或上传。备注名称、URL 与 Request Model 可以作为可移植来源信息进入用户显式导出的工程包；Key/Password 不得进入工程包、成品导出、日志、崩溃报告、源码、浏览器 `localStorage` 或任何 Manga Maker 云端服务，凭证引用在恢复时必须替换为“需要重新录入”。
+- Key/Password 字段只写；界面只显示已配置状态和末四位指纹，不回显完整秘密。更新秘密必须显式重新输入，留空则保留当前凭证。
 - “保存配置”只做本地校验与持久化，不发出模型请求；“测试连接”必须由用户另行点击，并在发出最小请求前展示端点主机和模型名称。
 - 当前激活的 TextModelProfile 是全部文本模型任务的唯一配置来源，至少包括：基于 StoryBeat/SourceAnchor 的结构化改编、Storyboard 生成与结构修复、CharacterBible/StyleBible 草拟、角色固定 Tags 草拟，以及 NovelAI 逐格 PromptPackage 生成。
 - 每个模型产物记录 TextModelProfile ID 与版本、端点主机、模型名称、提示词模板版本、输入/输出 token 和耗时，但不记录密钥或包含密钥的原始请求头。
@@ -410,7 +410,7 @@ GenerationJob 状态只描述外部任务执行，不承载素材质量。候选
 - 测试环境可用显式环境变量注入，不读取项目目录中的明文配置。
 - 模型输入只包含所选章节、必要设定和结构化指令，不发送整本 TXT。
 
-当前实现说明：v0.2 已支持 OpenAI-compatible 服务商 API 链接、模型名称与密钥三项一体设置；非敏感配置与密钥分别保存在应用本地设置和加密凭证库中。同一配置修订用于结构化 Storyboard、CharacterBible/StyleBible、角色固定 Tags 与 NovelAI PromptPackage，并通过版本、审批、哈希和生成门禁防止静默切换。当前验收仅使用 Mock/Stub，尚未执行真实文本模型或 NovelAI 付费调用。
+当前实现说明：文本模型设置已采用备注名称（可选）、URL、Key/Password、Request Model 四字段契约；非敏感配置与 Key/Password 分别保存在应用本地设置和加密凭证库中，已有配置更新非秘密字段时无需重发秘密。同一配置修订用于结构化 Storyboard、CharacterBible/StyleBible、角色固定 Tags 与 NovelAI PromptPackage，并通过版本、审批、哈希和生成门禁防止静默切换。当前验收仅使用 Mock/Stub，尚未执行真实文本模型或 NovelAI 付费调用。
 
 ### FR-05：结构化改编
 
@@ -624,16 +624,18 @@ GenerationJob 状态只描述外部任务执行，不承载素材质量。候选
 
 ```typescript
 interface TextModelConfigurationInput {
-  provider_api_url: string;
-  model_name: string;
-  api_key: string;
+  remark_name?: string;
+  url: string;
+  key_password?: string;
+  request_model: string;
 }
 
 interface StoredTextModelProfile {
   text_model_profile_id: string;
   version: number;
-  provider_api_url: string;
-  model_name: string;
+  remark_name?: string;
+  url: string;
+  request_model: string;
   credential_ref: string;
 }
 
@@ -645,7 +647,7 @@ interface TextModelProvider {
 }
 ```
 
-`TextModelConfigurationInput` 对应用户看到的完整三项设置表单。保存成功后，后端必须把 `api_key` 写入本地加密凭证库，只返回 `StoredTextModelProfile` 与脱敏凭证状态；任何读取配置的接口都不得返回 `api_key`。
+`TextModelConfigurationInput` 对应用户看到的四字段设置表单。`key_password` 在首次保存时必填，已有配置更新其他字段时可省略。保存成功后，后端必须把 `key_password` 写入本地加密凭证库，只返回 `StoredTextModelProfile` 与脱敏凭证状态；任何读取配置的接口都不得返回 `key_password`。旧 `provider_api_url`/`base_url`、`model_name`/`model`、`api_key` 只作为兼容请求别名，不再由新界面发送。
 
 `StoryboardRequest` 必须包含：
 
@@ -996,7 +998,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 ### NFR-03：安全与隐私
 
 - 真实密钥只存在于应用本地加密凭证库和解锁后的短期进程内存。
-- 服务商 API 链接、模型名称和密钥均只在本机保存；其中密钥必须与非敏感配置分离加密，任何配置读取接口都不得返回密钥原文。
+- 备注名称、URL、Request Model 与 Key/Password 均只在本机处理；其中 Key/Password 必须与非敏感配置分离加密，任何配置读取接口都不得返回秘密原文。
 - 本地凭证库不得位于项目工作区、同步目录、工程包或版本库中；主密码不落盘。
 - 默认日志不包含正文、完整提示词、参考图内容或凭证。
 - 仅绑定 loopback，不提供关闭该限制的 P0 配置。
@@ -1029,7 +1031,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 | TXT 编码不确定 | 展示多个预览，用户选择前不继续 |
 | 未识别出章节 | 允许整篇作为一章或手工添加边界 |
 | 章节过长 | 展示 token/页数风险，要求缩小范围或分段改编 |
-| 文本模型三项配置不完整 | 保留本地编辑能力，阻止全部文本模型任务并定位缺失字段 |
+| 文本模型四字段配置缺少当前保存所需字段 | 保留本地编辑能力，阻止全部文本模型任务并定位缺失字段；首次保存缺 Key/Password 时明确提示，已有凭证更新时允许留空 |
 | 文本模型凭证库锁定或连接失败 | 不切换供应商或模型；停止当前文本任务，解锁或修正后由用户重试 |
 | 文本模型配置在任务期间变化 | 丢弃未登记的旧配置结果并提示按新版本重新生成，不覆盖已有版本 |
 | LLM 返回无效 JSON | 最多修复两次，仍失败则保留错误摘要并停止 |
@@ -1100,7 +1102,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 
 ### 16.1 单元测试
 
-- 文本模型三项字段的必填、URL/模型格式校验、本地持久化、重启读取和密钥只写响应。
+- 文本模型四字段的首次/更新必填规则、URL/Request Model 格式校验、本地持久化、重启读取和 Key/Password 只写响应。
 - UTF-8、UTF-8 BOM、GB18030、错误字节和混合换行解析。
 - 中文章节识别、手工边界、空章和超长章。
 - SourceAnchor 偏移、哈希和版本一致性。
@@ -1132,7 +1134,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 
 ### 16.3 端到端测试
 
-- 在文本模型设置中填写服务商 API 链接、模型名称和测试密钥，保存后重启应用，确认非敏感配置与脱敏凭证状态仍可用且任何读取响应不含密钥原文。
+- 在文本模型设置中填写备注名称（可选）、URL、测试 Key/Password 和 Request Model，保存后重启应用，再留空 Key/Password 修改备注或模型，确认非敏感配置与脱敏凭证状态仍可用且任何读取响应不含秘密原文。
 - 导入一个 3,000–8,000 中文字符的授权测试章节。
 - 使用该配置按阶段生成 6–12 页、每页 1–6 格的 Storyboard，批准每页 PageLayoutDraft，再生成 CharacterTagSet 和逐格 PromptPlan，并达到 100% StoryBeat 处理率。
 - 审批角色、固定 Tags、风格、版式、PromptPlan、候选数和成本，使用 mock 完成全章候选生成、暂停、重启和继续。
@@ -1145,7 +1147,7 @@ SQLite 与文件写入由同一个本地写者协调。数据库先登记预备�
 
 真实服务测试必须由用户单独确认，并控制成本：
 
-1. 使用用户填写的三项文本模型配置完成一次最小结构化输出 smoke test，并确认服务商、模型和配置版本来源正确。
+1. 使用用户填写的四字段文本模型配置完成一次最小结构化输出 smoke test，并确认服务商、模型和配置版本来源正确。
 2. 使用同一文本模型为最小面板生成角色 Tags 和 NovelAI PromptPackage，确认本地编译结果包含已批准固定 Tags。
 3. 使用用户 Token 触发一次最小 NovelAI 图像生成 smoke test。
 4. 确认请求、响应、文件落盘、参数和成本记录完整。
@@ -1174,8 +1176,8 @@ AC-01～AC-08 保留既有单章闭环门禁；AC-09～AC-11 是 v0.3 P0 / Block
 
 ### AC-03：文本模型配置与职责
 
-- 设置界面只要求服务商 API 链接、模型名称和密钥三项，三项均可一次填写并保存；应用重启后配置仍可继续使用。
-- 服务商 API 链接和模型名称由本地设置持久化，密钥只存在于本地加密凭证库及解锁后的短期内存；配置读取、日志、工程包和成品导出均不含密钥原文。
+- 设置界面字段固定为备注名称（可选）、URL、Key/Password、Request Model；首次可一次填写并保存，应用重启后配置仍可继续使用，后续修改非秘密字段时 Key/Password 可留空。
+- 备注名称、URL 和 Request Model 由本地设置持久化，Key/Password 只存在于本地加密凭证库及解锁后的短期内存；配置读取、日志、工程包和成品导出均不含秘密原文。
 - 结构化改编、角色 Tags 草拟、NovelAI Prompt 草拟和结构修复均使用当前激活的同一 TextModelProfile，并记录一致的配置版本来源。
 - 配置缺失、凭证锁定或任务期间配置变化时失败关闭，不静默回退到其他服务商、模型或密钥。
 
@@ -1258,7 +1260,7 @@ AC-01～AC-08 保留既有单章闭环门禁；AC-09～AC-11 是 v0.3 P0 / Block
 - 建立 FastAPI、SQLite、React 和本地工作区骨架。
 - 完成项目创建、编码预检、章节修正和 SourceAnchor。
 - 建立 loopback、CSRF、本地加密凭证库和日志脱敏基线。
-- 把服务商 API 链接、模型名称和密钥合并为文本模型三项设置流程，并完成本地持久化、密钥只写和重启恢复。
+- 把文本模型配置收敛为备注名称（可选）、URL、Key/Password、Request Model 四字段流程，并完成本地持久化、秘密只写、更新复用和重启恢复。
 
 ### Phase 2：结构化改编
 
@@ -1353,7 +1355,7 @@ v0.3 只有在继承的单章闭环和新增四项能力同时满足以下条件
 1. README、PRD 与技术架构文档已通过文档一致性和敏感信息检查。
 2. Phase 1–6 的代码、迁移、测试和恢复路径均完成。
 3. 自动化测试覆盖主要成功路径、错误路径、状态机和导出恢复。
-4. 文本模型三项配置可本地持久化，真实分层结构化改编、CharacterTagSet 与 PromptPlan 最小调用通过。
+4. 文本模型四字段配置可本地持久化且 Key/Password 更新复用安全，真实分层结构化改编、CharacterTagSet 与 PromptPlan 最小调用通过。
 5. 全部生成目标绑定已批准 PageLayoutDraft；实际尺寸选择、焦点和安全区可追溯。
 6. 单/双/三角色结构化契约测试通过，用户批准的 NovelAI 最小真实调用包含正确的独立角色区块与固定 Tags。
 7. 候选、质检、接受、页面批准和导出预检状态机完成自动化与人工验证，未审素材不能进入正式导出。

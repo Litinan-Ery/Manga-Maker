@@ -190,6 +190,102 @@ def install_stub(
     )
 
 
+def test_text_model_configuration_uses_four_fields_and_reuses_saved_secret(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project = client.post(
+        "/api/v1/projects",
+        headers=session_headers,
+        json={"title": "文本模型配置测试"},
+    ).json()
+    project_id = str(project["project_id"])
+    created = client.post(
+        "/api/v1/vault",
+        headers=session_headers,
+        json={"master_password": "unit test master password"},
+    )
+    assert created.status_code == 201
+
+    missing_secret = client.put(
+        f"/api/v1/projects/{project_id}/adaptation/text-model",
+        headers=session_headers,
+        json={
+            "remark_name": "主力分镜模型",
+            "url": "https://models.example.test/v1",
+            "request_model": "unit-model",
+        },
+    )
+    assert missing_secret.status_code == 422
+    assert missing_secret.json()["error"]["code"] == "TEXT_MODEL_CREDENTIAL_REQUIRED"
+
+    saved = client.put(
+        f"/api/v1/projects/{project_id}/adaptation/text-model",
+        headers=session_headers,
+        json={
+            "remark_name": "  主力分镜模型  ",
+            "url": "https://models.example.test/v1",
+            "key_password": "unit-credential-value",
+            "request_model": "unit-model",
+        },
+    )
+    assert saved.status_code == 200
+    first = saved.json()
+    assert first["remark_name"] == "主力分镜模型"
+    assert first["url"] == "https://models.example.test/v1"
+    assert first["request_model"] == "unit-model"
+    assert first["provider_api_url"] == first["url"]
+    assert first["model_name"] == first["request_model"]
+    assert first["credential_fingerprint"] == "…alue"
+    assert "key_password" not in first
+    assert "unit-credential-value" not in json.dumps(first)
+
+    updated = client.put(
+        f"/api/v1/projects/{project_id}/adaptation/text-model",
+        headers=session_headers,
+        json={
+            "remark_name": "备用分镜模型",
+            "url": "https://backup.example.test/v1",
+            "request_model": "updated-model",
+        },
+    )
+    assert updated.status_code == 200
+    second = updated.json()
+    assert second["remark_name"] == "备用分镜模型"
+    assert second["url"] == "https://backup.example.test/v1"
+    assert second["request_model"] == "updated-model"
+    assert second["revision"] == 2
+    assert second["credential_fingerprint"] == first["credential_fingerprint"]
+    assert client.app.state.vault.get_secret(second["credential_profile_id"]) == (
+        "unit-credential-value"
+    )
+
+    loaded = client.get(
+        f"/api/v1/projects/{project_id}/adaptation/text-model"
+    )
+    assert loaded.status_code == 200
+    assert loaded.json()["remark_name"] == "备用分镜模型"
+    with client.app.state.database.reader() as connection:
+        row = connection.execute(
+            """
+            SELECT remark_name, base_url, model, credential_profile_id
+            FROM text_model_configs WHERE project_id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+        audits = connection.execute(
+            "SELECT payload_json FROM audit_events WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+    assert row is not None
+    assert dict(row) == {
+        "remark_name": "备用分镜模型",
+        "base_url": "https://backup.example.test/v1",
+        "model": "updated-model",
+        "credential_profile_id": f"text-model-{project_id}",
+    }
+    assert "unit-credential-value" not in json.dumps([dict(item) for item in audits])
+
+
 def test_configuration_generation_revision_and_approval_are_versioned(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
