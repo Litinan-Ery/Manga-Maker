@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..modules.production.adapters.novelai import NovelAIV4Payload
 from ..modules.production.contracts import ProviderExecutionSpec
 from ..novelai.client import NovelAIImageRequest
+from ..novelai.contracts import OPUS_ZERO_ANLAS_DIMENSIONS, OPUS_ZERO_ANLAS_MAX_STEPS
 
 
 class ReferenceUse(BaseModel):
@@ -34,7 +35,7 @@ class CharacterTagSetRef(BaseModel):
 class GenerationSpecDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.0"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.0"
     spec_id: str = Field(min_length=1, max_length=64)
     project_id: str = Field(min_length=1, max_length=64)
     chapter_id: str = Field(min_length=1, max_length=64)
@@ -82,6 +83,7 @@ class GenerationSpecDocument(BaseModel):
     dimension_rule_version: str | None = Field(default=None, min_length=1, max_length=64)
     capability_snapshot_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     provider: Literal["novelai"] = "novelai"
+    billing_mode: Literal["standard", "opus_zero_anlas"] = "standard"
     provider_model_id: str = Field(min_length=1, max_length=100)
     mapping_version: str = Field(min_length=1, max_length=100)
     contract_sha256: str = Field(min_length=64, max_length=64)
@@ -119,7 +121,7 @@ class GenerationSpecDocument(BaseModel):
             self.compiled_prompt_sha256,
             self.compiled_negative_prompt_sha256,
         )
-        if self.schema_version in {"1.2", "1.3", "1.4"} and not all(
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5"} and not all(
             value is not None for value in prompt_package_fields
         ):
             raise ValueError("schema 1.2 requires frozen PromptPackage provenance")
@@ -139,7 +141,7 @@ class GenerationSpecDocument(BaseModel):
             self.dimension_rule_version,
             self.capability_snapshot_sha256,
         )
-        if self.schema_version in {"1.3", "1.4"} and any(
+        if self.schema_version in {"1.3", "1.4", "1.5"} and any(
             value is None for value in layout_fields
         ):
             raise ValueError("schema 1.3 requires frozen approved layout provenance")
@@ -157,7 +159,7 @@ class GenerationSpecDocument(BaseModel):
             self.candidate_count,
             self.quality_rule_version,
         )
-        if self.schema_version == "1.4" and (
+        if self.schema_version in {"1.4", "1.5"} and (
             any(value is None for value in approval_fields)
             or not self.character_tag_set_refs
         ):
@@ -181,6 +183,14 @@ class GenerationSpecDocument(BaseModel):
                 raise ValueError("P0 inpaint does not combine precise references")
         elif any(value is not None for value in inpaint_fields):
             raise ValueError("non-inpaint generation cannot include mask inputs")
+        if self.billing_mode == "opus_zero_anlas" and (
+            self.action != "generate"
+            or (self.width, self.height) not in OPUS_ZERO_ANLAS_DIMENSIONS
+            or self.steps > OPUS_ZERO_ANLAS_MAX_STEPS
+            or bool(self.references)
+            or any(value is not None for value in parent_fields)
+        ):
+            raise ValueError("Opus zero-Anlas specs must satisfy the pinned free profile")
         return self
 
 

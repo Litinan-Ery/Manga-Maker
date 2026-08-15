@@ -11,6 +11,7 @@ from .client import (
     NovelAIError,
     NovelAIGeneratedImage,
     NovelAIImageRequest,
+    NovelAISubscriptionResult,
 )
 
 
@@ -23,7 +24,10 @@ class MockNovelAIClient:
     failure: NovelAIError | None = None
     generation_failure: NovelAIError | None = None
     connection_calls: int = 0
+    subscription_calls: int = 0
     generation_calls: int = 0
+    subscription_active: bool = True
+    subscription_tier: int = 3
 
     async def validate_connection(self) -> NovelAIConnectionResult:
         self.connection_calls += 1
@@ -32,6 +36,17 @@ class MockNovelAIClient:
         return NovelAIConnectionResult(
             provider_model_id=self.provider_model_id,
             suggestion_count=self.suggestion_count,
+        )
+
+    async def get_subscription(self) -> NovelAISubscriptionResult:
+        self.subscription_calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return NovelAISubscriptionResult(
+            active=self.subscription_active,
+            tier=self.subscription_tier,
+            expires_at=None,
+            is_grace_period=False,
         )
 
     async def generate_image(self, request: NovelAIImageRequest) -> NovelAIGeneratedImage:
@@ -59,6 +74,7 @@ class MockNovelAIClient:
         return NovelAIGeneratedImage(
             png_bytes=output.getvalue(),
             seed=request.seed,
+            seed_source="request",
             index=0,
             width=request.width,
             height=request.height,

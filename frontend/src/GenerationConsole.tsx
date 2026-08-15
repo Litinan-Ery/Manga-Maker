@@ -24,10 +24,11 @@ interface GenerationConsoleProps {
 
 export function GenerationConsole({ projectId, chapterSet, onError }: GenerationConsoleProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
-  const [perPanelCeiling, setPerPanelCeiling] = useState(10);
+  const [billingMode, setBillingMode] = useState<"opus_zero_anlas" | "standard">("opus_zero_anlas");
+  const [perPanelCeiling, setPerPanelCeiling] = useState(0);
   const [estimate, setEstimate] = useState<GenerationEstimate | null>(null);
   const [maxCalls, setMaxCalls] = useState(1);
-  const [maxCost, setMaxCost] = useState(10);
+  const [maxCost, setMaxCost] = useState(0);
   const [confirmed, setConfirmed] = useState(false);
   const [executeConfirmed, setExecuteConfirmed] = useState(false);
   const [job, setJob] = useState<GenerationJob | null>(null);
@@ -35,6 +36,7 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
   const [executionScheduled, setExecutionScheduled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const jobIsZeroAnlas = job?.cost_basis === "opus_zero_anlas_official_limits_v1";
 
   useEffect(() => {
     let active = true;
@@ -163,7 +165,11 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
         <span>{job ? statusLabel(job.status) : "尚未创建"}</span>
       </div>
       <p className="panel-description">
-        先冻结面板范围与上限，再由你单独确认执行。每次只处理一格；网络结果不明时会停下等待人工审阅，不会自动重复付费请求。
+        {job && !jobIsZeroAnlas
+          ? "当前队列使用标准计费；执行可能消耗 Anlas，请按已冻结的成本上限单独确认。"
+          : billingMode === "opus_zero_anlas"
+            ? "默认使用 Opus 零 Anlas 资格载荷：本地预留为 0，单次 1 张、普通尺寸、28 步且不带基础图或参考图。每张图发出前都会实时核验有效 Opus；资格核验不是账单回执。"
+            : "标准计费允许参考图并按已冻结参数执行，但可能消耗 Anlas；创建前必须明确冻结成本硬上限。"}
       </p>
 
       <div className="settings-form generation-plan-form">
@@ -185,12 +191,29 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
           </select>
         </label>
         <label>
-          <span>每格保守预留上限（Anlas）</span>
+          <span>计费模式</span>
+          <select
+            value={billingMode}
+            onChange={(event) => {
+              const nextMode = event.target.value as "opus_zero_anlas" | "standard";
+              setBillingMode(nextMode);
+              setPerPanelCeiling(nextMode === "opus_zero_anlas" ? 0 : 10);
+              setEstimate(null);
+              setConfirmed(false);
+            }}
+          >
+            <option value="opus_zero_anlas">Opus 零 Anlas（默认）</option>
+            <option value="standard">标准计费（允许参考图）</option>
+          </select>
+        </label>
+        <label>
+          <span>{billingMode === "opus_zero_anlas" ? "每格本地 Anlas 预留" : "每格 Anlas 硬上限"}</span>
           <input
             type="number"
-            min={0}
-            max={100000}
+            min={billingMode === "opus_zero_anlas" ? 0 : 1}
+            max={billingMode === "opus_zero_anlas" ? 0 : 100_000}
             value={perPanelCeiling}
+            readOnly={billingMode === "opus_zero_anlas"}
             onChange={(event) => {
               setPerPanelCeiling(Number(event.target.value));
               setEstimate(null);
@@ -207,7 +230,9 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
         <div className="generation-estimate">
           <div className="facts queue-facts">
             <QueueFact label="页面" value={String(estimate.page_count)} />
-            <QueueFact label="面板 / 最少调用" value={`${estimate.panel_count} / ${estimate.estimated_calls}`} />
+            <QueueFact label="面板 / 出图调用" value={`${estimate.panel_count} / ${estimate.estimated_calls}`} />
+            <QueueFact label="预计订阅核验" value={String(estimate.estimated_verification_calls)} />
+            <QueueFact label="预计外部请求" value={String(estimate.estimated_external_requests)} />
             <QueueFact label="成本预留" value={`≤ ${estimate.estimated_cost_upper_anlas} Anlas`} />
           </div>
           <p className="field-note">{estimate.cost_notice}</p>
@@ -226,23 +251,30 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
           </div>
           <div className="settings-form">
             <label>
-              <span>最大调用次数</span>
+              <span>最大出图调用次数</span>
               <input
                 type="number"
                 min={estimate.panel_count}
                 max={estimate.panel_count * 3}
                 value={maxCalls}
-                onChange={(event) => setMaxCalls(Number(event.target.value))}
+                onChange={(event) => {
+                  setMaxCalls(Number(event.target.value));
+                  setConfirmed(false);
+                }}
               />
             </label>
             <label>
-              <span>最大成本预留（Anlas）</span>
+              <span>{estimate.billing_mode === "opus_zero_anlas" ? "最大本地 Anlas 预留" : "最大 Anlas 硬上限"}</span>
               <input
                 type="number"
                 min={estimate.estimated_cost_upper_anlas}
-                max={10000000}
+                max={estimate.billing_mode === "opus_zero_anlas" ? 0 : 100_000_000}
                 value={maxCost}
-                onChange={(event) => setMaxCost(Number(event.target.value))}
+                readOnly={estimate.billing_mode === "opus_zero_anlas"}
+                onChange={(event) => {
+                  setMaxCost(Number(event.target.value));
+                  setConfirmed(false);
+                }}
               />
             </label>
             <label className="confirmation-row">
@@ -251,7 +283,11 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
                 checked={confirmed}
                 onChange={(event) => setConfirmed(event.target.checked)}
               />
-              <span>我已核对页数、面板清单、调用上限和成本预留</span>
+              <span>
+                {estimate.billing_mode === "opus_zero_anlas"
+                  ? `我已核对页数、面板清单、最多 ${maxCalls} 次出图、${maxCalls} 次订阅核验、${maxCalls * 2} 次外部请求和 0 Anlas 本地预留；我理解资格核验不是账单保证，逐次实际费用可能保持未核实`
+                  : `我已核对页数、面板清单、最多 ${maxCalls} 次出图与外部请求，以及标准计费成本硬上限`}
+              </span>
             </label>
             <button
               type="button"
@@ -269,11 +305,16 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
           <div>
             <strong>{statusLabel(job.status)}</strong>
             <span>
-              已开始 {job.calls_started}/{job.max_calls} 次 · 已完成 {job.calls_completed}/{job.panel_count} 格 ·
+              出图 {job.calls_started}/{job.max_calls} · 订阅核验 {job.verification_calls_started}/{job.max_verification_calls} ·
+              外部请求 {job.external_requests_started}/{job.max_external_requests} · 已完成 {job.calls_completed}/{job.panel_count} 格 ·
               已分配 {job.allocated_cost_anlas}/{job.max_cost_anlas} Anlas
             </span>
             {job.unverified_cost_calls > 0 && (
-              <small>{job.unverified_cost_calls} 次请求的实际费用未由接口回传，保留为未核实记录。</small>
+              <small>
+                {jobIsZeroAnlas
+                  ? `${job.unverified_cost_calls} 次请求已核验 Opus 资格，但供应商未回传逐次实际扣费，仍保留为未核实。`
+                  : `${job.unverified_cost_calls} 次请求的实际费用未由接口回传，保留为未核实记录。`}
+              </small>
             )}
           </div>
           <div className="button-row">
@@ -290,7 +331,11 @@ export function GenerationConsole({ projectId, chapterSet, onError }: Generation
                     checked={executeConfirmed}
                     onChange={(event) => setExecuteConfirmed(event.target.checked)}
                   />
-                  <span>我确认现在执行已冻结队列，这可能产生 NovelAI 费用</span>
+                  <span>
+                    {jobIsZeroAnlas
+                      ? "我确认执行 Opus 零 Anlas 资格队列；若资格条件不满足，必须在出图前停止，供应商未回传的实际费用仍为未核实"
+                      : "我确认执行旧版标准计费队列；这可能消耗 NovelAI Anlas"}
+                  </span>
                 </label>
                 <button type="button" disabled={busy || !executeConfirmed} onClick={() => void handleExecute()}>
                   执行冻结队列（将调用 NovelAI）

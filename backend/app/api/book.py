@@ -13,7 +13,7 @@ Headers = Annotated[tuple[str | None, str | None], Depends(session_headers)]
 
 
 class EstimateBookRequest(BaseModel):
-    per_panel_cost_ceiling_anlas: int = Field(default=10, ge=0, le=100_000)
+    per_panel_cost_ceiling_anlas: int = Field(default=0, ge=0, le=100_000)
 
 
 class CreateBookPlanRequest(EstimateBookRequest):

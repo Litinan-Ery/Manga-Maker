@@ -73,7 +73,11 @@ def test_configuration_and_explicit_mock_connection_test_do_not_persist_secret(
     assert tested.status_code == 200
     assert tested.json()["generated_images"] == 0
     assert tested.json()["suggestion_count"] == 1
+    assert tested.json()["zero_anlas_ready"] is True
+    assert tested.json()["model_supports_zero_anlas"] is True
+    assert tested.json()["subscription"]["subscription_tier"] == 3
     assert mock.connection_calls == 1
+    assert mock.subscription_calls == 1
 
     loaded = client.get(f"/api/v1/projects/{project_id}/novelai/config")
     assert loaded.json()["last_connection_status"] == "ok"
@@ -90,6 +94,37 @@ def test_configuration_and_explicit_mock_connection_test_do_not_persist_secret(
     )
     assert secret not in persisted
     assert "unit-novelai-secret" not in persisted
+
+
+def test_connection_reports_legacy_model_as_standard_billing_only(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id = create_project(client, session_headers)
+    create_vault_profile(
+        client, session_headers, provider="novelai", secret="unit-novelai-secret"
+    )
+    saved = client.put(
+        f"/api/v1/projects/{project_id}/novelai/config",
+        headers=session_headers,
+        json={
+            "provider_model_id": "nai-diffusion-4-full",
+            "credential_profile_id": "novelai",
+            "timeout_seconds": 20,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    mock = MockNovelAIClient(provider_model_id="nai-diffusion-4-full")
+    client.app.state.novelai.provider_factory = lambda _configuration, _secret_reader: mock
+
+    tested = client.post(
+        f"/api/v1/projects/{project_id}/novelai/connection-test",
+        headers=session_headers,
+    )
+
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["subscription"]["opus_active"] is True
+    assert tested.json()["model_supports_zero_anlas"] is False
+    assert tested.json()["zero_anlas_ready"] is False
 
 
 def test_configuration_requires_unlocked_novelai_profile(

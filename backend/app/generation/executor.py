@@ -8,7 +8,7 @@ import json
 import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from ..adaptation.models import StoryboardDocument
@@ -37,6 +37,7 @@ from ..novelai.client import (
     NovelAIImageRequest,
     NovelAIInsufficientBalanceError,
     NovelAIInvalidRequestError,
+    NovelAIOpusRequiredError,
     NovelAIPermissionError,
     NovelAIProvider,
     NovelAIRateLimitError,
@@ -46,13 +47,18 @@ from ..novelai.client import (
     PreciseReferenceInput,
     SecretReader,
     novelai_correlation_id,
+    require_active_opus,
 )
 from ..prompting.models import CharacterTagBundleDocument, PromptBundleDocument
 from ..shared_kernel import canonical_sha256
 from ..vault import CredentialVault, VaultLockedError
 from .assets import AssetStore
 from .models import CompiledGenerationSpec, GenerationSpecDocument, ReferenceUse
-from .queue import GenerationQueueService
+from .queue import (
+    OPUS_ZERO_ANLAS_COST_BASIS,
+    STANDARD_COST_BASIS,
+    GenerationQueueService,
+)
 from .references import ReferencePreparationError
 
 MAX_PROVIDER_ATTEMPTS_PER_ITEM = 3
@@ -170,8 +176,9 @@ class GenerationSpecCompiler:
         }.get(operation)
         if spec_action is None:
             raise ApplicationError("GENERATION_OPERATION_INVALID", "生成任务操作类型无效。", 409)
+        billing_mode = self._billing_mode(context)
         document = GenerationSpecDocument(
-            schema_version="1.4",
+            schema_version="1.5",
             spec_id=spec_id,
             project_id=str(context["project_id"]),
             chapter_id=str(context["chapter_id"]),
@@ -218,6 +225,7 @@ class GenerationSpecCompiler:
             expected_crop_ratio=float(context["expected_crop_ratio"]),
             dimension_rule_version=str(context["dimension_rule_version"]),
             capability_snapshot_sha256=str(context["capability_snapshot_sha256"]),
+            billing_mode=billing_mode,
             provider_model_id=str(context["provider_model_id"]),
             mapping_version=str(context["mapping_version"]),
             contract_sha256=str(context["contract_sha256"]),
@@ -293,6 +301,22 @@ class GenerationSpecCompiler:
             provider_model_id=str(context["provider_model_id"]),
             credential_profile_id=credential_profile_id,
             timeout_seconds=float(context["timeout_seconds"]),
+        )
+
+    @staticmethod
+    def _billing_mode(
+        context: sqlite3.Row,
+    ) -> Literal["standard", "opus_zero_anlas"]:
+        cost_basis = str(context["cost_basis"])
+        max_cost = int(context["max_cost_anlas"])
+        if cost_basis == OPUS_ZERO_ANLAS_COST_BASIS and max_cost == 0:
+            return "opus_zero_anlas"
+        if cost_basis == STANDARD_COST_BASIS and max_cost >= 0:
+            return "standard"
+        raise ApplicationError(
+            "GENERATION_BILLING_FREEZE_INVALID",
+            "生成任务的成本模式与硬上限不一致，请重新估算。",
+            409,
         )
 
     @staticmethod
@@ -378,6 +402,7 @@ class GenerationSpecCompiler:
                        gj.provider_model_id, gj.mapping_version, gj.contract_sha256,
                        gj.credential_profile_id, gj.timeout_seconds,
                        gj.layout_snapshot_sha256, gj.plan_fingerprint,
+                       gj.max_cost_anlas, gj.cost_basis,
                        gj.generation_approval_id, gj.generation_approval_sha256,
                        gj.prompt_approval_hash, gj.prompt_snapshot_sha256,
                        gj.candidate_count_per_panel, gj.quality_rule_version,
@@ -708,6 +733,18 @@ class GenerationSpecCompiler:
                 "PromptPlan、TagSet、模型或供应商冻结载荷已变化，请重新估算。",
                 409,
             )
+        expected_billing_mode = self._billing_mode(context)
+        if (
+            approval_snapshot.get("billing_mode") != expected_billing_mode
+            or approval_snapshot.get("cost_basis") != str(context["cost_basis"])
+            or int(approval_snapshot.get("max_cost_anlas", -1))
+            != int(context["max_cost_anlas"])
+        ):
+            raise ApplicationError(
+                "GENERATION_BILLING_FREEZE_INVALID",
+                "生成批准中的成本模式或硬上限不一致，请重新估算。",
+                409,
+            )
         try:
             require_frozen_novelai_payload(execution_spec, payload)
         except ProviderMappingError as exc:
@@ -840,6 +877,7 @@ class GenerationSpecCompiler:
             seed=document.seed,
             sampler=document.sampler,
             noise_schedule=document.noise_schedule,
+            billing_mode=document.billing_mode,
             precise_reference=reference,
             action="infill" if document.action == "inpaint" else "generate",
             source_image_base64=source_image_base64,
@@ -946,6 +984,41 @@ class GenerationExecutor:
             )
             return "failed"
 
+        zero_anlas_verification: dict[str, Any] | None = None
+        if compiled.document.billing_mode == "opus_zero_anlas":
+            if not self.queue.mark_verification_request_started(attempt_id):
+                secret_value = None
+                return "blocked"
+            try:
+                subscription = await provider.get_subscription()
+                self.queue.complete_verification_request(attempt_id)
+                require_active_opus(subscription)
+                zero_anlas_verification = subscription.zero_anlas_verification()
+            except (
+                NovelAIAuthenticationError,
+                NovelAIPermissionError,
+                NovelAIOpusRequiredError,
+                NovelAIRateLimitError,
+                NovelAIInvalidRequestError,
+                NovelAITemporaryError,
+                NovelAIResponseFormatError,
+                VaultLockedError,
+                KeyError,
+            ) as exc:
+                self.queue.fail_attempt(
+                    attempt_id,
+                    error_code=provider_error_code(exc),
+                    outcome_unknown=False,
+                )
+                return "failed"
+            except Exception:
+                self.queue.fail_attempt(
+                    attempt_id,
+                    error_code="PROVIDER_SUBSCRIPTION_UNVERIFIED",
+                    outcome_unknown=False,
+                )
+                return "failed"
+
         if not self.queue.mark_provider_request_started(attempt_id):
             secret_value = None
             return "blocked"
@@ -995,6 +1068,7 @@ class GenerationExecutor:
                 generated,
                 spec_sha256=spec_sha256,
                 recorded_cost_anlas=None,
+                zero_anlas_verification=zero_anlas_verification,
             )
         except Exception as exc:
             self.queue.fail_attempt(
@@ -1052,10 +1126,16 @@ def provider_error_code(exc: Exception) -> str:
         return "PROVIDER_FORBIDDEN"
     if isinstance(exc, NovelAIInsufficientBalanceError):
         return "PROVIDER_QUOTA"
+    if isinstance(exc, NovelAIOpusRequiredError):
+        return "PROVIDER_OPUS_REQUIRED"
     if isinstance(exc, NovelAIRateLimitError):
         return "PROVIDER_RATE_LIMITED"
     if isinstance(exc, NovelAIInvalidRequestError):
         return "PROVIDER_REJECTED"
+    if isinstance(exc, NovelAITemporaryError):
+        return "PROVIDER_SUBSCRIPTION_UNAVAILABLE"
+    if isinstance(exc, NovelAIResponseFormatError):
+        return "PROVIDER_SUBSCRIPTION_UNVERIFIED"
     if isinstance(exc, VaultLockedError):
         return "VAULT_LOCKED"
     if isinstance(exc, KeyError):

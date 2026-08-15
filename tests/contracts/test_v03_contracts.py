@@ -67,7 +67,7 @@ def test_provider_fixture_keeps_positive_negative_and_position_per_character() -
     spec = ProviderExecutionSpec.model_validate(load_fixture("provider-execution-spec.json"))
 
     assert spec.provider == "novelai"
-    assert spec.mapping_version.endswith("v03-structure-1")
+    assert spec.mapping_version.endswith("v03-opus-zero-anlas-1")
     assert [caption.order for caption in spec.character_captions] == [0, 1]
     assert all(caption.positive_tags for caption in spec.character_captions)
     assert all(caption.negative_tags for caption in spec.character_captions)

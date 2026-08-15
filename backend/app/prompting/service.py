@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -19,6 +20,7 @@ from ..modules.layout.public import (
     ApprovedChapterLayoutSnapshotV1,
     ApprovedFrameSnapshotV1,
     ApprovedPageLayoutSnapshotV1,
+    FrameSpec,
     LayoutFacade,
     LayoutPageRequirementV1,
 )
@@ -828,7 +830,11 @@ class PromptingService:
                     },
                 )
             page, approved_frame = layout_by_panel[panel_id]
-            frame = approved_frame.frame
+            frame = _bind_layout_character_slots(
+                approved_frame.frame,
+                character_names=panel.characters,
+                aliases=aliases,
+            )
             approved_tag_sets: list[ApprovedCharacterTagSet] = []
             structured_blocks: list[StructuredCharacterPromptDraft] = []
             compiled_blocks: list[PromptCharacterBlock] = []
@@ -932,7 +938,6 @@ class PromptingService:
             layout_snapshot_sha256=layout_snapshot.content_sha256,
             packages=compiled,
         )
-
     def _approved_layout_snapshot(
         self,
         project_id: str,
@@ -1621,6 +1626,68 @@ class PromptingService:
             """,
             (str(uuid7()), project_id, event_type, canonical_json(payload)),
         )
+
+
+_UUID_TEXT_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _layout_character_slot_id(value: str) -> UUID:
+    """Mirror the pre-bible character slot IDs created by the React layout editor."""
+
+    if _UUID_TEXT_PATTERN.fullmatch(value):
+        return UUID(value)
+    encoded = value.encode("utf-8").hex()
+    padded = (encoded + ("0" * 32))[:32]
+    return UUID(
+        f"{padded[:8]}-{padded[8:12]}-7{padded[13:16]}-"
+        f"8{padded[17:20]}-{padded[20:32]}"
+    )
+
+
+def _bind_layout_character_slots(
+    frame: FrameSpec,
+    *,
+    character_names: list[str],
+    aliases: dict[str, str],
+) -> FrameSpec:
+    """Bind approved pre-bible layout slots to approved Character Bible IDs.
+
+    Layouts can be approved before a Character Bible exists. In that flow the
+    editor stores a deterministic UUID-shaped slot for each storyboard name.
+    Prompt compilation uses the later approved Character Bible UUIDs, so only
+    those exact, verifiable slots are rebound; arbitrary mismatches still fail
+    closed in the prompt compiler.
+    """
+
+    expected_ids = [aliases[name.casefold()] for name in character_names]
+    position_ids = [str(position.character_id) for position in frame.character_positions]
+    if set(position_ids) == set(expected_ids):
+        return frame
+
+    slot_to_character: dict[str, str] = {}
+    for name, character_id in zip(character_names, expected_ids, strict=True):
+        slot_id = str(_layout_character_slot_id(name))
+        if slot_id in slot_to_character and slot_to_character[slot_id] != character_id:
+            return frame
+        slot_to_character[slot_id] = character_id
+    if set(position_ids) != set(slot_to_character):
+        return frame
+
+    return frame.model_copy(
+        update={
+            "character_positions": [
+                position.model_copy(
+                    update={
+                        "character_id": UUID(slot_to_character[str(position.character_id)])
+                    }
+                )
+                for position in frame.character_positions
+            ]
+        }
+    )
 
 
 def _tags_hash(tags: list[str]) -> str:

@@ -16,6 +16,7 @@ from ..ids import uuid7
 from ..modules.production.adapters.novelai import map_prompt_plan_to_novelai
 from ..modules.production.errors import ProviderMappingError
 from ..modules.prompting.public import PromptPackage, require_prompt_package_integrity
+from ..novelai.client import NovelAIConfigurationError, require_opus_zero_anlas_payload
 from ..novelai.contracts import CONTRACT_SHA256, MAPPING_VERSION, require_model_profile
 from ..prompting.service import PromptingService
 from ..shared_kernel import canonical_sha256
@@ -24,6 +25,8 @@ from .references import ReferencePreparationError, prepare_precise_reference
 DEFAULT_CANDIDATE_COUNT_PER_PANEL = 1
 QUALITY_RULE_VERSION = "quality-rules-v1"
 GENERATION_PARAMETER_VERSION = "novelai-v4-safe-defaults-1"
+OPUS_ZERO_ANLAS_COST_BASIS = "opus_zero_anlas_official_limits_v1"
+STANDARD_COST_BASIS = "user_confirmed_per_panel_ceiling"
 
 
 def _redacted_provider_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -205,6 +208,33 @@ class GenerationPlan:
             panel.cost_ceiling_anlas * panel.candidate_count for panel in self.panels
         )
 
+    @property
+    def estimated_verification_calls(self) -> int:
+        return (
+            self.panel_count * self.candidate_count_per_panel
+            if self.billing_mode == "opus_zero_anlas"
+            else 0
+        )
+
+    @property
+    def estimated_external_requests(self) -> int:
+        return (
+            self.panel_count * self.candidate_count_per_panel
+            + self.estimated_verification_calls
+        )
+
+    @property
+    def billing_mode(self) -> Literal["standard", "opus_zero_anlas"]:
+        return "opus_zero_anlas" if self.per_panel_cost_ceiling_anlas == 0 else "standard"
+
+    @property
+    def cost_basis(self) -> str:
+        return (
+            OPUS_ZERO_ANLAS_COST_BASIS
+            if self.billing_mode == "opus_zero_anlas"
+            else STANDARD_COST_BASIS
+        )
+
     def payload(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
@@ -230,12 +260,21 @@ class GenerationPlan:
             "page_count": self.page_count,
             "panel_count": self.panel_count,
             "estimated_calls": self.panel_count * self.candidate_count_per_panel,
+            "estimated_verification_calls": self.estimated_verification_calls,
+            "estimated_external_requests": self.estimated_external_requests,
             "per_panel_cost_ceiling_anlas": self.per_panel_cost_ceiling_anlas,
             "estimated_cost_upper_anlas": self.estimated_cost_upper_anlas,
-            "cost_basis": "user_confirmed_per_panel_ceiling",
+            "billing_mode": self.billing_mode,
+            "cost_basis": self.cost_basis,
             "cost_notice": (
-                "这是用户确认的每格保守预留上限，不是 NovelAI 账户实际扣费预测，"
-                "实际成本将在供应商可验证时单独记录。"
+                "已冻结为 Opus 零 Anlas 资格载荷: 单次 1 张、普通尺寸、28 步、无基础图或参考图; "
+                "本地 Anlas 预留为 0，每次出图前还会实时核验账户仍为有效 Opus。"
+                "资格核验不是账单回执。供应商未回传逐次扣费时，实际费用保持未核实。"
+                if self.billing_mode == "opus_zero_anlas"
+                else (
+                    "这是用户确认的每格保守预留上限，不是 NovelAI 账户实际扣费预测，"
+                    "实际成本将在供应商可验证时单独记录。"
+                )
             ),
             "plan_fingerprint": self.fingerprint,
             "panels": [panel.payload() for panel in self.panels],
@@ -327,6 +366,12 @@ class GenerationQueueService:
                 message="成本上限超出本地安全范围。",
                 status_code=422,
             )
+        if plan.billing_mode == "opus_zero_anlas" and max_cost_anlas != 0:
+            raise ApplicationError(
+                code="GENERATION_ZERO_ANLAS_LIMIT_INVALID",
+                message="Opus 零 Anlas 资格队列的本地成本预留必须保持为 0。",
+                status_code=422,
+            )
 
         job_id = str(uuid7())
         user_action_id = str(uuid7())
@@ -345,6 +390,8 @@ class GenerationQueueService:
             "contract_sha256": plan.contract_sha256,
             "candidate_count_per_panel": plan.candidate_count_per_panel,
             "quality_rule_version": plan.quality_rule_version,
+            "billing_mode": plan.billing_mode,
+            "cost_basis": plan.cost_basis,
             "max_calls": max_calls,
             "max_cost_anlas": max_cost_anlas,
             "panels": [panel.freeze_payload() for panel in plan.panels],
@@ -456,7 +503,7 @@ class GenerationQueueService:
                         max_calls,
                         max_cost_anlas,
                         plan.estimated_cost_upper_anlas,
-                        "user_confirmed_per_panel_ceiling",
+                        plan.cost_basis,
                         generation_approval_id,
                         approval_sha256,
                         plan.prompt_approval_hash,
@@ -648,6 +695,8 @@ class GenerationQueueService:
             "calls_started": int(row["calls_started"]),
             "items_claimed": int(row["items_claimed"]),
             "calls_completed": int(row["calls_completed"]),
+            "verification_calls_started": int(row["verification_calls_started"]),
+            "verification_calls_completed": int(row["verification_calls_completed"]),
             "recorded_cost_anlas": int(row["recorded_cost_anlas"]),
             "allocated_cost_anlas": int(row["allocated_cost_anlas"]),
             "unverified_cost_calls": int(row["unverified_cost_calls"]),
@@ -658,7 +707,22 @@ class GenerationQueueService:
             "paused_at": row["paused_at"],
             "completed_at": row["completed_at"],
             "items": [self._item_payload(item) for item in items],
-            "external_requests_started": int(row["calls_started"]),
+            "max_verification_calls": (
+                int(row["max_calls"])
+                if str(row["cost_basis"]) == OPUS_ZERO_ANLAS_COST_BASIS
+                else 0
+            ),
+            "max_external_requests": (
+                int(row["max_calls"]) * 2
+                if str(row["cost_basis"]) == OPUS_ZERO_ANLAS_COST_BASIS
+                else int(row["max_calls"])
+            ),
+            "external_requests_started": (
+                int(row["calls_started"]) + int(row["verification_calls_started"])
+            ),
+            "external_requests_completed": (
+                int(row["calls_completed"]) + int(row["verification_calls_completed"])
+            ),
         }
 
     def start_job(
@@ -822,9 +886,11 @@ class GenerationQueueService:
             row = connection.execute(
                 """
                 SELECT ga.status AS attempt_status, ga.provider_request_started,
+                       ga.verification_request_completed,
                        ga.item_id, gi.job_id, gi.cost_ceiling_anlas,
                        gj.project_id, gj.status AS job_status, gj.calls_started,
-                       gj.max_calls, gj.allocated_cost_anlas, gj.max_cost_anlas
+                       gj.max_calls, gj.allocated_cost_anlas, gj.max_cost_anlas,
+                       gj.cost_basis
                 FROM generation_attempts ga
                 JOIN generation_job_items gi ON gi.item_id = ga.item_id
                 JOIN generation_jobs gj ON gj.job_id = gi.job_id
@@ -843,6 +909,15 @@ class GenerationQueueService:
             if str(row["job_status"]) != "running":
                 self._stop_prepared_attempt_for_job_state(connection, row, attempt_id)
                 return False
+            if (
+                str(row["cost_basis"]) == OPUS_ZERO_ANLAS_COST_BASIS
+                and not bool(row["verification_request_completed"])
+            ):
+                raise ApplicationError(
+                    "GENERATION_VERIFICATION_REQUIRED",
+                    "Opus 零 Anlas 资格请求必须先完成本次订阅核验。",
+                    409,
+                )
             projected_cost = int(row["allocated_cost_anlas"]) + int(
                 row["cost_ceiling_anlas"]
             )
@@ -881,6 +956,118 @@ class GenerationQueueService:
                 {"job_id": str(row["job_id"]), "attempt_id": attempt_id},
             )
             return True
+
+    def mark_verification_request_started(self, attempt_id: str) -> bool:
+        """Reserve one bounded subscription request before any network I/O."""
+
+        with self.database.writer() as connection:
+            row = connection.execute(
+                """
+                SELECT ga.status AS attempt_status, ga.verification_request_started,
+                       ga.item_id, gi.job_id, gj.project_id, gj.user_action_id,
+                       gj.status AS job_status, gj.calls_started, gj.max_calls,
+                       gj.verification_calls_started
+                FROM generation_attempts ga
+                JOIN generation_job_items gi ON gi.item_id = ga.item_id
+                JOIN generation_jobs gj ON gj.job_id = gi.job_id
+                WHERE ga.attempt_id = ?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise ApplicationError(
+                    "GENERATION_ATTEMPT_NOT_FOUND", "没有找到该生成尝试。", 404
+                )
+            if str(row["attempt_status"]) != "running":
+                return False
+            if bool(row["verification_request_started"]):
+                return True
+            if str(row["job_status"]) != "running":
+                self._stop_prepared_attempt_for_job_state(connection, row, attempt_id)
+                return False
+            if (
+                int(row["calls_started"]) >= int(row["max_calls"])
+                or int(row["verification_calls_started"]) >= int(row["max_calls"])
+            ):
+                self._stop_prepared_attempt_for_limit(
+                    connection, row, attempt_id, "CALL_LIMIT_REACHED"
+                )
+                return False
+            connection.execute(
+                """
+                UPDATE generation_attempts
+                SET verification_request_started = 1
+                WHERE attempt_id = ?
+                """,
+                (attempt_id,),
+            )
+            connection.execute(
+                """
+                UPDATE generation_jobs
+                SET verification_calls_started = verification_calls_started + 1,
+                    revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+                """,
+                (str(row["job_id"]),),
+            )
+            self._audit(
+                connection,
+                str(row["project_id"]),
+                "generation.verification_request_started",
+                {
+                    "job_id": str(row["job_id"]),
+                    "attempt_id": attempt_id,
+                    "user_action_id": str(row["user_action_id"]),
+                    "request_kind": "novelai_subscription",
+                },
+            )
+            return True
+
+    def complete_verification_request(self, attempt_id: str) -> None:
+        """Record a structurally valid subscription response for the active attempt."""
+
+        with self.database.writer() as connection:
+            row = self._attempt_row(connection, attempt_id)
+            if str(row["attempt_status"]) != "running":
+                raise ApplicationError(
+                    "GENERATION_ATTEMPT_NOT_RUNNING", "该生成尝试已经结束。", 409
+                )
+            if not bool(row["verification_request_started"]):
+                raise ApplicationError(
+                    "GENERATION_VERIFICATION_NOT_STARTED",
+                    "订阅资格核验请求尚未开始。",
+                    409,
+                )
+            if bool(row["verification_request_completed"]):
+                return
+            connection.execute(
+                """
+                UPDATE generation_attempts
+                SET verification_request_completed = 1
+                WHERE attempt_id = ?
+                """,
+                (attempt_id,),
+            )
+            connection.execute(
+                """
+                UPDATE generation_jobs
+                SET verification_calls_completed = verification_calls_completed + 1,
+                    revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+                """,
+                (str(row["job_id"]),),
+            )
+            self._audit(
+                connection,
+                str(row["project_id"]),
+                "generation.verification_request_completed",
+                {
+                    "job_id": str(row["job_id"]),
+                    "attempt_id": attempt_id,
+                    "user_action_id": str(row["user_action_id"]),
+                    "request_kind": "novelai_subscription",
+                },
+            )
 
     def complete_attempt(
         self, attempt_id: str, *, recorded_cost_anlas: int | None
@@ -976,6 +1163,7 @@ class GenerationQueueService:
                     "GENERATION_ATTEMPT_NOT_RUNNING", "该生成尝试已经结束。", 409
                 )
             target = "needs_review" if outcome_unknown else "failed"
+            unverified = int(bool(row["provider_request_started"]))
             connection.execute(
                 """
                 UPDATE generation_attempts
@@ -995,10 +1183,12 @@ class GenerationQueueService:
             connection.execute(
                 """
                 UPDATE generation_jobs
-                SET status = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP
-                WHERE job_id = ? AND status != 'canceled'
+                SET status = CASE WHEN status = 'canceled' THEN status ELSE ? END,
+                    unverified_cost_calls = unverified_cost_calls + ?,
+                    revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
                 """,
-                (target, str(row["job_id"])),
+                (target, unverified, str(row["job_id"])),
             )
 
     def requeue_attempt(self, attempt_id: str, *, error_code: str) -> None:
@@ -1032,10 +1222,11 @@ class GenerationQueueService:
             connection.execute(
                 """
                 UPDATE generation_jobs
-                SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP
+                SET unverified_cost_calls = unverified_cost_calls + ?,
+                    revision = revision + 1, updated_at = CURRENT_TIMESTAMP
                 WHERE job_id = ?
                 """,
-                (str(row["job_id"]),),
+                (int(bool(row["provider_request_started"])), str(row["job_id"])),
             )
 
     def reconcile_startup(self) -> dict[str, int]:
@@ -1043,15 +1234,20 @@ class GenerationQueueService:
         with self.database.writer() as connection:
             in_flight = connection.execute(
                 """
-                SELECT ga.attempt_id, gi.item_id, gi.job_id
+                SELECT ga.attempt_id, ga.provider_request_started, gi.item_id, gi.job_id
                 FROM generation_attempts ga
                 JOIN generation_job_items gi ON gi.item_id = ga.item_id
                 WHERE ga.status = 'running'
                 """
             ).fetchall()
             affected_jobs: set[str] = set()
+            unverified_by_job: dict[str, int] = {}
             for row in in_flight:
-                affected_jobs.add(str(row["job_id"]))
+                job_id = str(row["job_id"])
+                affected_jobs.add(job_id)
+                unverified_by_job[job_id] = unverified_by_job.get(job_id, 0) + int(
+                    bool(row["provider_request_started"])
+                )
                 connection.execute(
                     """
                     UPDATE generation_attempts
@@ -1074,11 +1270,15 @@ class GenerationQueueService:
                 connection.execute(
                     """
                     UPDATE generation_jobs
-                    SET status = 'needs_review', revision = revision + 1,
+                    SET status = CASE
+                            WHEN status = 'canceled' THEN status ELSE 'needs_review'
+                        END,
+                        unverified_cost_calls = unverified_cost_calls + ?,
+                        revision = revision + 1,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE job_id = ? AND status != 'canceled'
+                    WHERE job_id = ?
                     """,
-                    (job_id,),
+                    (unverified_by_job[job_id], job_id),
                 )
             paused = connection.execute(
                 """
@@ -1361,6 +1561,23 @@ class GenerationQueueService:
                     )
                 except ProviderMappingError as exc:
                     raise ApplicationError(exc.code, exc.message, 409, exc.details) from exc
+                if per_panel_cost_ceiling_anlas == 0:
+                    try:
+                        require_opus_zero_anlas_payload(mapped.payload)
+                    except NovelAIConfigurationError as exc:
+                        raise ApplicationError(
+                            "NOVELAI_ZERO_ANLAS_INELIGIBLE",
+                            "当前已审批尺寸或参考图超出 Opus 零 Anlas 条件; 请改用 832x1216、"
+                            "1216x832 或 1024x1024，并移除所有基础图与参考图。",
+                            409,
+                            {
+                                "page_number": page.page_number,
+                                "panel_id": str(panel.panel_id),
+                                "selected_width": int(binding["selected_width"]),
+                                "selected_height": int(binding["selected_height"]),
+                                "has_reference": reference_payload is not None,
+                            },
+                        ) from exc
                 character_tag_set_refs = tuple(
                     {
                         "character_id": str(character.character_id),
@@ -1457,6 +1674,14 @@ class GenerationQueueService:
             "candidate_count_per_panel": DEFAULT_CANDIDATE_COUNT_PER_PANEL,
             "quality_rule_version": QUALITY_RULE_VERSION,
             "generation_parameter_version": GENERATION_PARAMETER_VERSION,
+            "billing_mode": (
+                "opus_zero_anlas" if per_panel_cost_ceiling_anlas == 0 else "standard"
+            ),
+            "cost_basis": (
+                OPUS_ZERO_ANLAS_COST_BASIS
+                if per_panel_cost_ceiling_anlas == 0
+                else STANDARD_COST_BASIS
+            ),
             "per_panel_cost_ceiling_anlas": per_panel_cost_ceiling_anlas,
             "panels": [panel.freeze_payload() for panel in panels],
         }
@@ -1625,7 +1850,9 @@ class GenerationQueueService:
         row = connection.execute(
             """
             SELECT ga.status AS attempt_status, ga.provider_request_started,
-                   ga.item_id, gi.job_id, gj.status AS job_status
+                   ga.verification_request_started, ga.verification_request_completed,
+                   ga.item_id, gi.job_id, gj.project_id, gj.user_action_id,
+                   gj.status AS job_status
             FROM generation_attempts ga
             JOIN generation_job_items gi ON gi.item_id = ga.item_id
             JOIN generation_jobs gj ON gj.job_id = gi.job_id

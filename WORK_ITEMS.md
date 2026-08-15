@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | v0.3 |
 | 日期 | 2026-08-13 |
-| 状态 | v0.2 工单已完成；v0.3 Wave 3 已完成，下一顺序工单为 MM-038 |
+| 状态 | v0.2 工单已完成；v0.3 Wave 3 与 MM-066 已完成，下一顺序工单为 MM-038 |
 | 拆票代码基线 | `main@40f2cb9`；当前 v0.3 `PRD.md` 与 `TECHNICAL_ARCHITECTURE.md` 为需求来源，不代表代码已交付 |
 | 产品范围 | 以 README、PRD、TECHNICAL_ARCHITECTURE 为准 |
 
@@ -29,7 +29,7 @@
 | 代码面 | v0.2 当前状态 | v0.3 差距 |
 |---|---|---|
 | 应用组装 | typed `AppContainer`、module installer 与 compatibility seam 已建立 | 旧 v0.2 service 仍需按后续工单收口 |
-| 数据库 | schema 30；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval 已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
+| 数据库 | schema 31；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval 与生成核验调用审计已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
 | 后端能力 | 公开模块契约、版式门禁、结构化多角色 mapper、审批冻结和发送前复验已实现 | 缺少候选/质检/接受、PageApproval 与正式导出门禁 |
 | 前端 | feature boundary、Layout Workbench 与 Prompt Inspector 已实现 | 缺少 Candidate Review、页面批准和真实导出预检状态 |
 | 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、真实双角色与授权章节证据仍未完成 |
@@ -117,6 +117,8 @@ uv run pytest -q tests/architecture tests/contracts tests/modules tests/workflow
 | 3 | MM-036 ProviderExecutionSpec 与 NovelAI 多角色映射 | P0 | Done | 2–3d | MM-035 |
 | 3 | MM-037 Prompt 审批与 Job 冻结 | P0 | Done | 1–2d | MM-033、MM-036 |
 | 3 | MM-057 Prompt Inspector 与脱敏载荷预览 | P0 | Done | 1–2d | MM-053、MM-035、MM-036 |
+| 3 | MM-066 Opus 零 Anlas 有界生成与 10 页回归 | P0 | Done | 1–2d | MM-037、MM-057 |
+| 6 | MM-067 整本重试历史调用与成本累计 | P1 | Done | 1–2d | MM-066、MM-102 |
 | 4 | MM-038 PanelCandidateSet 与生成结果接入 | P0 | Todo | 2–3d | MM-030、MM-037、MM-055 |
 | 4 | MM-039 QualityRun/Finding 框架与确定性规则 | P0 | Todo | 1–2d | MM-032、MM-038 |
 | 4 | MM-062 视觉质量检查清单与金标 fixture | P0 | Todo | 1–2d | MM-039 |
@@ -544,7 +546,7 @@ Mypy、TypeScript、production build 与 `git diff --check` 通过；未调用�
 - 不包含：真实双角色付费调用；归 MM-046。
 
 完成证据（2026-08-14）：`production` 模块提供严格 Pydantic V4 DTO 与版本化
-anti-corruption mapper，mapping 固定为 `novelai-image-2026-08-09.2-v03-structure-1`；
+anti-corruption mapper，mapping 固定为 `novelai-image-2026-08-09.3-v03-opus-zero-anlas-1`；
 单/双/三角色和交换顺序 fixture 逐字段验证 base、正负 captions、order、center、action
 及 canonical payload hash。角色缺失、空区块、数量/顺序错误、不支持模型或过期 mapping
 均在凭证读取前失败关闭；当前官方 Swagger 快照的 112,680 bytes 与 SHA-256 进入契约测试。
@@ -594,6 +596,29 @@ snapshot。payload 后端采用字段 allowlist，明确排除 Token、header、
 reference base64；界面展示 mapping/model/hash、影响对象、候选数/预计调用和“需生成预估”
 成本边界。前后端测试覆盖角色对齐、只读边界、编辑保留、脱敏、stale conflict 和审批门禁；
 预览外部请求数始终为 0。
+
+### MM-066 Opus 零 Anlas 有界生成与 10 页回归
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-037、MM-057。
+- 对应：FR-09～11/18、AC-05/06；技术架构 §2.4、§8.7、§9、§11。
+- 目标：默认使用官方 Opus 免费载荷，同时保留用户显式选择标准计费的能力，并让全部外部请求和未知成本可审计。
+- 交付：零 Anlas 请求 profile、逐图订阅核验、schema 31 验证调用计数、ZIP 响应安全解码、seed 来源标记、初次/整本计费模式选择和 10 页 Mock E2E。
+- 验收：
+  - 零模式固定单张、普通尺寸、28 steps、无基础图/参考图，并在出图前原子预留和执行 Opus 订阅核验；
+  - 用户把最大出图调用扩大时，界面动态展示同量订阅核验与两倍外部请求硬上限；标准模式仍需显式选择和成本确认；
+  - 资格核验不冒充账单：供应商未回传逐次扣费时 `unverified_cost_calls` 保留，整本视图同样提示未知成本；
+  - 10 页零模式断言 10 次出图、10 次订阅核验、20 次外部请求、0 Anlas 本地预留和 10 次未核实成本记录；
+  - revision 不接受 0 Anlas 上限；旧模型明确标记为仅标准计费；ZIP 未返回 seed 时 `response_seed=null`、`seed_source=request`。
+
+完成证据（2026-08-15）：新增 schema 31 迁移与 30→31 回归；队列在任何订阅网络请求前原子检查出图/核验上限，且零 Anlas 出图必须先完成同一 attempt 的订阅核验。所有已发出的图像请求（成功、失败、重试或启动恢复）在供应商未回传费用时均累计为未核实。NovelAI `200 application/octet-stream` 单 PNG ZIP 经条目、路径、大小、压缩比、PNG 与尺寸门禁后登记；JSON 兼容路径保留供应商 seed。前端默认零 Anlas 资格载荷但明确说明本地 0 预留不是账单保证；可显式选择标准计费，修改最终调用/成本上限会清除确认。完整 10 页 Mock 流程覆盖页面合成和四格式导出，不执行真实 NovelAI 付费请求。
+
+### MM-067 整本重试历史调用与成本累计
+
+- 优先级 / 状态 / 规模：`P1 / Done / 1–2d`；依赖 MM-066、MM-102。
+- 目标：整本计划重置章节任务后，仍按历史 Job 累计出图、订阅核验、外部请求和未核实/可验证成本。
+- 验收：章节与全部历史 Job 保持不可变关联；重试幂等键包含 retry 序号；整本摘要与导出审计不因清空当前 `generation_job_id` 丢失旧调用。
+
+完成证据（2026-08-15）：`book.chapter_job_created` 的不可变审计关联用于汇总同一章节的全部历史 Job；整本与章节摘要累计历史出图、订阅核验、外部请求、分配成本、已核实成本及未核实请求。章节重试使用独立幂等域，新 Job 只能获得章节生命周期剩余调用/成本额度；额度不足以重建完整有界任务时返回 `BOOK_CHAPTER_RETRY_BUDGET_EXHAUSTED`，不会取消当前任务或重置授权。回归覆盖一次失败重试后仅分配剩余额度、再次耗尽后拒绝重试以及历史未知成本不丢失。
 
 ## v0.3 P0 / V03-P0-03 候选、质检、接受与发布
 
@@ -1063,7 +1088,7 @@ MM-044，因此本工单保持 In Progress，不标记 Done。
 
 - 支持生成、参考图预处理、响应校验、原始 PNG 和 provenance sidecar。
 - 真实调用必须在 mock 全部通过且用户单独确认后执行。
-- 完成证据：已交付手工 allowlist 的 `POST /ai/generate-image` JSON 映射、固定 host/模型/契约、每格不可变 GenerationSpec 与 UUIDv7 correlation ID、最多一张经 EXIF 修正和黑边 padding 的 Precise Reference、严格 201/JSON/base64/PNG/尺寸/seed 校验，以及 `original.png` + provenance + AssetVersion 原子登记。发送前读取加密凭证并消耗冻结上限；明确连接失败/5xx 最多重试两次，发送后结果不明立即转人工审阅且不重放。界面要求在启动 Job 后再次勾选确认才调度，并轮询进度、预览本地素材；75 项后端测试、11 项前端测试、ruff、mypy 和生产构建通过。真实 NovelAI 付费请求为 0，尚未执行用户批准的低成本 smoke。
+- 完成证据：已交付手工 allowlist 的 `POST /ai/generate-image` JSON 映射、固定 host/模型/契约、每格不可变 GenerationSpec、供应商要求的 6 位字母数字 correlation ID 与本地 UUIDv7 attempt ID、最多一张经 EXIF 修正和黑边 padding 的 Precise Reference、严格 200/201、JSON/base64 或安全 ZIP、PNG/尺寸/seed 来源校验，以及 `original.png` + provenance + AssetVersion 原子登记。ZIP 不提供供应商 seed 时只记录请求 seed 为 effective seed，不伪装成响应值。发送前读取加密凭证并消耗冻结上限；明确连接失败/5xx 最多重试两次，发送后结果不明立即转人工审阅且不重放。界面要求在启动 Job 后再次勾选确认才调度，并轮询进度、预览本地素材；75 项后端测试、11 项前端测试、ruff、mypy 和生产构建通过。真实 NovelAI 付费请求为 0，尚未执行用户批准的低成本 smoke。
 
 ### MM-014 页面编辑与确定性合成
 

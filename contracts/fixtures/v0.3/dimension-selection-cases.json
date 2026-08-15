@@ -3,10 +3,10 @@
   "cases": [
     {
       "name": "landscape",
-      "target_pixels": 1572864,
+      "target_pixels": 1048576,
       "max_crop_safe_risk": 0,
       "expected_status": "selected",
-      "expected_candidate_key": "landscape-1536x1024",
+      "expected_candidate_key": "landscape-1216x832",
       "frame": {
         "frame_id": "01900000-0000-7000-8000-000000001001",
         "parent_frame_id": "01900000-0000-7000-8000-000000001000",
@@ -23,10 +23,10 @@
     },
     {
       "name": "portrait",
-      "target_pixels": 1572864,
+      "target_pixels": 1048576,
       "max_crop_safe_risk": 0,
       "expected_status": "selected",
-      "expected_candidate_key": "portrait-1024x1536",
+      "expected_candidate_key": "portrait-832x1216",
       "frame": {
         "frame_id": "01900000-0000-7000-8000-000000001002",
         "parent_frame_id": "01900000-0000-7000-8000-000000001000",
@@ -63,7 +63,7 @@
     },
     {
       "name": "crop_safe_unsatisfied",
-      "target_pixels": 1572864,
+      "target_pixels": 1048576,
       "max_crop_safe_risk": 0,
       "expected_status": "unsatisfied",
       "expected_candidate_key": null,

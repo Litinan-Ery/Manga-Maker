@@ -10,7 +10,7 @@ from ....prompting.public import PromptPlan, prompt_plan_sha256
 from ...contracts import ProviderCharacterCaption, ProviderExecutionSpec
 from ...errors import ProviderMappingError
 
-NOVELAI_V4_MAPPING_VERSION = "novelai-image-2026-08-09.2-v03-structure-1"
+NOVELAI_V4_MAPPING_VERSION = "novelai-image-2026-08-09.3-v03-opus-zero-anlas-1"
 SUPPORTED_V4_MODEL_PREFIX = "nai-diffusion-4"
 MAX_V03_CHARACTERS = 3
 

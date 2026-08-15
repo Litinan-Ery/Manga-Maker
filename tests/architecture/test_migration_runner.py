@@ -154,8 +154,35 @@ def test_schema29_database_rebuilds_prompt_idempotency_index_at_schema30(
             str(row[2])
             for row in connection.execute("PRAGMA index_info(prompt_approval_idempotency)")
         ]
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 30
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 31
     assert after == ["prompt_bundle_version_id", "idempotency_key"]
+
+
+def test_schema30_database_adds_generation_verification_call_audit_at_schema31(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "schema30.db"
+    schema30 = MigrationRegistry(DATABASE_MIGRATION_REGISTRY.migrations[:30])
+    with sqlite3.connect(target) as connection:
+        ModuleMigrationRunner(schema30).migrate(connection)
+        job_columns_before = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(generation_jobs)")
+        }
+    assert "verification_calls_started" not in job_columns_before
+
+    Database(target).migrate()
+
+    assert target.with_name("schema30.db.pre-migration-v30.bak").is_file()
+    with sqlite3.connect(target) as connection:
+        job_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(generation_jobs)")
+        }
+        attempt_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(generation_attempts)")
+        }
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 31
+    assert {"verification_calls_started", "verification_calls_completed"} <= job_columns
+    assert {"verification_request_started", "verification_request_completed"} <= attempt_columns
 
 
 def test_legacy_project_remains_readable_but_generation_requires_migration(
