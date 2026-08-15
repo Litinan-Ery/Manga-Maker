@@ -170,7 +170,7 @@ class AssetStore:
         document: GenerationSpecDocument,
         spec_sha256: str,
     ) -> None:
-        if document.schema_version not in {"1.3", "1.4"}:
+        if document.schema_version not in {"1.3", "1.4", "1.5"}:
             return
         assert document.prompt_bundle_version_id is not None
         assert document.prompt_package_id is not None
@@ -263,6 +263,7 @@ class AssetStore:
         *,
         spec_sha256: str,
         recorded_cost_anlas: int | None,
+        zero_anlas_verification: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         context = self._asset_context(document)
         workspace = Path(str(context["workspace_path"])).resolve()
@@ -326,13 +327,22 @@ class AssetStore:
             "sampler": document.sampler,
             "noise_schedule": document.noise_schedule,
             "requested_seed": document.seed,
-            "response_seed": generated.seed,
+            "response_seed": (
+                generated.seed if generated.seed_source == "provider_response" else None
+            ),
+            "effective_seed": generated.seed,
+            "seed_source": generated.seed_source,
             "references": [item.model_dump(mode="json") for item in document.references],
             "image_sha256": image_sha256,
             "recorded_cost_anlas": recorded_cost_anlas,
             "cost_record_status": (
-                "provider_verified" if recorded_cost_anlas is not None else "not_reported"
+                "opus_zero_anlas_eligibility_verified"
+                if zero_anlas_verification is not None
+                else "provider_verified"
+                if recorded_cost_anlas is not None
+                else "not_reported"
             ),
+            "zero_anlas_verification": zero_anlas_verification,
             "credential_included": False,
         }
         try:

@@ -7,6 +7,7 @@ import {
   type StoryBeatSet,
   type StoryboardDocument,
   type StoryboardVersion,
+  type TextModelConfiguration,
   type VaultStatus,
   clearLocalSession,
   consumeLocalSession,
@@ -125,24 +126,7 @@ it("generates, revises and approves a structured storyboard through user actions
     const path = String(input);
     const method = init?.method ?? "GET";
     if (path.endsWith("/adaptation/text-model") && method === "GET") {
-      return Promise.resolve(
-        jsonResponse({
-          project_id: "project-1",
-          text_model_profile_id: "project-1",
-          provider: "openai-compatible",
-          provider_api_url: "https://models.example.test/v1",
-          base_url: "https://models.example.test/v1",
-          endpoint_host: "models.example.test",
-          model: "unit-model",
-          model_name: "unit-model",
-          credential_profile_id: "text-model",
-          credential_fingerprint: "…alue",
-          credential_status: "available",
-          timeout_seconds: 60,
-          temperature: 0.2,
-          revision: 1,
-        }),
-      );
+      return Promise.resolve(jsonResponse(textModelConfiguration()));
     }
     if (path.endsWith("/story-beats") && method === "GET") {
       return Promise.resolve(jsonResponse(beatSet));
@@ -208,7 +192,7 @@ it("generates, revises and approves a structured storyboard through user actions
   expect(headers.get("X-CSRF-Token")).toBe("csrf-test");
 });
 
-it("saves the text model as API URL, model name, and local key", async () => {
+it("saves the four-field text model configuration with a local Key/Password", async () => {
   window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
   consumeLocalSession();
   vi.stubGlobal(
@@ -221,22 +205,12 @@ it("saves the text model as API URL, model name, and local key", async () => {
       }
       if (path.endsWith("/adaptation/text-model") && method === "PUT") {
         return Promise.resolve(
-          jsonResponse({
-            project_id: "project-1",
-            text_model_profile_id: "project-1",
-            provider: "openai-compatible",
-            provider_api_url: "https://models.example.test/v1",
-            base_url: "https://models.example.test/v1",
-            endpoint_host: "models.example.test",
-            model_name: "unit-model",
-            model: "unit-model",
-            credential_profile_id: "text-model-project-1",
-            credential_fingerprint: "…alue",
-            credential_status: "available",
-            timeout_seconds: 60,
-            temperature: 0.2,
-            revision: 1,
-          }),
+          jsonResponse(
+            textModelConfiguration({
+              remark_name: "主力分镜模型",
+              credential_profile_id: "text-model-project-1",
+            }),
+          ),
         );
       }
       if (path.endsWith("/story-beats") && method === "GET") {
@@ -259,23 +233,92 @@ it("saves the text model as API URL, model name, and local key", async () => {
     />,
   );
 
-  const apiUrl = await screen.findByLabelText("服务商 API 链接");
-  const modelName = screen.getByLabelText("模型名称");
-  const secret = screen.getByLabelText("密钥");
-  fireEvent.change(apiUrl, { target: { value: "https://models.example.test/v1" } });
-  fireEvent.change(modelName, { target: { value: "unit-model" } });
+  const remarkName = await screen.findByLabelText("备注名称（可选）");
+  const url = screen.getByLabelText("URL");
+  const secret = screen.getByLabelText("Key/Password");
+  const requestModel = screen.getByLabelText("Request Model");
+  fireEvent.change(remarkName, { target: { value: "主力分镜模型" } });
+  fireEvent.change(url, { target: { value: "https://models.example.test/v1" } });
   fireEvent.change(secret, { target: { value: "unit-secret-value" } });
+  fireEvent.change(requestModel, { target: { value: "unit-model" } });
   fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
 
-  await screen.findByText(/当前：models.example.test/);
+  await screen.findByText(/主力分镜模型/);
   const put = vi.mocked(fetch).mock.calls.find(
     ([path, init]) =>
       String(path).endsWith("/adaptation/text-model") && init?.method === "PUT",
   );
   expect(JSON.parse(String(put?.[1]?.body))).toEqual({
-    provider_api_url: "https://models.example.test/v1",
-    model_name: "unit-model",
-    api_key: "unit-secret-value",
+    remark_name: "主力分镜模型",
+    url: "https://models.example.test/v1",
+    key_password: "unit-secret-value",
+    request_model: "unit-model",
+  });
+});
+
+it("updates text model metadata without resending the saved Key/Password", async () => {
+  window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
+  consumeLocalSession();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/adaptation/text-model") && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(textModelConfiguration({ remark_name: "主力分镜模型" })),
+        );
+      }
+      if (path.endsWith("/adaptation/text-model") && method === "PUT") {
+        return Promise.resolve(
+          jsonResponse(
+            textModelConfiguration({
+              remark_name: "备用分镜模型",
+              request_model: "updated-model",
+              model_name: "updated-model",
+              model: "updated-model",
+              revision: 2,
+            }),
+          ),
+        );
+      }
+      if (path.endsWith("/story-beats") && method === "GET") {
+        return Promise.resolve(jsonResponse(beatSet));
+      }
+      if (path.includes("/storyboards/current?") && method === "GET") {
+        return Promise.resolve(jsonResponse({ error: { message: "尚无分镜" } }, 404));
+      }
+      return Promise.reject(new Error(`unexpected request: ${method} ${path}`));
+    }),
+  );
+
+  render(
+    <StoryboardWorkbench
+      projectId="project-1"
+      chapterSet={chapterSet}
+      vaultStatus={vaultStatus}
+      onError={vi.fn()}
+      refreshKey={0}
+    />,
+  );
+
+  const remarkName = await screen.findByDisplayValue("主力分镜模型");
+  fireEvent.change(remarkName, { target: { value: "备用分镜模型" } });
+  fireEvent.change(screen.getByLabelText("Request Model"), {
+    target: { value: "updated-model" },
+  });
+  expect(screen.getByLabelText("Key/Password")).toHaveValue("");
+  fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
+
+  await screen.findByText(/备用分镜模型/);
+  const put = vi.mocked(fetch).mock.calls.find(
+    ([path, init]) =>
+      String(path).endsWith("/adaptation/text-model") && init?.method === "PUT",
+  );
+  expect(JSON.parse(String(put?.[1]?.body))).toEqual({
+    remark_name: "备用分镜模型",
+    url: "https://models.example.test/v1",
+    request_model: "updated-model",
   });
 });
 
@@ -301,6 +344,31 @@ function storyboardVersion(
     unresolved_count: 0,
     is_current: true,
     created_at: "2026-08-09T00:00:00Z",
+  };
+}
+
+function textModelConfiguration(
+  overrides: Partial<TextModelConfiguration> = {},
+): TextModelConfiguration {
+  return {
+    project_id: "project-1",
+    text_model_profile_id: "project-1",
+    provider: "openai-compatible",
+    remark_name: null,
+    url: "https://models.example.test/v1",
+    provider_api_url: "https://models.example.test/v1",
+    base_url: "https://models.example.test/v1",
+    endpoint_host: "models.example.test",
+    request_model: "unit-model",
+    model_name: "unit-model",
+    model: "unit-model",
+    credential_profile_id: "text-model",
+    credential_fingerprint: "…alue",
+    credential_status: "available",
+    timeout_seconds: 60,
+    temperature: 0.2,
+    revision: 1,
+    ...overrides,
   };
 }
 

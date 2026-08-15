@@ -15,6 +15,7 @@ from .client import (
     NovelAIConfigurationError,
     NovelAIInsufficientBalanceError,
     NovelAIInvalidRequestError,
+    NovelAIOpusRequiredError,
     NovelAIPermissionError,
     NovelAIProvider,
     NovelAIRateLimitError,
@@ -189,6 +190,7 @@ class NovelAIService:
         provider = self.provider_factory(configuration, self.vault.get_secret)
         try:
             result = await provider.validate_connection()
+            subscription = await provider.get_subscription()
         except Exception as exc:
             mapped = self._provider_error(exc)
             self._record_connection_result(
@@ -199,11 +201,18 @@ class NovelAIService:
             )
             raise mapped from exc
 
+        model_supports_zero_anlas = require_model_profile(
+            str(row["provider_model_id"])
+        ).supports_opus_zero_anlas
+        zero_anlas_ready = subscription.opus_active and model_supports_zero_anlas
         self._record_connection_result(
             project_id,
             config_revision=int(row["revision"]),
             result="ok",
             suggestion_count=result.suggestion_count,
+            subscription_active=subscription.active,
+            subscription_tier=subscription.tier,
+            zero_anlas_ready=zero_anlas_ready,
         )
         refreshed = self.get_configuration(project_id)
         return {
@@ -212,6 +221,9 @@ class NovelAIService:
             "provider_model_id": result.provider_model_id,
             "config_revision": int(row["revision"]),
             "suggestion_count": result.suggestion_count,
+            "subscription": subscription.zero_anlas_verification(),
+            "model_supports_zero_anlas": model_supports_zero_anlas,
+            "zero_anlas_ready": zero_anlas_ready,
             "generated_images": 0,
             "last_connection_at": refreshed["last_connection_at"],
         }
@@ -223,6 +235,9 @@ class NovelAIService:
         config_revision: int,
         result: str,
         suggestion_count: int | None = None,
+        subscription_active: bool | None = None,
+        subscription_tier: int | None = None,
+        zero_anlas_ready: bool | None = None,
         error_code: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {
@@ -232,6 +247,12 @@ class NovelAIService:
         }
         if suggestion_count is not None:
             payload["suggestion_count"] = suggestion_count
+        if subscription_active is not None:
+            payload["subscription_active"] = subscription_active
+        if subscription_tier is not None:
+            payload["subscription_tier"] = subscription_tier
+        if zero_anlas_ready is not None:
+            payload["zero_anlas_ready"] = zero_anlas_ready
         if error_code is not None:
             payload["error_code"] = error_code
         with self.database.writer() as connection:
@@ -307,6 +328,10 @@ class NovelAIService:
         if isinstance(exc, NovelAIInsufficientBalanceError):
             return ApplicationError(
                 "NOVELAI_INSUFFICIENT_BALANCE", "NovelAI 余额或订阅权限不足。", 402
+            )
+        if isinstance(exc, NovelAIOpusRequiredError):
+            return ApplicationError(
+                "NOVELAI_OPUS_REQUIRED", "零 Anlas 生成需要有效的 NovelAI Opus 订阅。", 409
             )
         if isinstance(exc, NovelAIRateLimitError):
             return ApplicationError("NOVELAI_RATE_LIMITED", "NovelAI 当前请求过多。", 429)

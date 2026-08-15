@@ -8,12 +8,28 @@ IMAGE_API_BASE_URL = "https://image.novelai.net"
 SWAGGER_DOCUMENT_URL = f"{IMAGE_API_BASE_URL}/docs/doc.json"
 CONTRACT_SHA256 = "f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8"
 CONTRACT_FETCHED_ON = "2026-08-09"
-MAPPING_VERSION = "novelai-image-2026-08-09.2-v03-structure-1"
+MAPPING_VERSION = "novelai-image-2026-08-09.3-v03-opus-zero-anlas-1"
 CONNECTION_TEST_PATH = "/ai/generate-image/suggest-tags"
 GENERATION_PATH = "/ai/generate-image"
+SUBSCRIPTION_PATH = "/user/subscription"
 UPSCALE_PATH = "/ai/upscale"
 AUGMENT_PATH = "/ai/augment-image"
 ENCODE_VIBE_PATH = "/ai/encode-vibe"
+
+# NovelAI documents the Opus no-Anlas allowance as one image at a time, up to
+# 1024x1024 pixels, at 28 steps or fewer, without another image as a base.  The
+# portrait/landscape sizes below are NovelAI's documented normal base
+# resolution and stay below the one-megapixel ceiling.
+OPUS_TIER = 3
+OPUS_ZERO_ANLAS_PROFILE_VERSION = "novelai-opus-zero-anlas-2026-08-14.1"
+OPUS_ZERO_ANLAS_MAX_PIXELS = 1024 * 1024
+OPUS_ZERO_ANLAS_MAX_STEPS = 28
+OPUS_ZERO_ANLAS_SAMPLE_COUNT = 1
+OPUS_ZERO_ANLAS_DIMENSIONS: tuple[tuple[int, int], ...] = (
+    (832, 1216),
+    (1216, 832),
+    (1024, 1024),
+)
 
 
 class NovelAIModel(StrEnum):
@@ -37,9 +53,14 @@ class ModelCapability:
     precise_reference_excludes_vibe_transfer: bool
     prompt_token_note: str
 
+    @property
+    def supports_opus_zero_anlas(self) -> bool:
+        return str(self.model).startswith("nai-diffusion-4-5-")
+
     def to_payload(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["provider_model_id"] = payload.pop("model")
+        payload["supports_opus_zero_anlas"] = self.supports_opus_zero_anlas
         return payload
 
 
@@ -142,9 +163,28 @@ def contract_payload() -> dict[str, Any]:
         "allowed_paths": {
             "connection_test": CONNECTION_TEST_PATH,
             "generation": GENERATION_PATH,
+            "subscription": SUBSCRIPTION_PATH,
             "upscale": UPSCALE_PATH,
             "augment": AUGMENT_PATH,
             "encode_vibe": ENCODE_VIBE_PATH,
+        },
+        "opus_zero_anlas_profile": {
+            "profile_version": OPUS_ZERO_ANLAS_PROFILE_VERSION,
+            "required_tier": OPUS_TIER,
+            "max_pixels": OPUS_ZERO_ANLAS_MAX_PIXELS,
+            "max_steps": OPUS_ZERO_ANLAS_MAX_STEPS,
+            "n_samples": OPUS_ZERO_ANLAS_SAMPLE_COUNT,
+            "requires_single_image": True,
+            "allows_base_or_reference_image": False,
+            "default_dimensions": [
+                {"width": width, "height": height}
+                for width, height in OPUS_ZERO_ANLAS_DIMENSIONS
+            ],
+            "official_docs": [
+                "https://docs.novelai.net/en/subscription/",
+                "https://docs.novelai.net/en/image/stepsguidance/",
+                "https://docs.novelai.net/en/image/",
+            ],
         },
         "models": [profile.to_payload() for profile in MODEL_PROFILES],
     }

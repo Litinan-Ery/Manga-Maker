@@ -232,7 +232,7 @@ export function RevisionWorkbench({
         <NumberInput
           label="每格保守预留（Anlas）"
           value={costCeiling}
-          min={0}
+          min={1}
           max={100000}
           onChange={setCostCeiling}
         />

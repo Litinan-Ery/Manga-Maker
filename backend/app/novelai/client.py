@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import re
 import secrets
+import stat
 import warnings
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import PurePosixPath
 from typing import Any, Literal, Protocol
+from zipfile import BadZipFile, ZipFile
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -23,13 +27,21 @@ from .contracts import (
     CONNECTION_TEST_PATH,
     GENERATION_PATH,
     IMAGE_API_BASE_URL,
+    OPUS_TIER,
+    OPUS_ZERO_ANLAS_DIMENSIONS,
+    OPUS_ZERO_ANLAS_MAX_STEPS,
+    OPUS_ZERO_ANLAS_PROFILE_VERSION,
+    SUBSCRIPTION_PATH,
     require_inpaint_model_profile,
     require_model_profile,
 )
 
 MAX_GENERATED_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_GENERATED_ARCHIVE_BYTES = MAX_GENERATED_IMAGE_BYTES + (1024 * 1024)
 MAX_GENERATED_PIXELS = 4_000_000
+MAX_GENERATED_ZIP_RATIO = 100
 NOVELAI_CORRELATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9]{6}$")
+logger = logging.getLogger(__name__)
 
 
 def novelai_correlation_id() -> str:
@@ -55,6 +67,10 @@ class NovelAIPermissionError(NovelAIError):
 
 
 class NovelAIInsufficientBalanceError(NovelAIError):
+    pass
+
+
+class NovelAIOpusRequiredError(NovelAIError):
     pass
 
 
@@ -105,6 +121,7 @@ class NovelAIImageRequest:
     seed: int
     sampler: str = "k_euler_ancestral"
     noise_schedule: str = "karras"
+    billing_mode: Literal["standard", "opus_zero_anlas"] = "standard"
     precise_reference: PreciseReferenceInput | None = None
     action: Literal["generate", "infill"] = "generate"
     source_image_base64: str | None = None
@@ -173,12 +190,15 @@ class NovelAIImageRequest:
             raise NovelAIConfigurationError("sampler is outside the local allowlist")
         if self.noise_schedule not in {"karras", "exponential", "polyexponential"}:
             raise NovelAIConfigurationError("noise schedule is outside the local allowlist")
+        if self.billing_mode == "opus_zero_anlas":
+            require_opus_zero_anlas_request(self)
 
 
 @dataclass(frozen=True, slots=True)
 class NovelAIGeneratedImage:
     png_bytes: bytes
     seed: int
+    seed_source: Literal["provider_response", "request"]
     index: int
     width: int
     height: int
@@ -211,8 +231,31 @@ class NovelAIConnectionResult:
     suggestion_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class NovelAISubscriptionResult:
+    active: bool
+    tier: int
+    expires_at: int | None
+    is_grace_period: bool
+
+    @property
+    def opus_active(self) -> bool:
+        return self.active and self.tier == OPUS_TIER
+
+    def zero_anlas_verification(self) -> dict[str, Any]:
+        return {
+            "profile_version": OPUS_ZERO_ANLAS_PROFILE_VERSION,
+            "subscription_active": self.active,
+            "subscription_tier": self.tier,
+            "is_grace_period": self.is_grace_period,
+            "opus_active": self.opus_active,
+        }
+
+
 class NovelAIProvider(Protocol):
     async def validate_connection(self) -> NovelAIConnectionResult: ...
+
+    async def get_subscription(self) -> NovelAISubscriptionResult: ...
 
     async def generate_image(self, request: NovelAIImageRequest) -> NovelAIGeneratedImage: ...
 
@@ -263,6 +306,28 @@ class NovelAIClient:
             suggestion_count=suggestion_count,
         )
 
+    async def get_subscription(self) -> NovelAISubscriptionResult:
+        secret = self.secret_reader(self.configuration.credential_profile_id)
+        try:
+            async with httpx.AsyncClient(
+                base_url=IMAGE_API_BASE_URL,
+                transport=self.transport,
+                timeout=self.configuration.timeout_seconds,
+                follow_redirects=False,
+            ) as client:
+                response = await client.get(
+                    SUBSCRIPTION_PATH,
+                    headers={
+                        "Authorization": f"Bearer {secret}",
+                        "Accept": "application/json",
+                        "User-Agent": "MangaMaker/0.1 local-app",
+                    },
+                )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise NovelAITemporaryError("NovelAI subscription endpoint is unreachable") from exc
+        raise_for_provider_status(response)
+        return validate_subscription_response(response)
+
     async def generate_image(self, request: NovelAIImageRequest) -> NovelAIGeneratedImage:
         if request.provider_model_id != self.configuration.provider_model_id:
             raise NovelAIConfigurationError("request model does not match pinned configuration")
@@ -279,7 +344,7 @@ class NovelAIClient:
                     GENERATION_PATH,
                     headers={
                         "Authorization": f"Bearer {secret}",
-                        "Accept": "application/json",
+                        "Accept": "application/zip",
                         "Content-Type": "application/json",
                         "User-Agent": "MangaMaker/0.1 local-app",
                         "X-Correlation-ID": request.correlation_id,
@@ -287,17 +352,43 @@ class NovelAIClient:
                     json=payload,
                 )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            logger.warning(
+                "NovelAI image request failed before send: correlation_id=%s error_type=%s",
+                request.correlation_id,
+                type(exc).__name__,
+            )
             raise NovelAITemporaryError(
                 "NovelAI image endpoint could not be reached before sending"
             ) from exc
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            logger.warning(
+                "NovelAI image request transport outcome is unknown: "
+                "correlation_id=%s error_type=%s",
+                request.correlation_id,
+                type(exc).__name__,
+            )
             raise NovelAIUnknownOutcomeError(
                 "NovelAI image request outcome is unknown; automatic replay is disabled"
             ) from exc
         raise_for_provider_status(response)
-        if response.status_code != 201:
-            raise NovelAIResponseFormatError("NovelAI returned an unexpected success status")
-        return validate_image_generation_response(response, request)
+        try:
+            if response.status_code not in {200, 201}:
+                raise NovelAIResponseFormatError(
+                    "NovelAI returned an unexpected success status"
+                )
+            return validate_image_generation_response(response, request)
+        except NovelAIResponseFormatError as exc:
+            logger.warning(
+                "NovelAI image response validation failed: correlation_id=%s status=%s "
+                "content_type=%r content_length=%s content_magic=%s reason=%s",
+                request.correlation_id,
+                response.status_code,
+                response.headers.get("content-type", ""),
+                len(response.content),
+                response.content[:8].hex(),
+                str(exc),
+            )
+            raise
 
 
 def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
@@ -390,12 +481,95 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
     }
 
 
+def require_opus_zero_anlas_request(request: NovelAIImageRequest) -> None:
+    """Fail closed unless the exact outbound request fits NovelAI's Opus allowance."""
+
+    payload = image_request_payload(request)
+    require_opus_zero_anlas_payload(payload)
+    if (
+        request.precise_reference is not None
+        or request.source_image_base64 is not None
+        or request.mask_base64 is not None
+        or request.inpaint_strength is not None
+    ):
+        raise NovelAIConfigurationError(
+            "request is outside the pinned NovelAI Opus zero-Anlas profile"
+        )
+
+
+def require_opus_zero_anlas_payload(
+    payload: NovelAIV4Payload | dict[str, Any],
+) -> None:
+    """Validate a mapped or serialized provider payload against the pinned free profile."""
+
+    serialized = (
+        payload.model_dump(mode="json", exclude_none=True)
+        if isinstance(payload, NovelAIV4Payload)
+        else payload
+    )
+    try:
+        action = str(serialized["action"])
+        model = str(serialized["model"])
+        parameters = serialized["parameters"]
+        assert isinstance(parameters, dict)
+        width = int(parameters["width"])
+        height = int(parameters["height"])
+        steps = int(parameters["steps"])
+        n_samples = int(parameters["n_samples"])
+    except (AssertionError, KeyError, TypeError, ValueError) as exc:
+        raise NovelAIConfigurationError(
+            "zero-Anlas request is missing frozen eligibility fields"
+        ) from exc
+
+    image_inputs = (
+        "image",
+        "mask",
+        "img2img",
+        "director_reference_images",
+        "director_reference_descriptions",
+        "director_reference_strength_values",
+        "director_reference_secondary_strength_values",
+        "director_reference_information_extracted",
+    )
+    eligible = (
+        action == "generate"
+        and model.startswith("nai-diffusion-4-5-")
+        and (width, height) in OPUS_ZERO_ANLAS_DIMENSIONS
+        and steps <= OPUS_ZERO_ANLAS_MAX_STEPS
+        and n_samples == 1
+        and all(parameters.get(field) is None for field in image_inputs)
+    )
+    if not eligible:
+        raise NovelAIConfigurationError(
+            "request is outside the pinned NovelAI Opus zero-Anlas profile"
+        )
+
+
+def require_active_opus(subscription: NovelAISubscriptionResult) -> None:
+    if not subscription.opus_active:
+        raise NovelAIOpusRequiredError(
+            "an active NovelAI Opus subscription is required for zero-Anlas generation"
+        )
+
+
 def validate_image_generation_response(
     response: httpx.Response, request: NovelAIImageRequest
 ) -> NovelAIGeneratedImage:
     content_type = response.headers.get("content-type", "").lower()
-    if "json" not in content_type:
-        raise NovelAIResponseFormatError("NovelAI returned a non-JSON image response")
+    media_type = content_type.split(";", 1)[0].strip()
+    if "json" in content_type:
+        return validate_json_image_generation_response(response, request)
+    if "zip" in content_type or (
+        media_type in {"", "application/octet-stream", "binary/octet-stream", "application/binary"}
+        and response.content.startswith(b"PK")
+    ):
+        return validate_zip_image_generation_response(response, request)
+    raise NovelAIResponseFormatError("NovelAI returned an unsupported image response")
+
+
+def validate_json_image_generation_response(
+    response: httpx.Response, request: NovelAIImageRequest
+) -> NovelAIGeneratedImage:
     try:
         payload: Any = response.json()
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -412,6 +586,83 @@ def validate_image_generation_response(
         raw = base64.b64decode(item["image"], validate=True)
     except (binascii.Error, ValueError) as exc:
         raise NovelAIResponseFormatError("NovelAI image base64 is invalid") from exc
+    width, height = validate_generated_png(raw, request)
+    seed = item.get("seed")
+    index = item.get("index")
+    if not isinstance(seed, int) or not 0 <= seed <= 4_294_967_295:
+        raise NovelAIResponseFormatError("NovelAI response seed is invalid")
+    if index != 0:
+        raise NovelAIResponseFormatError("NovelAI response index is invalid")
+    return NovelAIGeneratedImage(
+        png_bytes=raw,
+        seed=seed,
+        seed_source="provider_response",
+        index=index,
+        width=width,
+        height=height,
+    )
+
+
+def validate_zip_image_generation_response(
+    response: httpx.Response, request: NovelAIImageRequest
+) -> NovelAIGeneratedImage:
+    raw_archive = response.content
+    if (
+        not raw_archive
+        or len(raw_archive) > MAX_GENERATED_ARCHIVE_BYTES
+        or not raw_archive.startswith(b"PK")
+    ):
+        raise NovelAIResponseFormatError("NovelAI ZIP is empty, oversized, or invalid")
+    try:
+        with ZipFile(BytesIO(raw_archive)) as archive:
+            entries = archive.infolist()
+            if len(entries) != 1:
+                raise NovelAIResponseFormatError(
+                    "NovelAI ZIP must contain exactly one image file"
+                )
+            entry = entries[0]
+            path = PurePosixPath(entry.filename)
+            mode = (entry.external_attr >> 16) & 0o170000
+            if (
+                entry.is_dir()
+                or entry.flag_bits & 0x1
+                or "\\" in entry.filename
+                or path.is_absolute()
+                or len(path.parts) != 1
+                or path.name != entry.filename
+                or path.suffix.lower() != ".png"
+                or mode not in {0, stat.S_IFREG}
+            ):
+                raise NovelAIResponseFormatError("NovelAI ZIP contains an unsafe image entry")
+            if (
+                entry.file_size <= 0
+                or entry.file_size > MAX_GENERATED_IMAGE_BYTES
+                or entry.compress_size <= 0
+                or entry.file_size > entry.compress_size * MAX_GENERATED_ZIP_RATIO
+            ):
+                raise NovelAIResponseFormatError("NovelAI ZIP image size is unsafe")
+            with archive.open(entry, "r") as image_file:
+                raw = image_file.read(MAX_GENERATED_IMAGE_BYTES + 1)
+    except NovelAIResponseFormatError:
+        raise
+    except (BadZipFile, OSError, RuntimeError, ValueError) as exc:
+        raise NovelAIResponseFormatError("NovelAI ZIP failed safe decoding") from exc
+    if len(raw) > MAX_GENERATED_IMAGE_BYTES:
+        raise NovelAIResponseFormatError("NovelAI ZIP image is oversized")
+    width, height = validate_generated_png(raw, request)
+    return NovelAIGeneratedImage(
+        png_bytes=raw,
+        seed=request.seed,
+        seed_source="request",
+        index=0,
+        width=width,
+        height=height,
+    )
+
+
+def validate_generated_png(
+    raw: bytes, request: NovelAIImageRequest
+) -> tuple[int, int]:
     if not raw or len(raw) > MAX_GENERATED_IMAGE_BYTES or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         raise NovelAIResponseFormatError("NovelAI image is empty, oversized, or not PNG")
     try:
@@ -428,19 +679,7 @@ def validate_image_generation_response(
         raise NovelAIResponseFormatError("NovelAI PNG failed safe decoding") from exc
     if (width, height) != (request.width, request.height):
         raise NovelAIResponseFormatError("NovelAI PNG dimensions do not match the request")
-    seed = item.get("seed")
-    index = item.get("index")
-    if not isinstance(seed, int) or not 0 <= seed <= 4_294_967_295:
-        raise NovelAIResponseFormatError("NovelAI response seed is invalid")
-    if index != 0:
-        raise NovelAIResponseFormatError("NovelAI response index is invalid")
-    return NovelAIGeneratedImage(
-        png_bytes=raw,
-        seed=seed,
-        index=index,
-        width=width,
-        height=height,
-    )
+    return width, height
 
 
 def raise_for_provider_status(response: httpx.Response) -> None:
@@ -478,11 +717,13 @@ def response_indicates_insufficient_balance(response: httpx.Response) -> bool:
 
 def validate_tag_suggestion_response(response: httpx.Response) -> int:
     content_type = response.headers.get("content-type", "").lower()
-    if "json" not in content_type:
-        raise NovelAIResponseFormatError("NovelAI returned a non-JSON connection response")
     try:
         payload: Any = response.json()
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        if "json" not in content_type:
+            raise NovelAIResponseFormatError(
+                "NovelAI returned a non-JSON connection response"
+            ) from exc
         raise NovelAIResponseFormatError("NovelAI returned invalid JSON") from exc
     if not isinstance(payload, dict) or "tags" not in payload:
         raise NovelAIResponseFormatError("NovelAI tag response is missing tags")
@@ -492,3 +733,32 @@ def validate_tag_suggestion_response(response: httpx.Response) -> int:
     if isinstance(tags, list):
         return sum(isinstance(item, dict) and isinstance(item.get("tag"), str) for item in tags)
     raise NovelAIResponseFormatError("NovelAI tags have an unexpected shape")
+
+
+def validate_subscription_response(response: httpx.Response) -> NovelAISubscriptionResult:
+    try:
+        payload: Any = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise NovelAIResponseFormatError("NovelAI returned invalid subscription JSON") from exc
+    if not isinstance(payload, dict):
+        raise NovelAIResponseFormatError("NovelAI subscription response must be an object")
+    active = payload.get("active")
+    tier = payload.get("tier")
+    expires_at = payload.get("expiresAt")
+    grace = payload.get("isGracePeriod", False)
+    if not isinstance(active, bool):
+        raise NovelAIResponseFormatError("NovelAI subscription active flag is invalid")
+    if isinstance(tier, bool) or not isinstance(tier, int) or not 0 <= tier <= 100:
+        raise NovelAIResponseFormatError("NovelAI subscription tier is invalid")
+    if expires_at is not None and (
+        isinstance(expires_at, bool) or not isinstance(expires_at, int) or expires_at < 0
+    ):
+        raise NovelAIResponseFormatError("NovelAI subscription expiry is invalid")
+    if not isinstance(grace, bool):
+        raise NovelAIResponseFormatError("NovelAI subscription grace flag is invalid")
+    return NovelAISubscriptionResult(
+        active=active,
+        tier=tier,
+        expires_at=expires_at,
+        is_grace_period=grace,
+    )

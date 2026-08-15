@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from typing import Any, cast
 
 from ..database import Database
 from ..errors import ApplicationError
 from ..generation.assets import canonical_json
-from ..generation.queue import GenerationQueueService
+from ..generation.queue import (
+    OPUS_ZERO_ANLAS_COST_BASIS,
+    STANDARD_COST_BASIS,
+    GenerationQueueService,
+)
 from ..ids import uuid7
 
 TERMINAL_PLAN_STATUSES = {"completed", "canceled"}
@@ -45,6 +50,12 @@ class BookProductionService:
                     "page_count": estimate["page_count"],
                     "panel_count": estimate["panel_count"],
                     "estimated_calls": estimate["estimated_calls"],
+                    "estimated_verification_calls": estimate[
+                        "estimated_verification_calls"
+                    ],
+                    "estimated_external_requests": estimate[
+                        "estimated_external_requests"
+                    ],
                     "estimated_cost_upper_anlas": estimate[
                         "estimated_cost_upper_anlas"
                     ],
@@ -62,15 +73,33 @@ class BookProductionService:
         page_count = sum(int(item["page_count"]) for item in estimates)
         panel_count = sum(int(item["panel_count"]) for item in estimates)
         cost = sum(int(item["estimated_cost_upper_anlas"]) for item in estimates)
+        verification_calls = sum(
+            int(item["estimated_verification_calls"]) for item in estimates
+        )
+        external_requests = sum(
+            int(item["estimated_external_requests"]) for item in estimates
+        )
+        zero_anlas = per_panel_cost_ceiling_anlas == 0
         return {
             **snapshot,
             "chapter_count": len(estimates),
             "estimated_page_count": page_count,
             "estimated_panel_count": panel_count,
             "estimated_calls": panel_count,
+            "estimated_verification_calls": verification_calls,
+            "estimated_external_requests": external_requests,
             "estimated_cost_upper_anlas": cost,
-            "cost_basis": "user_confirmed_per_panel_ceiling",
-            "cost_notice": "整本预算是每格保守预留之和，不是账户实际扣费预测。",
+            "billing_mode": "opus_zero_anlas" if zero_anlas else "standard",
+            "cost_basis": (
+                OPUS_ZERO_ANLAS_COST_BASIS if zero_anlas else STANDARD_COST_BASIS
+            ),
+            "cost_notice": (
+                "整本计划已冻结为 Opus 零 Anlas 资格载荷，本地 Anlas 预留为 0。"
+                "每张图发出前仍会实时核验订阅和免费载荷条件。资格核验不是账单回执，"
+                "供应商未回传逐次扣费时，实际费用保持未核实。"
+                if zero_anlas
+                else "整本预算是每格保守预留之和，不是账户实际扣费预测。"
+            ),
             "plan_fingerprint": fingerprint,
             "external_request_created": False,
         }
@@ -110,6 +139,12 @@ class BookProductionService:
         if max_cost_anlas < minimum_cost or max_cost_anlas > 100_000_000:
             raise ApplicationError(
                 "BOOK_COST_LIMIT_INVALID", "整本成本上限无效。", 422
+            )
+        if per_panel_cost_ceiling_anlas == 0 and max_cost_anlas != 0:
+            raise ApplicationError(
+                "BOOK_ZERO_ANLAS_LIMIT_INVALID",
+                "Opus 零 Anlas 整本计划的本地成本预留必须保持为 0。",
+                422,
             )
         allocations = self._allocate_limits(
             estimate["chapters"],
@@ -231,19 +266,39 @@ class BookProductionService:
             chapters = connection.execute(
                 """SELECT bc.*, gj.status AS generation_job_status,
                           gj.calls_started, gj.calls_completed,
-                          gj.recorded_cost_anlas, gj.allocated_cost_anlas
+                          gj.verification_calls_started,
+                          gj.verification_calls_completed,
+                          gj.recorded_cost_anlas, gj.allocated_cost_anlas,
+                          gj.unverified_cost_calls
                    FROM book_production_chapters bc
                    LEFT JOIN generation_jobs gj ON gj.job_id = bc.generation_job_id
                    WHERE bc.book_plan_id = ? ORDER BY bc.ordinal""",
                 (book_plan_id,),
             ).fetchall()
+            chapter_job_totals = self._chapter_job_totals(
+                connection, project_id, book_plan_id, chapters
+            )
         if row is None:
             raise ApplicationError("BOOK_PLAN_NOT_FOUND", "没有找到该整本计划。", 404)
-        chapter_payloads = [self._chapter_payload(item) for item in chapters]
+        chapter_payloads = [
+            self._chapter_payload(
+                item, chapter_job_totals[str(item["book_chapter_plan_id"])]
+            )
+            for item in chapters
+        ]
         calls_started = sum(item["calls_started"] for item in chapter_payloads)
         calls_completed = sum(item["calls_completed"] for item in chapter_payloads)
+        verification_calls_started = sum(
+            item["verification_calls_started"] for item in chapter_payloads
+        )
+        verification_calls_completed = sum(
+            item["verification_calls_completed"] for item in chapter_payloads
+        )
         recorded_cost = sum(item["recorded_cost_anlas"] for item in chapter_payloads)
         allocated_cost = sum(item["allocated_cost_anlas"] for item in chapter_payloads)
+        unverified_cost_calls = sum(
+            item["unverified_cost_calls"] for item in chapter_payloads
+        )
         return {
             "book_plan_id": str(row["book_plan_id"]),
             "project_id": project_id,
@@ -267,9 +322,23 @@ class BookProductionService:
             "chapters": chapter_payloads,
             "calls_started": calls_started,
             "calls_completed": calls_completed,
+            "verification_calls_started": verification_calls_started,
+            "verification_calls_completed": verification_calls_completed,
             "allocated_cost_anlas": allocated_cost,
             "recorded_cost_anlas": recorded_cost,
-            "external_requests_started": calls_started,
+            "unverified_cost_calls": unverified_cost_calls,
+            "external_requests_started": calls_started + verification_calls_started,
+            "external_requests_completed": calls_completed + verification_calls_completed,
+            "max_verification_calls": (
+                int(row["max_calls"])
+                if int(row["per_panel_cost_ceiling_anlas"]) == 0
+                else 0
+            ),
+            "max_external_requests": (
+                int(row["max_calls"]) * 2
+                if int(row["per_panel_cost_ceiling_anlas"]) == 0
+                else int(row["max_calls"])
+            ),
         }
 
     def approve_chapter(
@@ -371,18 +440,27 @@ class BookProductionService:
             return self.get_plan(project_id, book_plan_id)
         if str(next_chapter["status"]) != "approved":
             return self.get_plan(project_id, book_plan_id)
+        with self.database.reader() as connection:
+            totals = self._chapter_job_totals(
+                connection, project_id, book_plan_id, [next_chapter]
+            )[str(next_chapter["book_chapter_plan_id"])]
+        remaining_calls, remaining_cost = self._remaining_chapter_limits(
+            next_chapter, totals
+        )
+        self._require_retry_budget(next_chapter, remaining_calls, remaining_cost)
         try:
             job = self.queue.create_job(
                 project_id,
                 str(next_chapter["chapter_id"]),
                 plan_fingerprint=str(next_chapter["generation_plan_fingerprint"]),
                 per_panel_cost_ceiling_anlas=int(plan["per_panel_cost_ceiling_anlas"]),
-                max_calls=int(next_chapter["max_calls"]),
-                max_cost_anlas=int(next_chapter["max_cost_anlas"]),
+                max_calls=remaining_calls,
+                max_cost_anlas=remaining_cost,
                 confirmed=True,
                 idempotency_key=(
                     f"book-plan:{book_plan_id}:chapter:"
-                    f"{next_chapter['book_chapter_plan_id']}"
+                    f"{next_chapter['book_chapter_plan_id']}:retry:"
+                    f"{next_chapter['retry_count']}"
                 ),
                 request_sha256=hashlib.sha256(
                     "|".join(
@@ -390,8 +468,9 @@ class BookProductionService:
                             book_plan_id,
                             str(next_chapter["book_chapter_plan_id"]),
                             str(next_chapter["generation_plan_fingerprint"]),
-                            str(next_chapter["max_calls"]),
-                            str(next_chapter["max_cost_anlas"]),
+                            str(remaining_calls),
+                            str(remaining_cost),
+                            str(next_chapter["retry_count"]),
                         )
                     ).encode()
                 ).hexdigest(),
@@ -515,6 +594,12 @@ class BookProductionService:
             raise ApplicationError(
                 "BOOK_CHAPTER_RETRY_INVALID", "该章节当前不需要恢复。", 409
             )
+        with self.database.reader() as connection:
+            totals = self._chapter_job_totals(
+                connection, project_id, book_plan_id, [chapter]
+            )[book_chapter_plan_id]
+        remaining_calls, remaining_cost = self._remaining_chapter_limits(chapter, totals)
+        self._require_retry_budget(chapter, remaining_calls, remaining_cost)
         if chapter["generation_job_id"] is not None:
             job = self.queue.get_job(project_id, str(chapter["generation_job_id"]))
             if job["status"] in OPEN_JOB_STATUSES or job["status"] == "failed":
@@ -738,7 +823,9 @@ class BookProductionService:
         return allocations
 
     @staticmethod
-    def _chapter_payload(row: sqlite3.Row) -> dict[str, Any]:
+    def _chapter_payload(
+        row: sqlite3.Row, totals: dict[str, int]
+    ) -> dict[str, Any]:
         return {
             "book_chapter_plan_id": str(row["book_chapter_plan_id"]),
             "chapter_id": str(row["chapter_id"]),
@@ -760,11 +847,124 @@ class BookProductionService:
             "generation_job_status": row["generation_job_status"],
             "retry_count": int(row["retry_count"]),
             "revision": int(row["revision"]),
-            "calls_started": int(row["calls_started"] or 0),
-            "calls_completed": int(row["calls_completed"] or 0),
-            "recorded_cost_anlas": int(row["recorded_cost_anlas"] or 0),
-            "allocated_cost_anlas": int(row["allocated_cost_anlas"] or 0),
+            "calls_started": totals["calls_started"],
+            "calls_completed": totals["calls_completed"],
+            "verification_calls_started": totals["verification_calls_started"],
+            "verification_calls_completed": totals["verification_calls_completed"],
+            "recorded_cost_anlas": totals["recorded_cost_anlas"],
+            "allocated_cost_anlas": totals["allocated_cost_anlas"],
+            "unverified_cost_calls": totals["unverified_cost_calls"],
+            "external_requests_started": totals["calls_started"]
+            + totals["verification_calls_started"],
+            "external_requests_completed": totals["calls_completed"]
+            + totals["verification_calls_completed"],
         }
+
+    @staticmethod
+    def _chapter_job_totals(
+        connection: sqlite3.Connection,
+        project_id: str,
+        book_plan_id: str,
+        chapters: list[sqlite3.Row] | tuple[sqlite3.Row, ...],
+    ) -> dict[str, dict[str, int]]:
+        counter_names = (
+            "calls_started",
+            "calls_completed",
+            "verification_calls_started",
+            "verification_calls_completed",
+            "recorded_cost_anlas",
+            "allocated_cost_anlas",
+            "unverified_cost_calls",
+        )
+        job_ids_by_chapter: dict[str, set[str]] = {
+            str(chapter["book_chapter_plan_id"]): set() for chapter in chapters
+        }
+        audit_rows = connection.execute(
+            """SELECT payload_json FROM audit_events
+               WHERE project_id = ? AND event_type = 'book.chapter_job_created'""",
+            (project_id,),
+        ).fetchall()
+        for audit_row in audit_rows:
+            try:
+                payload = json.loads(str(audit_row["payload_json"]))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            chapter_plan_id = str(payload.get("book_chapter_plan_id", ""))
+            if (
+                payload.get("book_plan_id") == book_plan_id
+                and chapter_plan_id in job_ids_by_chapter
+                and isinstance(payload.get("generation_job_id"), str)
+            ):
+                job_ids_by_chapter[chapter_plan_id].add(payload["generation_job_id"])
+        for chapter in chapters:
+            current_job_id = chapter["generation_job_id"]
+            if current_job_id is not None:
+                job_ids_by_chapter[str(chapter["book_chapter_plan_id"])].add(
+                    str(current_job_id)
+                )
+
+        all_job_ids = sorted(
+            {job_id for job_ids in job_ids_by_chapter.values() for job_id in job_ids}
+        )
+        jobs_by_id: dict[str, sqlite3.Row] = {}
+        if all_job_ids:
+            placeholders = ",".join("?" for _ in all_job_ids)
+            job_rows = connection.execute(
+                f"""SELECT job_id, {', '.join(counter_names)}
+                    FROM generation_jobs
+                    WHERE project_id = ? AND job_id IN ({placeholders})""",
+                (project_id, *all_job_ids),
+            ).fetchall()
+            jobs_by_id = {str(job["job_id"]): job for job in job_rows}
+
+        totals_by_chapter: dict[str, dict[str, int]] = {}
+        for chapter_plan_id, job_ids in job_ids_by_chapter.items():
+            totals = {name: 0 for name in counter_names}
+            for job_id in job_ids:
+                job = jobs_by_id.get(job_id)
+                if job is None:
+                    continue
+                for name in counter_names:
+                    totals[name] += int(job[name] or 0)
+            totals_by_chapter[chapter_plan_id] = totals
+        return totals_by_chapter
+
+    @staticmethod
+    def _remaining_chapter_limits(
+        chapter: sqlite3.Row, totals: dict[str, int]
+    ) -> tuple[int, int]:
+        remaining_calls = int(chapter["max_calls"]) - totals["calls_started"]
+        if int(chapter["max_cost_anlas"]) == 0:
+            remaining_calls = min(
+                remaining_calls,
+                int(chapter["max_calls"]) - totals["verification_calls_started"],
+            )
+        return (
+            remaining_calls,
+            int(chapter["max_cost_anlas"]) - totals["allocated_cost_anlas"],
+        )
+
+    @staticmethod
+    def _require_retry_budget(
+        chapter: sqlite3.Row, remaining_calls: int, remaining_cost: int
+    ) -> None:
+        minimum_calls = int(chapter["panel_count"])
+        minimum_cost = int(chapter["estimated_cost_upper_anlas"])
+        if remaining_calls < minimum_calls or remaining_cost < minimum_cost:
+            raise ApplicationError(
+                "BOOK_CHAPTER_RETRY_BUDGET_EXHAUSTED",
+                "本章剩余调用或成本预算不足以重建完整有界任务，请新建并重新确认整本计划。",
+                409,
+                {
+                    "book_chapter_plan_id": str(chapter["book_chapter_plan_id"]),
+                    "remaining_calls": max(remaining_calls, 0),
+                    "remaining_cost_anlas": max(remaining_cost, 0),
+                    "required_calls": minimum_calls,
+                    "required_cost_anlas": minimum_cost,
+                },
+            )
 
     def _plan_row(self, project_id: str, book_plan_id: str) -> sqlite3.Row:
         with self.database.reader() as connection:

@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.errors import ApplicationError
 from backend.app.novelai.mock import MockNovelAIClient
 from tests.test_bibles_api import (
     approve_complete_bibles,
@@ -37,8 +39,8 @@ def test_estimate_and_job_freeze_exact_approved_versions_and_limits(
     assert estimate["external_request_created"] is False
     assert len(estimate["plan_fingerprint"]) == 64
     assert len(estimate["layout_snapshot_sha256"]) == 64
-    assert estimate["panels"][0]["selected_width"] == 1024
-    assert estimate["panels"][0]["selected_height"] == 1536
+    assert estimate["panels"][0]["selected_width"] == 832
+    assert estimate["panels"][0]["selected_height"] == 1216
     assert len(estimate["panels"][0]["frame_content_sha256"]) == 64
 
     missing_confirmation = create_job(
@@ -103,6 +105,58 @@ def test_estimate_and_job_freeze_exact_approved_versions_and_limits(
     with client.app.state.database.reader() as connection:
         assert connection.execute("SELECT COUNT(*) FROM generation_approvals").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM generation_jobs").fetchone()[0] == 1
+
+
+def test_zero_anlas_plan_freezes_official_limits_and_zero_hard_cap(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(client, session_headers)
+    response = client.post(
+        f"/api/v1/projects/{project_id}/generation/estimate",
+        headers=session_headers,
+        json={"chapter_id": chapter["chapter_id"]},
+    )
+    assert response.status_code == 200, response.text
+    estimate = response.json()
+
+    assert estimate["billing_mode"] == "opus_zero_anlas"
+    assert estimate["cost_basis"] == "opus_zero_anlas_official_limits_v1"
+    assert estimate["per_panel_cost_ceiling_anlas"] == 0
+    assert estimate["estimated_cost_upper_anlas"] == 0
+    assert estimate["candidate_count_per_panel"] == 1
+    assert estimate["panels"][0]["selected_width"] == 832
+    assert estimate["panels"][0]["selected_height"] == 1216
+
+    created = client.post(
+        f"/api/v1/projects/{project_id}/generation/jobs",
+        headers={**session_headers, "Idempotency-Key": "zero-anlas-job"},
+        json={
+            "chapter_id": chapter["chapter_id"],
+            "per_panel_cost_ceiling_anlas": 0,
+            "plan_fingerprint": estimate["plan_fingerprint"],
+            "max_calls": estimate["estimated_calls"],
+            "max_cost_anlas": 0,
+            "confirmed": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["max_cost_anlas"] == 0
+    assert created.json()["cost_basis"] == "opus_zero_anlas_official_limits_v1"
+
+    widened = client.post(
+        f"/api/v1/projects/{project_id}/generation/jobs",
+        headers={**session_headers, "Idempotency-Key": "zero-anlas-widened"},
+        json={
+            "chapter_id": chapter["chapter_id"],
+            "per_panel_cost_ceiling_anlas": 0,
+            "plan_fingerprint": estimate["plan_fingerprint"],
+            "max_calls": estimate["estimated_calls"],
+            "max_cost_anlas": 1,
+            "confirmed": True,
+        },
+    )
+    assert widened.status_code == 422
+    assert widened.json()["error"]["code"] == "GENERATION_ZERO_ANLAS_LIMIT_INVALID"
 
 
 def test_concurrent_idempotent_job_creation_returns_the_same_job(
@@ -320,6 +374,71 @@ def test_pause_between_claim_and_send_releases_prepared_attempt_without_a_call(
     assert paused["revision"] < released["revision"]
 
 
+def test_zero_anlas_verification_respects_image_and_verification_call_limit(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(
+        client, session_headers, title_suffix="核验上限"
+    )
+    estimate = estimate_plan(
+        client,
+        session_headers,
+        project_id,
+        chapter["chapter_id"],
+        per_panel_cost_ceiling_anlas=0,
+    )
+    created = create_job(
+        client, session_headers, project_id, chapter["chapter_id"], estimate
+    ).json()
+    service = client.app.state.generation_queue
+    started = transition(client, session_headers, project_id, created, "start")
+    attempt = service.claim_next(started["job_id"])
+    assert attempt is not None
+
+    with client.app.state.database.writer() as connection:
+        connection.execute(
+            "UPDATE generation_jobs SET calls_started = max_calls WHERE job_id = ?",
+            (started["job_id"],),
+        )
+
+    assert service.mark_verification_request_started(attempt["attempt_id"]) is False
+    blocked = service.get_job(project_id, started["job_id"])
+    assert blocked["status"] == "needs_review"
+    assert blocked["verification_calls_started"] == 0
+    assert blocked["external_requests_started"] == blocked["max_calls"]
+    assert blocked["items"][0]["last_error_code"] == "CALL_LIMIT_REACHED"
+
+
+def test_zero_anlas_image_request_requires_completed_subscription_verification(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(
+        client, session_headers, title_suffix="核验先于出图"
+    )
+    estimate = estimate_plan(
+        client,
+        session_headers,
+        project_id,
+        chapter["chapter_id"],
+        per_panel_cost_ceiling_anlas=0,
+    )
+    created = create_job(
+        client, session_headers, project_id, chapter["chapter_id"], estimate
+    ).json()
+    service = client.app.state.generation_queue
+    started = transition(client, session_headers, project_id, created, "start")
+    attempt = service.claim_next(started["job_id"])
+    assert attempt is not None
+
+    with pytest.raises(ApplicationError) as exc_info:
+        service.mark_provider_request_started(attempt["attempt_id"])
+
+    assert exc_info.value.code == "GENERATION_VERIFICATION_REQUIRED"
+    blocked = service.get_job(project_id, started["job_id"])
+    assert blocked["calls_started"] == 0
+    assert blocked["verification_calls_started"] == 0
+
+
 def test_cancel_during_definite_temporary_failure_does_not_requeue_item(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
@@ -342,6 +461,7 @@ def test_cancel_during_definite_temporary_failure_does_not_requeue_item(
     assert settled["status"] == "canceled"
     assert settled["items"][0]["status"] == "canceled"
     assert settled["items"][0]["active_attempt_id"] is None
+    assert settled["unverified_cost_calls"] == 1
 
 
 def test_cancel_preserves_in_flight_settlement_and_restart_requires_review(
@@ -361,6 +481,7 @@ def test_cancel_preserves_in_flight_settlement_and_restart_requires_review(
     reviewed = service.get_job(prepared["project_id"], started["job_id"])
     assert reviewed["status"] == "needs_review"
     assert reviewed["items"][0]["status"] == "needs_review"
+    assert reviewed["unverified_cost_calls"] == 1
     assert service.claim_next(started["job_id"]) is None
 
     canceled = transition(
@@ -640,12 +761,20 @@ def ensure_approved_layout(
 
 
 def estimate_plan(
-    client: TestClient, headers: dict[str, str], project_id: str, chapter_id: str
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: str,
+    chapter_id: str,
+    *,
+    per_panel_cost_ceiling_anlas: int = 10,
 ) -> dict[str, Any]:
     response = client.post(
         f"/api/v1/projects/{project_id}/generation/estimate",
         headers=headers,
-        json={"chapter_id": chapter_id, "per_panel_cost_ceiling_anlas": 10},
+        json={
+            "chapter_id": chapter_id,
+            "per_panel_cost_ceiling_anlas": per_panel_cost_ceiling_anlas,
+        },
     )
     assert response.status_code == 200
     return response.json()

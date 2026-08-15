@@ -78,8 +78,13 @@ it("freezes a bounded plan, approves every chapter and only creates one local jo
   expect(await screen.findByText("尚未规划")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "计算整本预算" }));
   expect(await screen.findByText("2. 第二章")).toBeInTheDocument();
+  expect(screen.getAllByText(/0 Anlas/).length).toBeGreaterThan(0);
   expect(screen.getByText(/尚未创建队列或外部请求/)).toBeInTheDocument();
 
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.change(screen.getByLabelText("整本出图调用硬上限"), { target: { value: "3" } });
+  expect(screen.getByRole("checkbox")).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "冻结整本计划" })).toBeDisabled();
   fireEvent.click(screen.getByRole("checkbox"));
   fireEvent.click(screen.getByRole("button", { name: "冻结整本计划" }));
   expect(await screen.findByText(/请逐章核对并批准/)).toBeInTheDocument();
@@ -95,6 +100,8 @@ it("freezes a bounded plan, approves every chapter and only creates one local jo
 
   const writes = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
   expect(writes).toHaveLength(6);
+  const estimateCall = writes.find(([path]) => String(path).endsWith("/estimate"));
+  expect(JSON.parse(String(estimateCall?.[1]?.body)).per_panel_cost_ceiling_anlas).toBe(0);
   for (const [, init] of writes) {
     const headers = new Headers(init?.headers);
     expect(headers.get("X-Manga-Maker-Session")).toBe("session-test");
@@ -107,7 +114,7 @@ const estimate: BookEstimate = {
   project_id: "project-1",
   source_chapter_set_id: "chapter-set-1",
   continuity_version_id: "continuity-2",
-  per_panel_cost_ceiling_anlas: 10,
+  per_panel_cost_ceiling_anlas: 0,
   chapters: [1, 2].map((ordinal) => ({
     chapter_id: `chapter-${ordinal}`,
     ordinal,
@@ -119,15 +126,20 @@ const estimate: BookEstimate = {
     page_count: 1,
     panel_count: 1,
     estimated_calls: 1,
-    estimated_cost_upper_anlas: 10,
+    estimated_verification_calls: 1,
+    estimated_external_requests: 2,
+    estimated_cost_upper_anlas: 0,
   })),
   chapter_count: 2,
   estimated_page_count: 2,
   estimated_panel_count: 2,
   estimated_calls: 2,
-  estimated_cost_upper_anlas: 20,
-  cost_basis: "user_confirmed_per_panel_ceiling",
-  cost_notice: "这是成本预留，不是实际扣费预测。",
+  estimated_verification_calls: 2,
+  estimated_external_requests: 4,
+  estimated_cost_upper_anlas: 0,
+  billing_mode: "opus_zero_anlas",
+  cost_basis: "opus_zero_anlas_official_limits_v1",
+  cost_notice: "整本计划已冻结为 Opus 零 Anlas 模式。",
   plan_fingerprint: "f".repeat(64),
   external_request_created: false,
 };
@@ -140,13 +152,13 @@ function makePlan(status: BookPlan["status"]): BookPlan {
     source_chapter_set_id: "chapter-set-1",
     continuity_version_id: "continuity-2",
     status,
-    per_panel_cost_ceiling_anlas: 10,
+    per_panel_cost_ceiling_anlas: 0,
     estimated_page_count: 2,
     estimated_panel_count: 2,
     estimated_calls: 2,
-    estimated_cost_upper_anlas: 20,
+    estimated_cost_upper_anlas: 0,
     max_calls: 2,
-    max_cost_anlas: 20,
+    max_cost_anlas: 0,
     plan_fingerprint: "f".repeat(64),
     revision: 1,
     is_current: true,
@@ -164,24 +176,35 @@ function makePlan(status: BookPlan["status"]): BookPlan {
       generation_plan_fingerprint: String(ordinal).repeat(64),
       page_count: 1,
       panel_count: 1,
-      estimated_cost_upper_anlas: 10,
+      estimated_cost_upper_anlas: 0,
       max_calls: 1,
-      max_cost_anlas: 10,
+      max_cost_anlas: 0,
       status: "awaiting_approval" as const,
       generation_job_id: null,
       generation_job_status: null,
       calls_started: 0,
       calls_completed: 0,
+      verification_calls_started: 0,
+      verification_calls_completed: 0,
       allocated_cost_anlas: 0,
       recorded_cost_anlas: 0,
+      unverified_cost_calls: 0,
+      external_requests_started: 0,
+      external_requests_completed: 0,
       retry_count: 0,
       approved_at: null,
     })),
     calls_started: 0,
     calls_completed: 0,
+    verification_calls_started: 0,
+    verification_calls_completed: 0,
     allocated_cost_anlas: 0,
     recorded_cost_anlas: 0,
+    unverified_cost_calls: 0,
     external_requests_started: 0,
+    external_requests_completed: 0,
+    max_verification_calls: 2,
+    max_external_requests: 4,
   };
 }
 

@@ -13,6 +13,9 @@ _PROVIDER_SPEC_SOURCE_PATH = (
 _APPROVAL_FREEZE_SOURCE_PATH = (
     "backend/app/modules/production/migrations/0029_generation_approval_freeze.sql"
 )
+_VERIFICATION_CALL_AUDIT_SOURCE_PATH = (
+    "backend/app/modules/production/migrations/0031_generation_verification_call_audit.sql"
+)
 
 PRODUCTION_MIGRATIONS: tuple[RegisteredMigration, ...] = (
     RegisteredMigration(
@@ -41,6 +44,15 @@ PRODUCTION_MIGRATIONS: tuple[RegisteredMigration, ...] = (
             "0029_generation_approval_freeze.sql"
         ).read_text(encoding="utf-8"),
         source_path=_APPROVAL_FREEZE_SOURCE_PATH,
+    ),
+    RegisteredMigration(
+        version=31,
+        owner="production",
+        name="generation_verification_call_audit",
+        statements=Path(__file__).with_name(
+            "0031_generation_verification_call_audit.sql"
+        ).read_text(encoding="utf-8"),
+        source_path=_VERIFICATION_CALL_AUDIT_SOURCE_PATH,
     ),
 )
 

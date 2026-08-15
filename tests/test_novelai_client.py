@@ -5,7 +5,9 @@ import base64
 import json
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
+from zipfile import ZipFile
 
 import httpx
 import pytest
@@ -30,7 +32,11 @@ from backend.app.novelai.client import (
     PreciseReferenceInput,
     novelai_correlation_id,
 )
-from backend.app.novelai.contracts import CONNECTION_TEST_PATH, GENERATION_PATH
+from backend.app.novelai.contracts import (
+    CONNECTION_TEST_PATH,
+    GENERATION_PATH,
+    SUBSCRIPTION_PATH,
+)
 
 
 def test_connection_test_uses_only_tag_suggestions_and_never_generates() -> None:
@@ -62,6 +68,59 @@ def test_connection_test_uses_only_tag_suggestions_and_never_generates() -> None
     assert request.url.params["prompt"] == "manga"
     assert request.headers["Authorization"] == "Bearer unit-test-secret"
     assert request.method == "GET"
+
+
+def test_connection_test_accepts_strict_json_with_text_plain_content_type() -> None:
+    response = httpx.Response(
+        200,
+        content=b'{"tags":[{"tag":"manga","confidence":0.99,"count":10}]}',
+        headers={"content-type": "text/plain; charset=utf-8"},
+    )
+    client = make_client(httpx.MockTransport(lambda _request: response))
+
+    result = asyncio.run(client.validate_connection())
+
+    assert result.suggestion_count == 1
+
+
+def test_subscription_probe_validates_active_opus_without_generating() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "active": True,
+                "tier": 3,
+                "expiresAt": 1_800_000_000,
+                "isGracePeriod": False,
+                "perks": {},
+            },
+        )
+
+    result = asyncio.run(make_client(httpx.MockTransport(handler)).get_subscription())
+
+    assert result.opus_active is True
+    assert result.zero_anlas_verification()["subscription_tier"] == 3
+    assert [request.url.path for request in requests] == [SUBSCRIPTION_PATH]
+    assert all(request.url.path != GENERATION_PATH for request in requests)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"active": "yes", "tier": 3},
+        {"active": True, "tier": True},
+        {"active": True, "tier": 3, "expiresAt": "later"},
+    ],
+)
+def test_subscription_probe_rejects_ambiguous_shapes(payload: dict[str, object]) -> None:
+    client = make_client(
+        httpx.MockTransport(lambda _request: httpx.Response(200, json=payload))
+    )
+    with pytest.raises(NovelAIResponseFormatError):
+        asyncio.run(client.get_subscription())
 
 
 @pytest.mark.parametrize(
@@ -138,6 +197,84 @@ def png_bytes(width: int, height: int) -> bytes:
     return output.getvalue()
 
 
+def zip_bytes(*entries: tuple[str, bytes]) -> bytes:
+    output = BytesIO()
+    with ZipFile(output, "w") as archive:
+        for name, payload in entries:
+            archive.writestr(name, payload)
+    return output.getvalue()
+
+
+def test_image_generation_requests_and_accepts_safe_zip_response() -> None:
+    requests: list[httpx.Request] = []
+    png = png_bytes(832, 1216)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            201,
+            content=zip_bytes(("image_0.png", png)),
+            headers={"content-type": "application/zip"},
+        )
+
+    result = asyncio.run(
+        make_client(httpx.MockTransport(handler)).generate_image(image_request())
+    )
+
+    assert result.png_bytes == png
+    assert result.seed == 1234
+    assert result.seed_source == "request"
+    assert result.index == 0
+    assert requests[0].headers["Accept"] == "application/zip"
+
+
+@pytest.mark.parametrize("content_type", ["application/octet-stream", "binary/octet-stream"])
+def test_image_generation_accepts_zip_magic_with_generic_binary_mime(
+    content_type: str,
+) -> None:
+    png = png_bytes(832, 1216)
+    response = httpx.Response(
+        200,
+        content=zip_bytes(("image_0.png", png)),
+        headers={"content-type": content_type},
+    )
+
+    result = asyncio.run(
+        make_client(httpx.MockTransport(lambda _request: response)).generate_image(
+            image_request()
+        )
+    )
+
+    assert result.png_bytes == png
+    assert result.seed_source == "request"
+
+
+@pytest.mark.parametrize(
+    "archive",
+    [
+        zip_bytes(("../image_0.png", png_bytes(832, 1216))),
+        zip_bytes(("image_0.txt", png_bytes(832, 1216))),
+        zip_bytes(
+            ("image_0.png", png_bytes(832, 1216)),
+            ("image_1.png", png_bytes(832, 1216)),
+        ),
+    ],
+)
+def test_image_generation_rejects_unsafe_zip_response(archive: bytes) -> None:
+    response = httpx.Response(
+        201,
+        content=archive,
+        headers={"content-type": "application/zip"},
+    )
+
+    with pytest.raises(NovelAIResponseFormatError):
+        asyncio.run(
+            make_client(httpx.MockTransport(lambda _request: response)).generate_image(
+                image_request()
+            )
+        )
+
+
 def test_image_generation_uses_pinned_json_contract_and_validates_png() -> None:
     requests: list[httpx.Request] = []
     png = png_bytes(832, 1216)
@@ -161,6 +298,7 @@ def test_image_generation_uses_pinned_json_contract_and_validates_png() -> None:
     result = asyncio.run(client.generate_image(image_request()))
 
     assert result.png_bytes == png
+    assert result.seed_source == "provider_response"
     assert result.width == 832
     assert result.height == 1216
     assert len(requests) == 1
@@ -416,10 +554,41 @@ def test_generated_correlation_ids_match_contract_and_do_not_repeat() -> None:
     assert all(len(value) == 6 and value.isalnum() for value in values)
 
 
+def test_opus_zero_anlas_mode_accepts_only_pinned_free_payloads() -> None:
+    valid = image_request(billing_mode="opus_zero_anlas")
+    assert valid.width == 832
+    assert valid.height == 1216
+
+    with pytest.raises(NovelAIConfigurationError, match="zero-Anlas profile"):
+        NovelAIImageRequest(
+            correlation_id="Big001",
+            provider_model_id="nai-diffusion-4-5-full",
+            prompt="manga panel",
+            negative_prompt="text, watermark",
+            width=1024,
+            height=1536,
+            steps=28,
+            scale=5,
+            seed=1234,
+            billing_mode="opus_zero_anlas",
+        )
+    with pytest.raises(NovelAIConfigurationError, match="zero-Anlas profile"):
+        image_request(
+            billing_mode="opus_zero_anlas",
+            precise_reference=PreciseReferenceInput(
+                png_base64=base64.b64encode(png_bytes(832, 1216)).decode("ascii"),
+                description="character",
+                strength=0.7,
+                fidelity=0.8,
+            ),
+        )
+
+
 def image_request(
     *,
     precise_reference: PreciseReferenceInput | None = None,
     correlation_id: str = "Ab12Cd",
+    billing_mode: Literal["standard", "opus_zero_anlas"] = "standard",
 ) -> NovelAIImageRequest:
     return NovelAIImageRequest(
         correlation_id=correlation_id,
@@ -431,5 +600,6 @@ def image_request(
         steps=28,
         scale=5,
         seed=1234,
+        billing_mode=billing_mode,
         precise_reference=precise_reference,
     )

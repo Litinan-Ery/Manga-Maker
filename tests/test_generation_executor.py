@@ -55,7 +55,7 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     asset = assets.json()[0]
     assert asset["version"] == 1
     assert asset["is_current"] is True
-    assert (asset["width"], asset["height"]) == (1024, 1536)
+    assert (asset["width"], asset["height"]) == (832, 1216)
 
     denied = client.get(
         f"/api/v1/projects/{prepared['project_id']}/generation/assets/"
@@ -69,7 +69,7 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     )
     assert content.status_code == 200
     with Image.open(BytesIO(content.content)) as image:
-        assert image.size == (1024, 1536)
+        assert image.size == (832, 1216)
 
     with client.app.state.database.reader() as connection:
         row = connection.execute(
@@ -99,6 +99,10 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     assert provenance["provider_execution_spec_id"] == row["provider_execution_spec_id"]
     assert provenance["provider_payload_sha256"] == row["payload_sha256"]
     assert provenance["generated_at"].endswith("+00:00")
+    assert provenance["requested_seed"] == spec["seed"]
+    assert provenance["response_seed"] is None
+    assert provenance["effective_seed"] == spec["seed"]
+    assert provenance["seed_source"] == "request"
     assert spec["seed"] == asset["seed"]
     assert "no text" in spec["prompt"]
     serialized = json.dumps({"provenance": provenance, "spec": spec})
@@ -114,6 +118,102 @@ def test_mock_executor_creates_immutable_png_provenance_and_asset_version(
     assert "unit-novelai-secret" not in json.dumps(
         {"execution_spec": execution_spec, "payload": payload}
     )
+
+
+def test_zero_anlas_executor_rechecks_opus_before_send_and_records_eligibility(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(client, session_headers)
+    estimate_response = client.post(
+        f"/api/v1/projects/{project_id}/generation/estimate",
+        headers=session_headers,
+        json={"chapter_id": chapter["chapter_id"]},
+    )
+    assert estimate_response.status_code == 200, estimate_response.text
+    estimate = estimate_response.json()
+    created = create_job(
+        client,
+        session_headers,
+        project_id,
+        chapter["chapter_id"],
+        estimate,
+    )
+    assert created.status_code == 201, created.text
+    started = transition(client, session_headers, project_id, created.json(), "start")
+    provider = MockNovelAIClient()
+    install_image_provider(client, provider)
+
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    job = client.app.state.generation_queue.get_job(project_id, started["job_id"])
+    assert job["status"] == "completed"
+    assert job["max_cost_anlas"] == 0
+    assert job["allocated_cost_anlas"] == 0
+    assert job["recorded_cost_anlas"] == 0
+    assert job["unverified_cost_calls"] == 1
+    assert job["verification_calls_started"] == 1
+    assert job["verification_calls_completed"] == 1
+    assert job["external_requests_started"] == 2
+    assert job["external_requests_completed"] == 2
+    assert provider.subscription_calls == 1
+    assert provider.generation_calls == 1
+
+    with client.app.state.database.reader() as connection:
+        row = connection.execute(
+            """
+            SELECT av.provenance_relative_path, p.workspace_path
+            FROM asset_versions av
+            JOIN projects p ON p.project_id = av.project_id
+            WHERE av.job_id = ?
+            """,
+            (started["job_id"],),
+        ).fetchone()
+    provenance = json.loads(
+        (Path(str(row["workspace_path"])) / str(row["provenance_relative_path"]))
+        .read_text(encoding="utf-8")
+    )
+    assert provenance["cost_record_status"] == "opus_zero_anlas_eligibility_verified"
+    assert provenance["recorded_cost_anlas"] is None
+    assert provenance["response_seed"] is None
+    assert provenance["effective_seed"] == provenance["requested_seed"]
+    assert provenance["seed_source"] == "request"
+    assert provenance["zero_anlas_verification"]["opus_active"] is True
+    assert provenance["zero_anlas_verification"]["subscription_tier"] == 3
+
+
+def test_zero_anlas_executor_blocks_non_opus_before_image_request(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _bundle = prepare_generation_inputs(client, session_headers)
+    estimate = client.post(
+        f"/api/v1/projects/{project_id}/generation/estimate",
+        headers=session_headers,
+        json={"chapter_id": chapter["chapter_id"]},
+    ).json()
+    created = create_job(
+        client,
+        session_headers,
+        project_id,
+        chapter["chapter_id"],
+        estimate,
+    )
+    started = transition(client, session_headers, project_id, created.json(), "start")
+    provider = MockNovelAIClient(subscription_tier=2)
+    install_image_provider(client, provider)
+
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    job = client.app.state.generation_queue.get_job(project_id, started["job_id"])
+    assert job["status"] == "failed"
+    assert job["calls_started"] == 0
+    assert job["allocated_cost_anlas"] == 0
+    assert job["verification_calls_started"] == 1
+    assert job["verification_calls_completed"] == 1
+    assert job["external_requests_started"] == 1
+    assert job["external_requests_completed"] == 1
+    assert job["items"][0]["last_error_code"] == "PROVIDER_OPUS_REQUIRED"
+    assert provider.subscription_calls == 1
+    assert provider.generation_calls == 0
 
 
 def test_layout_change_after_job_creation_blocks_before_secret_read(
@@ -354,6 +454,7 @@ def test_temporary_provider_errors_retry_only_within_frozen_limits(
     assert job["status"] == "completed"
     assert job["calls_started"] == 3
     assert job["allocated_cost_anlas"] == 30
+    assert job["unverified_cost_calls"] == 3
     assert job["items"][0]["attempt_count"] == 3
     assert provider.generation_calls == 3
 
@@ -372,6 +473,7 @@ def test_unknown_provider_outcome_stops_without_replay(
     assert job["status"] == "needs_review"
     assert job["calls_started"] == 1
     assert job["calls_completed"] == 0
+    assert job["unverified_cost_calls"] == 1
     assert job["items"][0]["status"] == "needs_review"
     assert provider.generation_calls == 1
     assert client.app.state.asset_store.current_assets(prepared["project_id"]) == []
@@ -397,6 +499,7 @@ def test_disk_full_after_provider_response_stops_without_replay(
     assert job["status"] == "needs_review"
     assert job["calls_started"] == 1
     assert job["calls_completed"] == 0
+    assert job["unverified_cost_calls"] == 1
     assert job["items"][0]["last_error_code"] == "LOCAL_STORAGE_FULL"
     assert provider.generation_calls == 1
     assert client.app.state.generation_queue.claim_next(started["job_id"]) is None
@@ -418,6 +521,7 @@ def test_locked_vault_fails_before_provider_request_is_counted(
     assert job["status"] == "failed"
     assert job["calls_started"] == 0
     assert job["allocated_cost_anlas"] == 0
+    assert job["unverified_cost_calls"] == 0
     assert provider.generation_calls == 0
 
 

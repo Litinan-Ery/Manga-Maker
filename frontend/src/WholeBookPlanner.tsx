@@ -21,7 +21,8 @@ interface WholeBookPlannerProps {
 export function WholeBookPlanner({ projectId, onError }: WholeBookPlannerProps) {
   const [estimate, setEstimate] = useState<BookEstimate | null>(null);
   const [plan, setPlan] = useState<BookPlan | null>(null);
-  const [perPanelCost, setPerPanelCost] = useState(10);
+  const [billingMode, setBillingMode] = useState<"opus_zero_anlas" | "standard">("opus_zero_anlas");
+  const [perPanelCost, setPerPanelCost] = useState(0);
   const [maxCalls, setMaxCalls] = useState(0);
   const [maxCost, setMaxCost] = useState(0);
   const [confirmed, setConfirmed] = useState(false);
@@ -127,19 +128,44 @@ export function WholeBookPlanner({ projectId, onError }: WholeBookPlannerProps) 
         <span>{plan ? statusLabel(plan.status) : "尚未规划"}</span>
       </div>
       <p className="panel-description">
-        先冻结全书预算，再逐章审批。每次“创建下一章本地队列”最多只建立一个任务；图像生成仍需在生成控制台单独确认，不会自动连续付费。
+        {plan && plan.per_panel_cost_ceiling_anlas > 0
+          ? "当前整本计划使用标准计费；继续推进可能创建会消耗 Anlas 的章节队列。"
+          : billingMode === "opus_zero_anlas"
+            ? "先冻结全书 Opus 零 Anlas 资格载荷和本地 0 Anlas 预留，再逐章审批。每次最多建立一个本地任务；真正出图仍需在生成控制台确认并逐张核验，资格核验不是账单回执。"
+            : "标准计费允许参考图并按已冻结参数执行，但可能消耗 Anlas；先冻结整本调用与成本硬上限，再逐章审批。"}
       </p>
 
       {!plan && (
         <div className="book-plan-setup">
           <label>
-            <span>每格成本预留上限（Anlas）</span>
+            <span>计费模式</span>
+            <select
+              value={billingMode}
+              onChange={(event) => {
+                const nextMode = event.target.value as "opus_zero_anlas" | "standard";
+                setBillingMode(nextMode);
+                setPerPanelCost(nextMode === "opus_zero_anlas" ? 0 : 10);
+                setEstimate(null);
+                setConfirmed(false);
+              }}
+            >
+              <option value="opus_zero_anlas">Opus 零 Anlas（默认）</option>
+              <option value="standard">标准计费（允许参考图）</option>
+            </select>
+          </label>
+          <label>
+            <span>{billingMode === "opus_zero_anlas" ? "每格本地 Anlas 预留" : "每格 Anlas 硬上限"}</span>
             <input
               type="number"
-              min={0}
-              max={100000}
+              min={billingMode === "opus_zero_anlas" ? 0 : 1}
+              max={billingMode === "opus_zero_anlas" ? 0 : 100_000}
               value={perPanelCost}
-              onChange={(event) => setPerPanelCost(Number(event.target.value))}
+              readOnly={billingMode === "opus_zero_anlas"}
+              onChange={(event) => {
+                setPerPanelCost(Number(event.target.value));
+                setEstimate(null);
+                setConfirmed(false);
+              }}
             />
           </label>
           <button type="button" disabled={busy} onClick={() => void calculate()}>
@@ -153,28 +179,38 @@ export function WholeBookPlanner({ projectId, onError }: WholeBookPlannerProps) 
           <div className="book-metrics">
             <Metric label="章节" value={estimate.chapter_count} />
             <Metric label="页数" value={estimate.estimated_page_count} />
-            <Metric label="分格 / 最少调用" value={estimate.estimated_panel_count} />
+            <Metric label="分格 / 出图调用" value={`${estimate.estimated_panel_count} / ${estimate.estimated_calls}`} />
+            <Metric label="预计订阅核验" value={estimate.estimated_verification_calls} />
+            <Metric label="预计外部请求" value={estimate.estimated_external_requests} />
             <Metric label="成本预留" value={`${estimate.estimated_cost_upper_anlas} Anlas`} />
           </div>
           <p>{estimate.cost_notice}</p>
           <div className="book-limit-grid">
             <label>
-              <span>整本调用硬上限</span>
+              <span>整本出图调用硬上限</span>
               <input
                 type="number"
                 min={estimate.estimated_calls}
                 max={estimate.estimated_calls * 3}
                 value={maxCalls}
-                onChange={(event) => setMaxCalls(Number(event.target.value))}
+                onChange={(event) => {
+                  setMaxCalls(Number(event.target.value));
+                  setConfirmed(false);
+                }}
               />
             </label>
             <label>
-              <span>整本成本硬上限（Anlas）</span>
+              <span>{estimate.billing_mode === "opus_zero_anlas" ? "整本本地 Anlas 预留" : "整本 Anlas 硬上限"}</span>
               <input
                 type="number"
                 min={estimate.estimated_cost_upper_anlas}
+                max={estimate.billing_mode === "opus_zero_anlas" ? 0 : 100_000_000}
                 value={maxCost}
-                onChange={(event) => setMaxCost(Number(event.target.value))}
+                readOnly={estimate.billing_mode === "opus_zero_anlas"}
+                onChange={(event) => {
+                  setMaxCost(Number(event.target.value));
+                  setConfirmed(false);
+                }}
               />
             </label>
           </div>
@@ -192,7 +228,11 @@ export function WholeBookPlanner({ projectId, onError }: WholeBookPlannerProps) 
               checked={confirmed}
               onChange={(event) => setConfirmed(event.target.checked)}
             />
-            <span>我已核对章节范围、分镜、调用上限与成本预留。</span>
+            <span>
+              {estimate.billing_mode === "opus_zero_anlas"
+                ? `我已核对章节范围、分镜、最多 ${maxCalls} 次出图、${maxCalls} 次订阅核验、${maxCalls * 2} 次外部请求和 0 Anlas 本地预留；我理解资格核验不是账单保证，逐次实际费用可能保持未核实。`
+                : `我已核对章节范围、分镜、最多 ${maxCalls} 次出图与外部请求，以及标准计费成本硬上限。`}
+            </span>
           </label>
           <button
             type="button"
@@ -209,10 +249,18 @@ export function WholeBookPlanner({ projectId, onError }: WholeBookPlannerProps) 
           <div className="book-plan-summary">
             <div className="book-metrics">
               <Metric label="计划状态" value={statusLabel(plan.status)} />
-              <Metric label="调用" value={`${plan.calls_started} / ${plan.max_calls}`} />
-              <Metric label="已记录成本" value={`${plan.recorded_cost_anlas} / ${plan.max_cost_anlas} Anlas`} />
-              <Metric label="外部请求" value={plan.external_requests_started} />
+              <Metric label="出图调用" value={`${plan.calls_started} / ${plan.max_calls}`} />
+              <Metric label="订阅核验" value={`${plan.verification_calls_started} / ${plan.max_verification_calls}`} />
+              <Metric label="供应商已核实成本" value={`${plan.recorded_cost_anlas} / ${plan.max_cost_anlas} Anlas`} />
+              <Metric label="外部请求" value={`${plan.external_requests_started} / ${plan.max_external_requests}`} />
             </div>
+            {plan.unverified_cost_calls > 0 && (
+              <p className="field-note">
+                {plan.per_panel_cost_ceiling_anlas === 0
+                  ? `${plan.unverified_cost_calls} 次出图虽已完成资格核验，但供应商未回传逐次实际扣费，不能把 0 视为已核实账单。`
+                  : `${plan.unverified_cost_calls} 次出图的实际扣费未由供应商回传，保留为未核实记录。`}
+              </p>
+            )}
             <div className="book-plan-actions">
               {plan.status === "ready" && (
                 <button type="button" disabled={busy} onClick={() => void transition("start")}>启动整本计划</button>

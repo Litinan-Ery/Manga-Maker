@@ -13,6 +13,38 @@ from tests.test_continuity_api import prepare_two_approved_chapters
 from tests.test_generation_queue import prepare_prompting, transition
 
 
+def test_whole_book_zero_anlas_plan_cannot_widen_cost_limit(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, _chapters = prepare_book_project(client, session_headers)
+    estimated = client.post(
+        f"/api/v1/projects/{project_id}/book-production/estimate",
+        headers=session_headers,
+        json={"per_panel_cost_ceiling_anlas": 0},
+    )
+    assert estimated.status_code == 200, estimated.text
+    estimate = estimated.json()
+    assert estimate["billing_mode"] == "opus_zero_anlas"
+    assert estimate["cost_basis"] == "opus_zero_anlas_official_limits_v1"
+    assert estimate["estimated_cost_upper_anlas"] == 0
+    assert estimate["estimated_verification_calls"] == estimate["estimated_calls"]
+    assert estimate["estimated_external_requests"] == estimate["estimated_calls"] * 2
+
+    widened = client.post(
+        f"/api/v1/projects/{project_id}/book-production/plans",
+        headers=session_headers,
+        json={
+            "per_panel_cost_ceiling_anlas": 0,
+            "plan_fingerprint": estimate["plan_fingerprint"],
+            "max_calls": estimate["estimated_calls"],
+            "max_cost_anlas": 1,
+            "confirmed": True,
+        },
+    )
+    assert widened.status_code == 422
+    assert widened.json()["error"]["code"] == "BOOK_ZERO_ANLAS_LIMIT_INVALID"
+
+
 def test_whole_book_budget_requires_per_chapter_approval_and_runs_one_job_at_a_time(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
@@ -170,6 +202,96 @@ def test_restart_never_advances_book_and_unknown_chapter_cost_needs_review(
         assert plan["chapters"][1]["status"] == "approved"
         assert len(second.app.state.generation_queue.list_jobs(project_id)) == 1
         assert plan["calls_started"] == 1
+        assert plan["unverified_cost_calls"] == 1
+
+
+def test_chapter_retry_preserves_lifecycle_call_cost_and_unknown_cost_limits(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, _chapters = prepare_book_project(client, session_headers)
+    plan = create_ready_book_plan(client, session_headers, project_id)
+    plan = transition_book(client, session_headers, project_id, plan, "start")
+    plan = transition_book(client, session_headers, project_id, plan, "advance")
+    chapter_plan_id = plan["chapters"][0]["book_chapter_plan_id"]
+    first_job_id = plan["chapters"][0]["generation_job_id"]
+    queue = client.app.state.generation_queue
+
+    first_job = queue.get_job(project_id, first_job_id)
+    first_started = transition(
+        client, session_headers, project_id, first_job, "start"
+    )
+    first_attempt = queue.claim_next(first_started["job_id"])
+    assert first_attempt is not None
+    assert queue.mark_provider_request_started(first_attempt["attempt_id"])
+    queue.requeue_attempt(first_attempt["attempt_id"], error_code="PROVIDER_TEMPORARY")
+    queue.mark_job_needs_review(first_job_id, "TEST_RETRY_REQUIRED")
+
+    plan = transition_book(client, session_headers, project_id, plan, "advance")
+    assert plan["status"] == "needs_review"
+    assert plan["calls_started"] == 1
+    assert plan["allocated_cost_anlas"] == 10
+    assert plan["unverified_cost_calls"] == 1
+
+    retry = client.post(
+        f"/api/v1/projects/{project_id}/book-production/plans/"
+        f"{plan['book_plan_id']}/chapters/{chapter_plan_id}/retry",
+        headers=session_headers,
+        json={"expected_revision": plan["revision"]},
+    )
+    assert retry.status_code == 200, retry.text
+    plan = retry.json()
+    assert plan["status"] == "paused"
+    assert plan["chapters"][0]["generation_job_id"] is None
+    assert plan["calls_started"] == 1
+    assert plan["allocated_cost_anlas"] == 10
+    assert plan["unverified_cost_calls"] == 1
+
+    plan = transition_book(client, session_headers, project_id, plan, "resume")
+    plan = transition_book(client, session_headers, project_id, plan, "advance")
+    second_job_id = plan["chapters"][0]["generation_job_id"]
+    assert second_job_id != first_job_id
+    second_job = queue.get_job(project_id, second_job_id)
+    assert second_job["max_calls"] == 2
+    assert second_job["max_cost_anlas"] == 20
+    second_started = transition(
+        client, session_headers, project_id, second_job, "start"
+    )
+
+    second_attempt = queue.claim_next(second_started["job_id"])
+    assert second_attempt is not None
+    assert queue.mark_provider_request_started(second_attempt["attempt_id"])
+    queue.requeue_attempt(second_attempt["attempt_id"], error_code="PROVIDER_TEMPORARY")
+    final_attempt = queue.claim_next(second_started["job_id"])
+    assert final_attempt is not None
+    assert queue.mark_provider_request_started(final_attempt["attempt_id"])
+    queue.fail_attempt(
+        final_attempt["attempt_id"],
+        error_code="UNKNOWN_PROVIDER_OUTCOME",
+        outcome_unknown=True,
+    )
+
+    plan = transition_book(client, session_headers, project_id, plan, "advance")
+    assert plan["status"] == "needs_review"
+    assert plan["calls_started"] == 3
+    assert plan["allocated_cost_anlas"] == 30
+    assert plan["unverified_cost_calls"] == 3
+    assert plan["chapters"][0]["calls_started"] == 3
+
+    exhausted = client.post(
+        f"/api/v1/projects/{project_id}/book-production/plans/"
+        f"{plan['book_plan_id']}/chapters/{chapter_plan_id}/retry",
+        headers=session_headers,
+        json={"expected_revision": plan["revision"]},
+    )
+    assert exhausted.status_code == 409, exhausted.text
+    assert exhausted.json()["error"]["code"] == "BOOK_CHAPTER_RETRY_BUDGET_EXHAUSTED"
+    current = client.get(
+        f"/api/v1/projects/{project_id}/book-production/plans/current"
+    ).json()
+    assert current["calls_started"] == 3
+    assert current["allocated_cost_anlas"] == 30
+    assert current["unverified_cost_calls"] == 3
+    assert current["chapters"][0]["generation_job_id"] == second_job_id
 
 
 def prepare_book_project(

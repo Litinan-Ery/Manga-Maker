@@ -91,7 +91,13 @@ export function NovelAISettings({ projectId, vaultStatus, onError }: NovelAISett
             }
           : current,
       );
-      setMessage("连接测试通过：仅查询了标签建议，生成图片 0 张。");
+      setMessage(
+        result.zero_anlas_ready
+          ? "连接与订阅核验通过：当前为有效 Opus；仅查询标签与订阅，生成图片 0 张。"
+          : !result.model_supports_zero_anlas
+            ? "连接可用，但当前模型不支持已冻结的零 Anlas 载荷；请选择 Anime V4.5，或在生成控制台明确使用标准计费。"
+            : `连接可用，但订阅层级 ${result.subscription.subscription_tier} 不是有效 Opus；零 Anlas 队列会在出图前停止。`,
+      );
     });
   }
 
@@ -122,7 +128,7 @@ export function NovelAISettings({ projectId, vaultStatus, onError }: NovelAISett
         <span>{configuration?.last_connection_status === "ok" ? "连接已验证" : "尚未验证"}</span>
       </div>
       <p className="panel-description">
-        保存配置不会联网。连接测试必须由你点击触发，只查询标签建议，不生成图片、不自动重试。
+        默认使用 Opus 零 Anlas 配置。保存不会联网；连接测试只查询标签与订阅状态，不生成图片、不自动重试。
       </p>
 
       {!capabilities && <p className="empty-state">正在读取本地 NovelAI 契约…</p>}
@@ -168,9 +174,23 @@ export function NovelAISettings({ projectId, vaultStatus, onError }: NovelAISett
               {selectedModel.supports_precise_reference
                 ? "支持 V4.5 Precise Reference"
                 : "不支持 Precise Reference"}
+              ；{selectedModel.supports_opus_zero_anlas
+                ? "支持已冻结的 Opus 零 Anlas 载荷"
+                : !selectedModel.supports_multi_character_prompt
+                  ? "当前结构化 V4 生成链路不支持此模型"
+                : "仅支持标准计费，零 Anlas 预检会停止"}
               ；{selectedModel.prompt_token_note}
             </p>
           )}
+          <div className="zero-anlas-profile" role="note">
+            <strong>Opus 零 Anlas 默认上限</strong>
+            <span>
+              {capabilities.opus_zero_anlas_profile.default_dimensions
+                .map((size) => `${size.width}×${size.height}`)
+                .join(" / ")} · 单次 1 张 · 最多 {capabilities.opus_zero_anlas_profile.max_steps} 步
+            </span>
+            <small>不允许基础图、局部重绘或 Precise Reference；执行前会逐张实时核验 Opus。</small>
+          </div>
           <div className="button-row">
             <button type="button" disabled={busy || !canSave} onClick={() => void handleSave()}>
               仅保存本地配置

@@ -62,11 +62,20 @@ def test_ten_page_comic_mock_pipeline_exports_auditable_artifacts(
     }
     assert inspector.json()["external_requests_started"] == 0
 
-    estimate = estimate_plan(client, session_headers, project_id, chapter_id)
+    estimate = estimate_plan(
+        client,
+        session_headers,
+        project_id,
+        chapter_id,
+        per_panel_cost_ceiling_anlas=0,
+    )
     assert estimate["page_count"] == PAGE_COUNT
     assert estimate["panel_count"] == PAGE_COUNT
     assert estimate["estimated_calls"] == PAGE_COUNT
-    assert estimate["estimated_cost_upper_anlas"] == PAGE_COUNT * 10
+    assert estimate["estimated_verification_calls"] == PAGE_COUNT
+    assert estimate["estimated_external_requests"] == PAGE_COUNT * 2
+    assert estimate["billing_mode"] == "opus_zero_anlas"
+    assert estimate["estimated_cost_upper_anlas"] == 0
     assert len(estimate["panels"]) == PAGE_COUNT
 
     created = create_job(
@@ -79,6 +88,7 @@ def test_ten_page_comic_mock_pipeline_exports_auditable_artifacts(
     assert created.status_code == 201, created.text
     job = created.json()
     assert job["candidate_count_per_panel"] == 1
+    assert job["max_cost_anlas"] == 0
     assert len(job["items"]) == PAGE_COUNT
     assert all(len(item["provider_payload_sha256"]) == 64 for item in job["items"])
     assert all("provider_payload" not in item for item in job["items"])
@@ -95,6 +105,14 @@ def test_ten_page_comic_mock_pipeline_exports_auditable_artifacts(
     assert completed["status"] == "completed"
     assert completed["calls_started"] == PAGE_COUNT
     assert completed["calls_completed"] == PAGE_COUNT
+    assert completed["allocated_cost_anlas"] == 0
+    assert completed["recorded_cost_anlas"] == 0
+    assert completed["unverified_cost_calls"] == PAGE_COUNT
+    assert completed["verification_calls_started"] == PAGE_COUNT
+    assert completed["verification_calls_completed"] == PAGE_COUNT
+    assert completed["external_requests_started"] == PAGE_COUNT * 2
+    assert completed["external_requests_completed"] == PAGE_COUNT * 2
+    assert provider.subscription_calls == PAGE_COUNT
     assert provider.generation_calls == PAGE_COUNT
 
     assets = client.get(f"/api/v1/projects/{project_id}/generation/assets").json()

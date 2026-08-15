@@ -86,7 +86,7 @@ P2 可以评估一个**完全独立的可选伴侣脚本**：在用户授权后�
 2026-08-09 的实现基线读取 `https://image.novelai.net/docs/doc.json`：Swagger 2.0，
 标题 `Omegalaser API`，版本 `1.0`，112,680 bytes，SHA-256 为
 `f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8`。映射版本为
-`novelai-image-2026-08-09.2-v03-structure-1`。注意同主机的 `/openapi.json` 当前标题为
+`novelai-image-2026-08-09.3-v03-opus-zero-anlas-1`。注意同主机的 `/openapi.json` 当前标题为
 `Observability API`，只包含错误追踪能力，不是 Image API 契约。审计元数据保存在
 `contracts/novelai/`，应用启动时不会自动联网替换。
 
@@ -94,14 +94,15 @@ P0 只允许访问 `https://image.novelai.net` 的以下路径：
 
 | 官方路径 | P0 用途 | 决策 |
 |---|---|---|
-| `POST /ai/generate-image` | 文生图、img2img、inpaint | 主生产路径；请求 `Accept: application/json` |
+| `POST /ai/generate-image` | 文生图、img2img、inpaint | 主生产路径；请求 `Accept: application/zip`，并兼容已审计的 JSON 响应 |
 | `GET /ai/generate-image/suggest-tags` | 凭证与模型可用性检查、提示词辅助 | 必须由用户点击连接测试；不等于生成验收 |
+| `GET /user/subscription` | 核验 Opus 免费出图资格 | 零 Anlas 模式在每张图片请求前校验 active tier 3；每次核验都绑定 attempt 并计入冻结的外部请求上限；不读取或保存 Token |
 | `POST /ai/upscale` | 用户明确触发的素材放大 | P0 可选；结果另建 AssetVersion |
 | `POST /ai/generate-image-stream` | SSE 中间图与最终图 | P0 不使用；P1 再评估 |
 | `POST /ai/augment-image` | Director Tools | P0 非必需；适配器保留扩展位 |
 | `POST /ai/encode-vibe` | Vibe Transfer 编码 | P0 默认不使用，与 Precise Reference 分开评估 |
 
-P0 选择非流式 JSON 的原因：
+P0 选择非流式最终图片响应（ZIP 主路径、JSON 兼容）的原因：
 
 - 一格对应一次明确的最终结果，容易做原子落盘和失败恢复；
 - 不需要保存大量中间去噪图；
@@ -614,6 +615,8 @@ SourceChapter / StoryBeat
 
 ### 7.2 文本模型适配器
 
+面向用户的 TextModelProfile 配置契约固定为 `remark_name`（备注名称，可选）、`url`、`key_password`（Key/Password）和 `request_model`。首次保存必须提供 `key_password`；已有配置更新备注、URL 或 Request Model 时可省略它并复用原凭证引用。SQLite 只保存备注、URL、Request Model 与凭证引用，Key/Password 只进入已解锁的本地加密凭证库；读取响应永不返回秘密。后端继续接受旧字段别名用于历史客户端和工程恢复，但新界面只发送新契约。
+
 ```python
 class TextModelProvider(Protocol):
     async def validate_configuration(self) -> ProviderValidationResult: ...
@@ -800,12 +803,14 @@ inpaint 流程：
 
 ### 8.7 响应处理与元数据
 
-`POST /ai/generate-image` 使用 `Accept: application/json` 时，官方响应为 `images[]`，包含 base64 图片、index 和 seed。处理顺序：
+`POST /ai/generate-image` 请求 `Accept: application/zip`。生产端已观测到 `200`、
+`application/octet-stream` 与单 PNG 的 ZIP；为兼容已审计的旧契约，也接受 JSON
+`images[]`（base64 图片、index 和 seed）。处理顺序：
 
 1. 校验 HTTP 状态、Content-Type 和响应体上限；
-2. base64 解码到 staging，不把内容写日志；
+2. 对 ZIP 限制总大小、条目数、路径、文件类型和压缩比，或对 JSON 做严格 base64 解码；内容不写日志；
 3. 验证 PNG 魔数、完整解码、尺寸、像素数量和非空图像；
-4. 保存供应商返回 seed、模型、参数、提示词哈希、参考图哈希、时间和 correlation ID；
+4. JSON 有可信字段时保存供应商返回 seed；ZIP 未返回可验证 seed 时保存请求 seed 为 `effective_seed`、标记 `seed_source=request`，并保持 `response_seed=null`；同时保存模型、参数、提示词哈希、参考图哈希、时间和 correlation ID；
 5. 原始 NovelAI PNG 原样保留为 `original.png`；
 6. 合成或发布时使用重新编码的派生图，避免把提示词等生成元数据带入 PNG/PDF/CBZ。
 
@@ -949,7 +954,7 @@ PageApproval 冻结 PageVersion、ordered accepted AssetVersion、finding 状态
 | 候选未接受、finding blocker 或 PageApproval stale | `REVIEW_REQUIRED` | 阻止正式导出，定位候选/页面和依赖原因 |
 | 磁盘不足/写入失败 | `LOCAL_STORAGE_FAILURE` | 阻止下一请求，不更新当前指针 |
 
-每次请求生成 UUIDv7 `X-Correlation-ID`，同时记录本地 `attempt_id`。日志不得记录 Authorization、完整 prompt、base64、小说正文或图片字节。
+每次图像请求生成符合供应商契约的 6 位字母数字 `X-Correlation-ID`，同时记录本地 UUIDv7 `attempt_id` 与 `user_action_id`。日志不得记录 Authorization、完整 prompt、base64、小说正文或图片字节。
 
 ## 11. 成本模型
 
@@ -960,7 +965,7 @@ PageApproval 冻结 PageVersion、ordered accepted AssetVersion、finding 状态
 3. `CostEstimate`：每格候选数、请求区间、Job 上限、参考图附加成本和风险说明；
 4. `CostRecord`：实际请求数、候选数、成功/失败/重试、供应商可验证的扣费值，或明确标记为 `estimated_only`。
 
-当前未引入可能漂移的供应商定价公式。界面要求用户输入“每格每候选保守预留上限”，估算把候选数、参考图和允许的 revision 次数展开；每次实际发送前累加分配值，超限则不发请求。Image API 成功响应当前不回传可验证的逐次成本，因此结果显示为 `not_reported`，不得把保守预留改名为实际成本。
+当前未引入可能漂移的供应商定价公式。界面默认提供 Opus 零 Anlas 资格载荷与本地 0 Anlas 预留，并保留显式标准计费选择；估算分别展示出图调用、订阅核验和外部请求总数。最终调用或成本边界一旦修改，旧确认立即失效。每次实际发送前累加分配值，超限则不发请求；零 Anlas 图像请求还必须先完成同一 attempt 的订阅核验。Image API 成功响应当前不回传可验证的逐次成本；Opus active tier 3 也只证明请求前资格，不是账单回执，因此已发出的成功、失败、重试或启动恢复请求都保持未核实，不得把资格核验、本地 0 预留或保守预留改名为实际成本。整本章节重试通过不可变审计关联累计历史 Job，并只把章节生命周期的剩余额度分配给新 Job。
 
 生产报表按 accepted Panel 和 approved Page 聚合总成本：被拒绝候选、失败重试、reroll 和 inpaint 都计入，不能只显示最终选中图片的一次调用。文本成本与图像成本分栏，估算与供应商可验证实际值分栏。
 
@@ -1141,7 +1146,7 @@ MM-011 已保存经审阅的官方 Swagger 快照元数据：URL、抓取时间�
 | 单元 | LayoutValidator、DimensionSelector、TokenBudget/Truncation、Prompt Compiler、角色结构、质量规则、审批失效、参考图 padding、蒙版、状态机、版本指针、TXT/SourceAnchor |
 | Schema | Storyboard、PageLayoutDraft、PromptPlan、GenerationSpec、ProviderExecutionSpec、Candidate/Finding/Review/PageApproval、PageVersion、工程包 |
 | 文本模型 mock | capability 快照、Token 超限、空 content、finish_reason 截断、Schema 修复、stage checkpoint、shard 最小重跑和缓存失效 |
-| NovelAI mock | 连接和图像 201、401/403/余额/429/5xx、发送前网络失败、发送后结果不明、异常 JSON/base64/尺寸、单/双/三角色正负 captions/坐标、Precise Reference 和有界重试 |
+| NovelAI mock | 连接、图像 200/201 JSON/ZIP、401/403/余额/429/5xx、发送前网络失败、发送后结果不明、异常 JSON/base64/ZIP/尺寸、单/双/三角色正负 captions/坐标、Precise Reference 和有界重试 |
 | 质量/审片 | 候选完整性、规则幂等、finding 重开/豁免、接受/失效、PageApproval 与导出 blocker |
 | 恢复 | durable job/outbox 租约、每个两阶段提交断点、在途请求崩溃、staging reconciliation、取消/暂停、TextStage checkpoint |
 | 渲染 | 16 种分页/条漫模板、彩色/灰度、RTL、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
@@ -1211,7 +1216,7 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 | ADR-001 | 本地模块化单体，不拆微服务 | 降低本机部署和恢复复杂度；通过模块边界保留未来拆分可能 |
 | ADR-002 | 直接使用 Image API，不使用 Scripting 作为桥 | 符合官方沙箱边界，代价是需要自建安全适配器 |
 | ADR-003 | P0 自有薄适配器，不默认依赖社区 SDK | 契约和凭证边界可控，代价是需要维护模型映射 |
-| ADR-004 | 非流式 JSON 图片响应 | 原子落盘与恢复简单，暂不提供中间去噪预览 |
+| ADR-004 | 非流式最终图片响应（ZIP 主路径、JSON 兼容） | 原子落盘与恢复简单，暂不提供中间去噪预览 |
 | ADR-005 | 单写者、串行远端请求 | 降低状态损坏和过量负载风险，吞吐较低但适合单章 P0 |
 | ADR-006 | SQLite + 不可变文件 + reconciliation | 能保存大素材并支持恢复，需处理跨资源两阶段提交 |
 | ADR-007 | 逐格生成、本地排版 | 文字和布局可编辑，牺牲模型一次生成整页的表面速度 |

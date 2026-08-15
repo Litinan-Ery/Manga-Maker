@@ -110,9 +110,12 @@ export interface TextModelConfiguration {
   project_id: string;
   text_model_profile_id: string;
   provider: "openai-compatible";
+  remark_name: string | null;
+  url: string;
   provider_api_url: string;
   base_url: string;
   endpoint_host: string;
+  request_model: string;
   model_name: string;
   model: string;
   credential_profile_id: string;
@@ -128,6 +131,7 @@ export interface NovelAIModelCapability {
   label: string;
   inpaint_model_id: string;
   recommended: boolean;
+  supports_opus_zero_anlas: boolean;
   supports_precise_reference: boolean;
   supports_multi_character_prompt: boolean;
   supports_vibe_transfer: boolean;
@@ -144,6 +148,17 @@ export interface NovelAICapabilities {
   api_version: string;
   mapping_version: string;
   allowed_paths: Record<string, string>;
+  opus_zero_anlas_profile: {
+    profile_version: string;
+    required_tier: number;
+    max_pixels: number;
+    max_steps: number;
+    n_samples: number;
+    requires_single_image: true;
+    allows_base_or_reference_image: false;
+    default_dimensions: Array<{ width: number; height: number }>;
+    official_docs: string[];
+  };
   models: NovelAIModelCapability[];
 }
 
@@ -193,9 +208,12 @@ export interface GenerationEstimate {
   page_count: number;
   panel_count: number;
   estimated_calls: number;
+  estimated_verification_calls: number;
+  estimated_external_requests: number;
   per_panel_cost_ceiling_anlas: number;
   estimated_cost_upper_anlas: number;
-  cost_basis: "user_confirmed_per_panel_ceiling";
+  billing_mode: "standard" | "opus_zero_anlas";
+  cost_basis: "user_confirmed_per_panel_ceiling" | "opus_zero_anlas_official_limits_v1";
   cost_notice: string;
   plan_fingerprint: string;
   panels: GenerationPlanPanel[];
@@ -328,6 +346,10 @@ export interface GenerationJob {
   cost_basis: string;
   calls_started: number;
   calls_completed: number;
+  verification_calls_started: number;
+  verification_calls_completed: number;
+  max_verification_calls: number;
+  max_external_requests: number;
   items_claimed: number;
   allocated_cost_anlas: number;
   recorded_cost_anlas: number;
@@ -340,6 +362,7 @@ export interface GenerationJob {
   completed_at: string | null;
   items: GenerationJobItem[];
   external_requests_started: number;
+  external_requests_completed: number;
 }
 
 export interface GenerationAsset {
@@ -556,6 +579,8 @@ export interface BookEstimateChapter {
   page_count: number;
   panel_count: number;
   estimated_calls: number;
+  estimated_verification_calls: number;
+  estimated_external_requests: number;
   estimated_cost_upper_anlas: number;
 }
 
@@ -570,8 +595,11 @@ export interface BookEstimate {
   estimated_page_count: number;
   estimated_panel_count: number;
   estimated_calls: number;
+  estimated_verification_calls: number;
+  estimated_external_requests: number;
   estimated_cost_upper_anlas: number;
-  cost_basis: "user_confirmed_per_panel_ceiling";
+  billing_mode: "standard" | "opus_zero_anlas";
+  cost_basis: "user_confirmed_per_panel_ceiling" | "opus_zero_anlas_official_limits_v1";
   cost_notice: string;
   plan_fingerprint: string;
   external_request_created: false;
@@ -613,8 +641,13 @@ export interface BookPlanChapter {
   generation_job_status: GenerationJobStatus | null;
   calls_started: number;
   calls_completed: number;
+  verification_calls_started: number;
+  verification_calls_completed: number;
   allocated_cost_anlas: number;
   recorded_cost_anlas: number;
+  unverified_cost_calls: number;
+  external_requests_started: number;
+  external_requests_completed: number;
   retry_count: number;
   approved_at: string | null;
 }
@@ -642,9 +675,15 @@ export interface BookPlan {
   chapters: BookPlanChapter[];
   calls_started: number;
   calls_completed: number;
+  verification_calls_started: number;
+  verification_calls_completed: number;
   allocated_cost_anlas: number;
   recorded_cost_anlas: number;
+  unverified_cost_calls: number;
   external_requests_started: number;
+  external_requests_completed: number;
+  max_verification_calls: number;
+  max_external_requests: number;
 }
 
 export type ContinuityKind = "character" | "outfit" | "prop" | "location" | "plot";
@@ -1409,9 +1448,10 @@ export function getTextModelConfiguration(projectId: string): Promise<TextModelC
 export function saveTextModelConfiguration(
   projectId: string,
   configuration: {
-    provider_api_url: string;
-    model_name: string;
-    api_key: string;
+    remark_name?: string | null;
+    url: string;
+    key_password?: string;
+    request_model: string;
   },
 ): Promise<TextModelConfiguration> {
   return request<TextModelConfiguration>(
@@ -1476,6 +1516,15 @@ export function testNovelAIConnection(projectId: string): Promise<{
   provider_model_id: string;
   config_revision: number;
   suggestion_count: number;
+  subscription: {
+    profile_version: string;
+    subscription_active: boolean;
+    subscription_tier: number;
+    is_grace_period: boolean;
+    opus_active: boolean;
+  };
+  zero_anlas_ready: boolean;
+  model_supports_zero_anlas: boolean;
   generated_images: 0;
   last_connection_at: string;
 }> {

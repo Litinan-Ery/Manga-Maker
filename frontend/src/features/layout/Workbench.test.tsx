@@ -57,7 +57,7 @@ describe("LayoutWorkbench", () => {
     expect(await screen.findByText("版式版本 2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "校验版式与尺寸" }));
-    expect(await screen.findByText("1536 × 1024")).toBeInTheDocument();
+    expect(await screen.findByText("1216 × 832")).toBeInTheDocument();
     expect(screen.getAllByText("2.0%")).not.toHaveLength(0);
     fireEvent.click(screen.getByLabelText(/我已核对受影响对象/));
     fireEvent.click(screen.getByRole("button", { name: "批准当前版式" }));

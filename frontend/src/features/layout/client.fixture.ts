@@ -188,8 +188,8 @@ function validation(
   capabilities: DimensionCapabilitySet,
 ): LayoutApprovalValidation {
   const outcomes: DimensionSelection[] = leafFrames(snapshot.layout).map((frame, index) => {
-    const selected = index % 2 ? { width: 1365, height: 1024 } : { width: 1536, height: 1024 };
-    const candidateKey = index % 2 ? "landscape-1365x1024" : "landscape-1536x1024";
+    const selected = { width: 1216, height: 832 };
+    const candidateKey = "landscape-1216x832";
     const expectedCropRatio = index % 2 ? 0.01 : 0.02;
     return {
       contract_version: "1.0",

@@ -23,7 +23,12 @@ from ..pages.models import PageDocument
 from ..pages.service import PageService
 from ..shared_kernel import canonical_sha256
 from .assets import canonical_json, fsync_directory, write_synced
-from .queue import GenerationPlan, GenerationQueueService, _redacted_provider_payload
+from .queue import (
+    STANDARD_COST_BASIS,
+    GenerationPlan,
+    GenerationQueueService,
+    _redacted_provider_payload,
+)
 
 RevisionOperation = Literal["panel_reroll", "page_reroll", "inpaint"]
 MAX_MASK_BYTES = 8 * 1024 * 1024
@@ -412,6 +417,8 @@ class RevisionService:
             "contract_sha256": plan.base.contract_sha256,
             "candidate_count_per_panel": 1,
             "quality_rule_version": plan.base.quality_rule_version,
+            "billing_mode": "standard",
+            "cost_basis": STANDARD_COST_BASIS,
             "max_calls": max_calls,
             "max_cost_anlas": max_cost_anlas,
             "targets": [target.freeze_payload() for target in plan.targets],
