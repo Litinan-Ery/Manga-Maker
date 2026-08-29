@@ -4,7 +4,7 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、版式先行、PromptPlan/PromptPackage v2、NovelAI V4 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。真实文本模型、NovelAI 付费 smoke 与代表性授权章节生产仍需用户单独批准，不能由 Mock 结果替代。
+> 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、版式先行、PromptPlan/PromptPackage v2、NovelAI Diffusion V5 Full 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。2026-08-29 已使用授权《沙王》输入完成独立的真实 NovelAI V5 Full 零 Anlas 12 页验收与定向重绘；该证据不替代仍未完成的通用产品闭环。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，v0.3 所有权与追踪基线见 [V03_IMPLEMENTATION_BASELINE.md](docs/architecture/V03_IMPLEMENTATION_BASELINE.md)，关键决策的兼容/回滚/删除条件见 [ADR-010-018.md](docs/adr/ADR-010-018.md)，v0.2 P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
@@ -18,15 +18,16 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | TXT 导入与章节修正 | 已实现 | UTF-8/BOM/GB18030/GBK 候选；支持改名、拆分、合并 |
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
 | 文本模型与结构化改编 | 已实现（Mock 验收） | 界面字段为备注名称（可选）、URL、Key/Password、Request Model；Key/Password 本地加密保存且更新其他字段时可留空保留，同一配置生成分镜、角色/风格设定、固定 Tags 和逐格 Prompt；未做真实调用 |
+| Storyboard 1.1 逐页政策 | 已实现（Mock 与 E2E 验收） | 文本模型自动标注页型；普通页必须 3–6 格，封面/通页/特殊页允许 1–6 格；页型只读展示，违规会阻止修改、审批、设定、页面与 Layout；1.0 历史分镜保持只读 |
 | CharacterBible、StyleBible 与参考图 | 已实现（Mock 验收） | 从已审批分镜调用当前文本模型草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
-| CharacterTagSet、PromptPlan 与 ProviderExecutionSpec | v0.3 多角色链路已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；PromptPlan v2 保留每角色正负区块、动作、顺序、版式坐标与关系动作；版本化 mapper 生成并冻结 NovelAI V4 base/正负角色 captions、坐标、payload hash；旧 flat prompt 只读且不能创建新 Job |
+| CharacterTagSet、PromptPlan 与 ProviderExecutionSpec | v0.3 多角色链路已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；PromptPlan v2 保留每角色正负区块、动作、顺序、版式坐标与关系动作；版本化 mapper 默认生成并冻结 NovelAI V5 Full 的 base/正负角色 captions、坐标、V5 hints 与 payload hash；API 保留的 `v4_prompt` 字段名只是 V5 线协议；旧 flat prompt 只读且不能创建新 Job |
 | Prompt Inspector 与生成审批 | v0.3 已实现（Mock 验收） | 逐格显示结构化字段、固定 Tags、映射对照、脱敏 payload、哈希、影响与调用/成本边界；编辑后必须保存并重新预览，审批与 Job 创建均幂等，尚不包含候选审片 |
-| NovelAI 契约、配置与连接测试 | 已实现（Mock 验收） | 固定官方 Swagger 哈希与模型能力；Token 在应用本地加密保存；连接测试须点击触发且只查标签与订阅、不出图；同时说明所选模型是否支持零 Anlas；未做真实调用 |
+| NovelAI 契约、配置与连接测试 | 已实现（真实 V5 验收） | 固定官方 Swagger 哈希与模型能力；Token 在应用本地加密保存；连接测试须点击触发且只查标签与订阅、不出图；《沙王》验收已真实确认 V5 Full 与零 Anlas 资格 |
 | 有界串行生成队列 | v0.3 冻结已实现（Mock 验收） | GenerationApproval 原子冻结 PromptPlan、ProviderExecutionSpec/payload、Layout、CharacterTagSet、模型/mapping/rule、seed、参考图来源和每格候选数；全局单在途、暂停/取消和重启转人工审阅 |
-| NovelAI 逐格执行与素材版本 | 已实现（离线 Mock 验收） | 二次明确确认后才执行；执行前先复验全部冻结哈希、再读取凭证，只发送审批时冻结的 payload；默认 Opus 零 Anlas 资格载荷与本地 0 预留（不是账单保证）、可显式选择标准计费；固定 host、最多一张 Precise Reference、严格 200/201 JSON 或安全 ZIP/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；未做真实付费 smoke |
+| NovelAI 逐格执行与素材版本 | 已实现（真实 V5 零 Anlas 验收） | 二次明确确认后才执行；执行前先复验全部冻结哈希、再读取凭证，只发送审批时冻结的 payload；固定 host、严格 200/201 JSON 或安全 ZIP/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；《沙王》已完成 12 张真实 V5 Full 初版及失败页重绘，未验证付费 Anlas 路径 |
 | 本地页面排版与不可变 PageVersion | 已实现 | 16 种分页/条漫模板、黑白或彩色、LTR/RTL/竖向阅读、裁切焦点/缩放、气泡/旁白/音效/页码；后端按页面尺寸规范输出 PNG；修改不访问图像 API |
 | 项目可复用素材库 | 已实现 | 收藏已有不可变面板素材，维护角色/道具/场景/面板标签，跨页引用；归档可恢复，不复制图片、不调用图像 API |
-| reroll、inpaint 与历史恢复 | 已实现（离线 Mock 验收） | 单格/整页冻结父版本与成本，PNG 蒙版局部重绘，结果创建 AssetVersion + PageVersion；两层人工确认后才可执行；恢复不调用外部服务 |
+| reroll、inpaint 与历史恢复 | 已实现（reroll 已真实 V5 验收） | 单格/整页 reroll 可选择 V5 Opus 零 Anlas 模式并在每张图前重验使用额度；《沙王》第 8、12 页已按视觉问题真实定向重绘并保留父版本；PNG 蒙版局部重绘仍必须显式设置付费上限，恢复不调用外部服务 |
 | 工程包、PNG、PDF、CBZ 导出 | 已实现 | v1.5 工程包包含 v0.3 版式、审批、lineage、ProviderExecutionSpec 与 GenerationApproval；导出在 staging 完整校验后登记，失败不改旧导出 |
 | 工程包 dry-run 与恢复 | 已实现 | v1.5 完整 round-trip；保留 v1.4 compatibility reader。恢复会重建 ID 绑定的哈希与快照，并把历史生成审批标为 stale，重新配置凭据、估算和审批后才可再次付费执行。schema 16 迁移前备份与旧主版本回滚演练仍由 MM-044/MM-059 收口 |
 | 崩溃恢复与本地完整性检查 | 已实现 | 启动时只做本地 reconciliation；未知计费转人工审阅，半成品保留在恢复边界，不会自动重放付费任务 |

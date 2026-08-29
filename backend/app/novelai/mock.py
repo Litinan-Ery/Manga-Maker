@@ -19,7 +19,7 @@ from .client import (
 class MockNovelAIClient:
     """Deterministic offline provider used by tests and later queue simulations."""
 
-    provider_model_id: str = "nai-diffusion-4-5-full"
+    provider_model_id: str = "nai-diffusion-5-full"
     suggestion_count: int = 1
     failure: NovelAIError | None = None
     generation_failure: NovelAIError | None = None
@@ -47,6 +47,9 @@ class MockNovelAIClient:
             tier=self.subscription_tier,
             expires_at=None,
             is_grace_period=False,
+            usage_percent=100,
+            usage_is_negative=False,
+            usage_time_until_next_percent=0,
         )
 
     async def generate_image(self, request: NovelAIImageRequest) -> NovelAIGeneratedImage:

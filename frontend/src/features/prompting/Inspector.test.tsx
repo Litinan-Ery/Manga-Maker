@@ -101,7 +101,7 @@ function fixture(): PromptInspector {
         provider_payload_sha256: "f".repeat(64),
         provider_payload: { action: "generate", parameters: { seed: 42 } },
         mapping_version: "mapping-1",
-        model_id: "nai-diffusion-4-5-full",
+        model_id: "nai-diffusion-5-full",
       },
     ],
     impact: { impacts: [], requires_reestimate: false },

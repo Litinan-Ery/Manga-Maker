@@ -18,7 +18,7 @@ from ..ids import uuid7
 from ..modules.layout.contracts import FrameSpec
 from ..modules.layout.domain import frame_content_sha256
 from ..modules.production.adapters.novelai import (
-    NovelAIV4Payload,
+    NovelAIPayload,
     require_frozen_novelai_payload,
 )
 from ..modules.production.contracts import ProviderExecutionSpec
@@ -44,10 +44,11 @@ from ..novelai.client import (
     NovelAIResponseFormatError,
     NovelAITemporaryError,
     NovelAIUnknownOutcomeError,
+    NovelAIUsageLimitUnavailableError,
     PreciseReferenceInput,
     SecretReader,
     novelai_correlation_id,
-    require_active_opus,
+    require_opus_zero_anlas_available,
 )
 from ..prompting.models import CharacterTagBundleDocument, PromptBundleDocument
 from ..shared_kernel import canonical_sha256
@@ -148,7 +149,7 @@ class GenerationSpecCompiler:
                     409,
                 )
             reference_use = ReferenceUse.model_validate(frozen_reference)
-            reference_images = NovelAIV4Payload.model_validate_json(
+            reference_images = NovelAIPayload.model_validate_json(
                 str(context["provider_payload_json"])
             ).parameters.director_reference_images
             if not reference_images or len(reference_images) != 1:
@@ -177,6 +178,14 @@ class GenerationSpecCompiler:
         if spec_action is None:
             raise ApplicationError("GENERATION_OPERATION_INVALID", "生成任务操作类型无效。", 409)
         billing_mode = self._billing_mode(context)
+        approved_execution_spec = ProviderExecutionSpec.model_validate_json(
+            str(context["provider_execution_spec_json"])
+        )
+        frozen_payload = require_frozen_novelai_payload(
+            approved_execution_spec,
+            NovelAIPayload.model_validate_json(str(context["provider_payload_json"])),
+        )
+        frozen_parameters = frozen_payload.parameters
         document = GenerationSpecDocument(
             schema_version="1.5",
             spec_id=spec_id,
@@ -234,10 +243,10 @@ class GenerationSpecCompiler:
             negative_prompt=negative_prompt,
             width=int(context["selected_width"]),
             height=int(context["selected_height"]),
-            steps=28,
-            scale=5.0,
-            sampler="k_euler_ancestral",
-            noise_schedule="karras",
+            steps=frozen_parameters.steps,
+            scale=frozen_parameters.scale,
+            sampler=frozen_parameters.sampler,
+            noise_schedule=frozen_parameters.noise_schedule,
             seed=seed,
             references=[reference_use] if reference_use is not None else [],
             parent_asset_version_id=revision_inputs["parent_asset_version_id"],
@@ -258,9 +267,6 @@ class GenerationSpecCompiler:
                 else "approved_prompt_package"
             ),
         )
-        approved_execution_spec = ProviderExecutionSpec.model_validate_json(
-            str(context["provider_execution_spec_json"])
-        )
         execution_spec = approved_execution_spec.model_copy(
             update={
                 "provider_execution_spec_id": uuid5(
@@ -270,10 +276,7 @@ class GenerationSpecCompiler:
                 "generation_spec_id": UUID(document.spec_id),
             }
         )
-        frozen_payload = require_frozen_novelai_payload(
-            execution_spec,
-            NovelAIV4Payload.model_validate_json(str(context["provider_payload_json"])),
-        )
+        frozen_payload = require_frozen_novelai_payload(execution_spec, frozen_payload)
         return CompiledGenerationSpec(
             document=document,
             provider_execution_spec=execution_spec,
@@ -684,7 +687,7 @@ class GenerationSpecCompiler:
             execution_spec = ProviderExecutionSpec.model_validate_json(
                 str(context["provider_execution_spec_json"])
             )
-            payload = NovelAIV4Payload.model_validate_json(
+            payload = NovelAIPayload.model_validate_json(
                 str(context["provider_payload_json"])
             )
             references = json.loads(str(context["character_tag_set_refs_json"]))
@@ -861,7 +864,7 @@ class GenerationSpecCompiler:
         reference: PreciseReferenceInput | None,
         *,
         execution_spec: ProviderExecutionSpec,
-        frozen_payload: NovelAIV4Payload,
+        frozen_payload: NovelAIPayload,
         source_image_base64: str | None,
         mask_base64: str | None,
     ) -> NovelAIImageRequest:
@@ -944,10 +947,21 @@ class GenerationExecutor:
                 compiled.provider_execution_spec,
                 compiled.provider_payload,
             )
-            configuration = self.compiler.configuration_for_attempt(attempt_id)
+            with self.vault.credential_transaction():
+                configuration = self.compiler.configuration_for_attempt(attempt_id)
+                secret_value: str | None = self.vault.get_secret(
+                    configuration.credential_profile_id
+                )
         except ApplicationError as exc:
             self.queue.fail_attempt(
                 attempt_id, error_code=exc.code, outcome_unknown=False
+            )
+            return "failed"
+        except (VaultLockedError, KeyError) as exc:
+            self.queue.fail_attempt(
+                attempt_id,
+                error_code=provider_error_code(exc),
+                outcome_unknown=False,
             )
             return "failed"
         except (
@@ -961,8 +975,6 @@ class GenerationExecutor:
             return "failed"
 
         try:
-            secret_value: str | None = self.vault.get_secret(configuration.credential_profile_id)
-
             def frozen_secret_reader(profile_id: str) -> str:
                 if secret_value is None or profile_id != configuration.credential_profile_id:
                     raise KeyError(profile_id)
@@ -992,12 +1004,16 @@ class GenerationExecutor:
             try:
                 subscription = await provider.get_subscription()
                 self.queue.complete_verification_request(attempt_id)
-                require_active_opus(subscription)
+                require_opus_zero_anlas_available(
+                    subscription,
+                    compiled.document.provider_model_id,
+                )
                 zero_anlas_verification = subscription.zero_anlas_verification()
             except (
                 NovelAIAuthenticationError,
                 NovelAIPermissionError,
                 NovelAIOpusRequiredError,
+                NovelAIUsageLimitUnavailableError,
                 NovelAIRateLimitError,
                 NovelAIInvalidRequestError,
                 NovelAITemporaryError,
@@ -1128,6 +1144,8 @@ def provider_error_code(exc: Exception) -> str:
         return "PROVIDER_QUOTA"
     if isinstance(exc, NovelAIOpusRequiredError):
         return "PROVIDER_OPUS_REQUIRED"
+    if isinstance(exc, NovelAIUsageLimitUnavailableError):
+        return "PROVIDER_V5_USAGE_LIMIT_UNAVAILABLE"
     if isinstance(exc, NovelAIRateLimitError):
         return "PROVIDER_RATE_LIMITED"
     if isinstance(exc, NovelAIInvalidRequestError):

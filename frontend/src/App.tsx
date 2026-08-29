@@ -51,6 +51,7 @@ export function App() {
   const [actionError, setActionError] = useState("");
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const [adaptationRefreshKey, setAdaptationRefreshKey] = useState(0);
+  const [textModelRefreshKey, setTextModelRefreshKey] = useState(0);
   const [bibleRefreshKey, setBibleRefreshKey] = useState(0);
   const [promptRefreshKey, setPromptRefreshKey] = useState(0);
 
@@ -220,7 +221,12 @@ export function App() {
       )}
 
       {state.kind === "ready" && hasSession && (
-        <CredentialPanel status={vaultStatus} onStatusChange={setVaultStatus} />
+        <CredentialPanel
+          status={vaultStatus}
+          onStatusChange={setVaultStatus}
+          projectId={selectedProjectId || null}
+          onTextModelSaved={() => setTextModelRefreshKey((current) => current + 1)}
+        />
       )}
 
       {state.kind === "ready" && hasSession && <RecoveryStatus onError={setActionError} />}
@@ -355,6 +361,7 @@ export function App() {
                 vaultStatus={vaultStatus}
                 onError={setActionError}
                 refreshKey={adaptationRefreshKey}
+                textModelRefreshKey={textModelRefreshKey}
                 onChanged={() => setBibleRefreshKey((current) => current + 1)}
               />
               {layoutClient && (

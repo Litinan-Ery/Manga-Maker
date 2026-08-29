@@ -18,7 +18,6 @@ import {
   getStoryBeats,
   getTextModelConfiguration,
   reviseStoryboard,
-  saveTextModelConfiguration,
   testTextModelConfiguration,
 } from "./api";
 
@@ -28,6 +27,7 @@ interface StoryboardWorkbenchProps {
   vaultStatus: VaultStatus | null;
   onError: (message: string) => void;
   refreshKey: number;
+  textModelRefreshKey: number;
   onChanged?: () => void;
 }
 
@@ -37,15 +37,12 @@ export function StoryboardWorkbench({
   vaultStatus,
   onError,
   refreshKey,
+  textModelRefreshKey,
   onChanged,
 }: StoryboardWorkbenchProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [beatSet, setBeatSet] = useState<StoryBeatSet | null>(null);
   const [configuration, setConfiguration] = useState<TextModelConfiguration | null>(null);
-  const [remarkName, setRemarkName] = useState("");
-  const [url, setUrl] = useState("https://api.openai.com/v1");
-  const [keyPassword, setKeyPassword] = useState("");
-  const [requestModel, setRequestModel] = useState("");
   const [pageBudget, setPageBudget] = useState(8);
   const [preferences, setPreferences] = useState("");
   const [confirmedDataSend, setConfirmedDataSend] = useState(false);
@@ -55,13 +52,26 @@ export function StoryboardWorkbench({
   const [connectionMessage, setConnectionMessage] = useState("");
 
   const selectedChapter = chapterSet.chapters.find((chapter) => chapter.chapter_id === chapterId);
-  const requiresKeyPassword =
-    !configuration || configuration.credential_status === "missing";
   const dirty = Boolean(
     storyboard && draft && JSON.stringify(draft) !== JSON.stringify(storyboard.document),
   );
   const draftUnresolvedCount =
     draft?.beat_resolutions.filter((resolution) => resolution.status === "unresolved").length ?? 0;
+  const pagePolicyFindings = useMemo(() => {
+    if (!draft) return [];
+    if (draft.schema_version !== "1.1") {
+      return ["这是 1.0 历史分镜，只能只读；请重新生成 1.1 分镜。"];
+    }
+    return draft.pages.flatMap((page) => {
+      if (!page.page_type) return [`第 ${page.page_number} 页缺少页面类型。`];
+      const minimum = page.page_type === "standard" ? 3 : 1;
+      return page.panels.length < minimum || page.panels.length > 6
+        ? [
+            `第 ${page.page_number} 页为 ${pageTypeLabel(page.page_type)}，需要 ${minimum}–6 格，当前为 ${page.panels.length} 格。`,
+          ]
+        : [];
+    });
+  }, [draft]);
   const sourceByBeatId = useMemo(
     () => new Map(beatSet?.beats.map((beat) => [beat.beat_id, beat.source_excerpt]) ?? []),
     [beatSet],
@@ -81,9 +91,6 @@ export function StoryboardWorkbench({
       .then((result) => {
         if (!active) return;
         setConfiguration(result);
-        setRemarkName(result.remark_name ?? "");
-        setUrl(result.url);
-        setRequestModel(result.request_model);
       })
       .catch((error: unknown) => {
         if (error instanceof ApiError && error.status === 404) return;
@@ -92,7 +99,7 @@ export function StoryboardWorkbench({
     return () => {
       active = false;
     };
-  }, [onError, projectId]);
+  }, [onError, projectId, textModelRefreshKey]);
 
   useEffect(() => {
     if (!chapterId) return;
@@ -124,27 +131,6 @@ export function StoryboardWorkbench({
       active = false;
     };
   }, [chapterId, onError, projectId, refreshKey]);
-
-  async function saveConfiguration() {
-    if (requiresKeyPassword && !keyPassword) {
-      onError("首次配置请输入 Key/Password。保存后不会回显。");
-      return;
-    }
-    await run(async () => {
-      const saved = await saveTextModelConfiguration(projectId, {
-        remark_name: remarkName.trim() || null,
-        url,
-        request_model: requestModel,
-        ...(keyPassword ? { key_password: keyPassword } : {}),
-      });
-      setConfiguration(saved);
-      setRemarkName(saved.remark_name ?? "");
-      setUrl(saved.url);
-      setRequestModel(saved.request_model);
-      setKeyPassword("");
-      setConnectionMessage("配置已保存在本机，尚未发出网络请求。");
-    });
-  }
 
   async function testConnection() {
     await run(async () => {
@@ -189,7 +175,7 @@ export function StoryboardWorkbench({
   }
 
   async function approve() {
-    if (!storyboard || dirty) return;
+    if (!storyboard || dirty || pagePolicyFindings.length > 0) return;
     await run(async () => {
       const approved = await approveStoryboard(projectId, storyboard.storyboard_version_id);
       setStoryboard(approved);
@@ -318,62 +304,10 @@ export function StoryboardWorkbench({
 
       <div className="model-settings">
         <h3>文本模型</h3>
-        <div className="model-settings-grid">
-          <label>
-            <span>备注名称（可选）</span>
-            <input
-              value={remarkName}
-              onChange={(event) => setRemarkName(event.target.value)}
-              placeholder="例如：主力分镜模型"
-            />
-          </label>
-          <label>
-            <span>URL</span>
-            <input
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://api.example.com/v1"
-            />
-          </label>
-          <label className="secret-field">
-            <span>Key/Password</span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={keyPassword}
-              placeholder={
-                configuration?.credential_status === "missing"
-                  ? "凭证缺失，请重新输入"
-                  : configuration
-                    ? "留空则保留当前 Key/Password"
-                    : "仅加密保存在本机"
-              }
-              onChange={(event) => setKeyPassword(event.target.value)}
-            />
-          </label>
-          <label>
-            <span>Request Model</span>
-            <input
-              value={requestModel}
-              onChange={(event) => setRequestModel(event.target.value)}
-              placeholder="例如：gpt-4.1-mini"
-            />
-          </label>
-        </div>
+        <p className="panel-description">
+          配置入口已统一到页面上方的“模型凭证库”；这里仅显示当前项目配置并执行显式连接测试。
+        </p>
         <div className="button-row">
-          <button
-            type="button"
-            disabled={
-              busy ||
-              !url ||
-              !requestModel ||
-              (requiresKeyPassword && !keyPassword) ||
-              !vaultStatus?.unlocked
-            }
-            onClick={() => void saveConfiguration()}
-          >
-            保存模型配置
-          </button>
           <button
             type="button"
             className="quiet-button"
@@ -383,11 +317,13 @@ export function StoryboardWorkbench({
             由我触发连接测试
           </button>
         </div>
-        {configuration && (
+        {configuration ? (
           <p className="configuration-summary">
             当前：{configuration.remark_name ? `${configuration.remark_name} · ` : ""}
             {configuration.endpoint_host} · {configuration.request_model} · Key/Password {configuration.credential_fingerprint ?? "已保存"} · 配置版本 {configuration.revision}
           </p>
+        ) : (
+          <p className="warning-inline">尚未配置文本模型，请先在页面上方保存四字段配置。</p>
         )}
       </div>
 
@@ -458,7 +394,7 @@ export function StoryboardWorkbench({
             <div>
               <strong>{statusLabel(storyboard.approval_status)}</strong>
               <span>
-                {draft.pages.length} 页 · {draft.pages.reduce((sum, page) => sum + page.panels.length, 0)} 格 · {draftUnresolvedCount} 个未解决节拍
+                {draft.pages.length} 页 · {draft.pages.reduce((sum, page) => sum + page.panels.length, 0)} 格 · {draftUnresolvedCount} 个未解决节拍 · {pagePolicyFindings.length} 个页型/格数异常
               </span>
             </div>
             <code>{storyboard.source_fingerprint.slice(0, 12)}</code>
@@ -563,6 +499,9 @@ export function StoryboardWorkbench({
               <article key={page.page_id} className="page-card">
                 <header>
                   <strong>第 {page.page_number} 页</strong>
+                  <span className={pagePolicyFindingForPage(page) ? "page-policy-invalid" : "page-policy-valid"}>
+                    {page.page_type ? pageTypeLabel(page.page_type) : "未分类"} · {page.panels.length} 格 · {pagePolicyFindingForPage(page) ? "格数异常" : "符合规则"}
+                  </span>
                   <label>
                     <span>本页叙事功能</span>
                     <input
@@ -582,10 +521,23 @@ export function StoryboardWorkbench({
             ))}
           </section>
 
+          {pagePolicyFindings.length > 0 && (
+            <div className="warning-inline storyboard-policy-warning" role="alert">
+              <strong>页面策略尚未满足</strong>
+              <ul>
+                {pagePolicyFindings.map((finding) => <li key={finding}>{finding}</li>)}
+              </ul>
+            </div>
+          )}
+
           <div className="editor-footer storyboard-footer">
             <span>{dirty ? "有尚未保存的分镜修改" : "当前版本已保存"}</span>
             <div className="button-row">
-              <button type="button" disabled={busy || !dirty} onClick={() => void saveRevision()}>
+              <button
+                type="button"
+                disabled={busy || !dirty || draft.schema_version !== "1.1"}
+                onClick={() => void saveRevision()}
+              >
                 保存为新版本
               </button>
               <button
@@ -595,7 +547,8 @@ export function StoryboardWorkbench({
                   busy ||
                   dirty ||
                   storyboard.approval_status !== "draft" ||
-                  draft.beat_resolutions.some((resolution) => resolution.status === "unresolved")
+                  draft.beat_resolutions.some((resolution) => resolution.status === "unresolved") ||
+                  pagePolicyFindings.length > 0
                 }
                 onClick={() => void approve()}
               >
@@ -607,6 +560,26 @@ export function StoryboardWorkbench({
       )}
     </section>
   );
+}
+
+function pageTypeLabel(pageType: NonNullable<StoryboardDocument["pages"][number]["page_type"]>) {
+  return {
+    standard: "普通页",
+    cover: "封面",
+    splash: "通页大场面",
+    special: "特殊页",
+  }[pageType];
+}
+
+function pagePolicyFindingForPage(
+  page: StoryboardDocument["pages"][number],
+): string | null {
+  if (!page.page_type) return "缺少页面类型";
+  const minimum = page.page_type === "standard" ? 3 : 1;
+  if (page.panels.length < minimum || page.panels.length > 6) {
+    return `${minimum}–6 格`;
+  }
+  return null;
 }
 
 function PanelEditor({

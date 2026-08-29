@@ -24,11 +24,18 @@ class PageTemplate:
     def panel_count(self) -> int:
         return len(self.frames)
 
+    @property
+    def compatible_page_types(self) -> tuple[str, ...]:
+        if self.panel_count <= 2:
+            return ("cover", "splash", "special")
+        return ("standard", "cover", "splash", "special")
+
     def payload(self) -> dict[str, object]:
         return {
             "template_id": self.template_id,
             "label": self.label,
             "panel_count": self.panel_count,
+            "compatible_page_types": list(self.compatible_page_types),
             "width": self.width,
             "height": self.height,
             "reading_direction": self.reading_direction,

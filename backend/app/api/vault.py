@@ -107,12 +107,25 @@ def upsert_profile(
     verify_session(request, headers)
     try:
         vault = cast(CredentialVault, request.app.state.vault)
-        return vault.upsert_secret(
-            profile_id,
-            provider=body.provider,
-            label=body.label,
-            secret=body.secret.get_secret_value(),
-        )
+        secret = body.secret.get_secret_value()
+        with vault.credential_transaction():
+            vault.validate_secret_update(profile_id, secret)
+            existing = next(
+                (
+                    profile
+                    for profile in vault.list_profiles()
+                    if profile["profile_id"] == profile_id
+                ),
+                None,
+            )
+            if existing is not None:
+                request.app.state.novelai.invalidate_credential_profile(profile_id)
+            return vault.upsert_secret(
+                profile_id,
+                provider=body.provider,
+                label=body.label,
+                secret=secret,
+            )
     except VaultLockedError as exc:
         raise ApplicationError(
             code="VAULT_LOCKED",
@@ -131,7 +144,19 @@ def upsert_profile(
 def delete_profile(profile_id: str, request: Request, headers: Headers) -> None:
     verify_session(request, headers)
     try:
-        removed = request.app.state.vault.delete_secret(profile_id)
+        vault = cast(CredentialVault, request.app.state.vault)
+        with vault.credential_transaction():
+            existing = next(
+                (
+                    profile
+                    for profile in vault.list_profiles()
+                    if profile["profile_id"] == profile_id
+                ),
+                None,
+            )
+            if existing is not None:
+                request.app.state.novelai.invalidate_credential_profile(profile_id)
+            removed = vault.delete_secret(profile_id)
     except VaultLockedError as exc:
         raise ApplicationError(
             code="VAULT_LOCKED",

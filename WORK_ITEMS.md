@@ -4,7 +4,7 @@
 |---|---|
 | 版本 | v0.3 |
 | 日期 | 2026-08-13 |
-| 状态 | v0.2 工单已完成；v0.3 Wave 3 与 MM-066 已完成，下一顺序工单为 MM-038 |
+| 状态 | v0.2 工单已完成；Storyboard 1.1 逐页分镜政策 MM-068→MM-071 已完成；恢复 MM-038 候选闭环开发 |
 | 拆票代码基线 | `main@40f2cb9`；当前 v0.3 `PRD.md` 与 `TECHNICAL_ARCHITECTURE.md` 为需求来源，不代表代码已交付 |
 | 产品范围 | 以 README、PRD、TECHNICAL_ARCHITECTURE 为准 |
 
@@ -32,7 +32,7 @@
 | 数据库 | schema 32；模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval、生成核验调用审计与文本模型备注迁移已落地；Prompt 审批幂等键按审批对象隔离 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
 | 后端能力 | 公开模块契约、版式门禁、结构化多角色 mapper、审批冻结和发送前复验已实现 | 缺少候选/质检/接受、PageApproval 与正式导出门禁 |
 | 前端 | feature boundary、Layout Workbench 与 Prompt Inspector 已实现 | 缺少 Candidate Review、页面批准和真实导出预检状态 |
-| 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、真实双角色与授权章节证据仍未完成 |
+| 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；《沙王》真实 V5 Full 零 Anlas 双角色页、12 页授权章节与 reroll 证据已完成；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、多候选接受/PageApproval、外部文本与付费路径仍未完成 |
 
 以上测试数字来自 v0.2 已归档完成证据，本次拆票不把它们当作重新执行后的结果。开发开始时先由 MM-024 复跑并固定基线。
 
@@ -47,6 +47,7 @@
 | MM-038～MM-043、MM-058、MM-062、MM-064～MM-065 | `backend/app/modules/review/`、`backend/app/modules/composition/`、`backend/app/modules/exporting/`、`frontend/src/features/review/`、`frontend/src/features/exporting/` | `backend/app/pages/`、`backend/app/exports/`、`frontend/src/PageComposer.tsx`、`frontend/src/ExportCenter.tsx` |
 | MM-044～MM-046、MM-059～MM-060、MM-063 | 各模块 `migrations/`、`tests/e2e/`、`tests/recovery/`、验收报告 | schema 16、工程包 v1.4、`P0_ACCEPTANCE_REPORT.md` |
 | MM-047～MM-051、MM-061 | `backend/app/modules/text_execution/`、`backend/app/workflows/chapter_production/`、`frontend/src/features/adaptation/`、`tests/modules/text_execution/` | `backend/app/adaptation/text_model.py`、`backend/app/adaptation/service.py`、`frontend/src/StoryboardWorkbench.tsx` |
+| MM-068～MM-071 | `backend/app/adaptation/`、`backend/app/modules/adaptation/`、`backend/app/pages/`、`frontend/src/StoryboardWorkbench.tsx`、`frontend/src/features/layout/`、`tests/` | Storyboard 1.0 历史只读、现有 NovelAI V5 fixture/验收改动、已批准 PageLayoutDraft 与 Panel ID 一一对应关系 |
 
 每张后端工单至少运行其模块/契约定向测试，并在合并前运行：
 
@@ -81,6 +82,7 @@ uv run pytest -q tests/architecture tests/contracts tests/modules tests/workflow
 | V03-P0-03 候选闭环 | FR-11/14/17/18、FR-22、AC-11 | MM-038～MM-043、MM-058、MM-062、MM-064～MM-065 | 供应商成功只创建候选；完整质量清单不自动接受；只有有效 accepted 候选和 PageApproval 可进入正式导出 |
 | v0.3 P0 迁移与证明 | AC-01～11、PRD DoD 1～9/11～14、架构 DoD 1～14/16～19 | MM-044～MM-046、MM-059～MM-060、MM-063 | v0.2 工程安全迁移、回滚演练、Mock 全链和崩溃恢复通过；真实调用与授权章节另经用户批准完成 |
 | V03-P1-01 Token 感知 | FR-05、FR-23、AC-12 | MM-047～MM-051、MM-061 | 长章节按 stage/shard 可恢复运行；硬约束不被静默裁剪，失败只重跑最小范围 |
+| 逐页分镜与普通页 3–6 格 | FR-04/06、AC-04；Storyboard 1.1、`page_type`、逐页非空与 Layout 兼容政策 | MM-068～MM-071 | 新产物逐页有合法页型和分镜；普通页 3–6 格、特殊页 1–6 格；旧 1.0 只读，违规阻止审批/Layout，Panel 与叶子 Frame 一一对应 |
 
 ### 范围锁定与不可破坏项
 
@@ -119,6 +121,10 @@ uv run pytest -q tests/architecture tests/contracts tests/modules tests/workflow
 | 3 | MM-057 Prompt Inspector 与脱敏载荷预览 | P0 | Done | 1–2d | MM-053、MM-035、MM-036 |
 | 3 | MM-066 Opus 零 Anlas 有界生成与 10 页回归 | P0 | Done | 1–2d | MM-037、MM-057 |
 | 6 | MM-067 整本重试历史调用与成本累计 | P1 | Done | 1–2d | MM-066、MM-102 |
+| 2A | MM-068 Storyboard 1.1 契约、页面政策与模型修复 | P0 | Done | 1–2d | MM-009、MM-031 |
+| 2A | MM-069 分镜校验/审批、1.0 升级与 Layout 门禁 | P0 | Done | 1–2d | MM-068、MM-033、MM-034 |
+| 2A | MM-070 改编工作台页型状态与模板兼容体验 | P0 | Done | 1–2d | MM-053、MM-069 |
+| 2A | MM-071 Storyboard 1.1 回归、迁移与 E2E 门禁 | P0 / Release Gate | Done | 1–2d | MM-068～MM-070 |
 | 4 | MM-038 PanelCandidateSet 与生成结果接入 | P0 | Todo | 2–3d | MM-030、MM-037、MM-055 |
 | 4 | MM-039 QualityRun/Finding 框架与确定性规则 | P0 | Todo | 1–2d | MM-032、MM-038 |
 | 4 | MM-062 视觉质量检查清单与金标 fixture | P0 | Todo | 1–2d | MM-039 |
@@ -150,13 +156,14 @@ uv run pytest -q tests/architecture tests/contracts tests/modules tests/workflow
 flowchart LR
     A["Wave 0<br/>契约与架构护栏"] --> B["Wave 1<br/>Durable Work / Outbox / Lineage"]
     B --> C["Wave 2<br/>版式先行"]
-    C --> D["Wave 3<br/>结构化多角色"]
+    C --> C2["Wave 2A<br/>Storyboard 1.1 逐页政策"]
+    C2 --> D["Wave 3<br/>结构化多角色"]
     D --> E["Wave 4<br/>候选 / 质检 / 接受 / 导出"]
     E --> F["Wave 5<br/>迁移、破坏测试、真实 P0 证明"]
     F --> G["Wave 6<br/>Token 感知文本流水线"]
 ```
 
-MM-033/MM-056、MM-037/MM-057、MM-040/MM-064、MM-042/MM-065、MM-050/MM-061 可在共享契约冻结后分别开发后端与 UI；MM-041 只依赖 ReviewDecision 后端，不等待审片 UI。MM-047～MM-050 只依赖 Mock P0 门禁 MM-060/MM-063，不等待付费验收 MM-046；真实 P1 仍由 MM-051 单独阻断。不得为了并行而复制状态或绕开公开契约。
+MM-068～MM-071 因修改 Storyboard 公共契约，按编号串行并优先于新的候选闭环开发；完成后恢复 MM-038。MM-033/MM-056、MM-037/MM-057、MM-040/MM-064、MM-042/MM-065、MM-050/MM-061 可在共享契约冻结后分别开发后端与 UI；MM-041 只依赖 ReviewDecision 后端，不等待审片 UI。MM-047～MM-050 只依赖 Mock P0 门禁 MM-060/MM-063，不等待付费验收 MM-046；真实 P1 仍由 MM-051 单独阻断。不得为了并行而复制状态或绕开公开契约。
 
 ## v0.3 P0 / 架构与可靠性底座
 
@@ -534,7 +541,7 @@ Mypy、TypeScript、production build 与 `git diff --check` 通过；未调用�
 
 - 优先级 / 状态 / 规模：`P0 / Done / 2–3d`；依赖 MM-035。
 - 对应：FR-09/11/12/21、AC-10；技术架构 §8.2/8.4、§16.1～16.2、OPEN-03/08。
-- 目标：用版本化 anti-corruption mapper 把稳定 PromptPlan 转成当前 NovelAI V4 载荷。
+- 目标：用版本化 anti-corruption mapper 把稳定 PromptPlan 转成当前 NovelAI V5 Full 载荷。
 - 交付：ProviderExecutionSpec、mapping version、capability fixture、base/正向角色 captions/负向角色 captions/坐标映射、canonical payload hash、Swagger diff 契约测试。
 - 验收：
   - 单/双/三角色 fixture 的正负 captions 与坐标数量一致、顺序稳定、非空，base 不混入角色固定 Tags；
@@ -545,11 +552,12 @@ Mypy、TypeScript、production build 与 `git diff --check` 通过；未调用�
   - 运行代码只发送冻结 ProviderExecutionSpec，不从 flat prompt 反推角色。
 - 不包含：真实双角色付费调用；归 MM-046。
 
-完成证据（2026-08-14）：`production` 模块提供严格 Pydantic V4 DTO 与版本化
-anti-corruption mapper，mapping 固定为 `novelai-image-2026-08-09.3-v03-opus-zero-anlas-1`；
+完成证据（2026-08-14；2026-08-29 升级复核）：`production` 模块提供严格 Pydantic
+结构化 DTO 与版本化 anti-corruption mapper，当前 mapping 固定为
+`novelai-image-2026-08-29.4-v5-full-1`；
 单/双/三角色和交换顺序 fixture 逐字段验证 base、正负 captions、order、center、action
 及 canonical payload hash。角色缺失、空区块、数量/顺序错误、不支持模型或过期 mapping
-均在凭证读取前失败关闭；当前官方 Swagger 快照的 112,680 bytes 与 SHA-256 进入契约测试。
+均在凭证读取前失败关闭；当前官方 Swagger 快照的 113,758 bytes 与 SHA-256 进入契约测试。
 queue、revision 和 executor 只消费冻结 ProviderExecutionSpec/payload，不从 flat prompt 反推，
 Mock 覆盖供应商成功及现有错误分类；未读取真实 Token、未发出付费请求。
 
@@ -619,6 +627,66 @@ reference base64；界面展示 mapping/model/hash、影响对象、候选数/�
 - 验收：章节与全部历史 Job 保持不可变关联；重试幂等键包含 retry 序号；整本摘要与导出审计不因清空当前 `generation_job_id` 丢失旧调用。
 
 完成证据（2026-08-15）：`book.chapter_job_created` 的不可变审计关联用于汇总同一章节的全部历史 Job；整本与章节摘要累计历史出图、订阅核验、外部请求、分配成本、已核实成本及未核实请求。章节重试使用独立幂等域，新 Job 只能获得章节生命周期剩余调用/成本额度；额度不足以重建完整有界任务时返回 `BOOK_CHAPTER_RETRY_BUDGET_EXHAUSTED`，不会取消当前任务或重置授权。回归覆盖一次失败重试后仅分配剩余额度、再次耗尽后拒绝重试以及历史未知成本不丢失。
+
+## v0.3 P0 / Storyboard 1.1 逐页分镜政策
+
+### MM-068 Storyboard 1.1 契约、页面政策与模型修复
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-009、MM-031。
+- 对应：PRD §8.4/§11、AC-04；技术架构 §6.4、§8.4、ADR-019、DoD 20。
+- 目标：让文本模型对每一页显式给出页型和完整分镜，并由本地域规则而非 Prompt 猜测决定是否合法。
+- 交付：Storyboard schema 1.1、`PageType`、版本化 `StoryboardPagePolicyValidator`、机器可读 Finding、生成 Prompt 约束及最多两次结构修复。
+- 验收：
+  - `standard` 3/6 格通过，1/2/7 格失败；`cover/splash/special` 1/2/6 格通过；空页、缺失或未知页型失败；
+  - 每项失败包含 `page_id`、JSON path、实际页型/格数和允许范围，政策版本可审计；
+  - 格数或页型错误与 JSON Schema 错误一样进入最多两次修复，超过上限不持久化 Storyboard；
+  - Storyboard 1.0 可解析但不被默认补页型，也不按既有格数反推分类。
+- 不包含：审批/API/Layout 门禁或前端展示。
+
+### MM-069 分镜校验/审批、1.0 升级与 Layout 门禁
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-068、MM-033、MM-034。
+- 对应：PRD §8.4/§8.5、AC-04/09；技术架构 §7.4、§8.5、§18.1。
+- 目标：在每个下游入口重复执行 Storyboard 1.1 政策，防止旧版或违规草稿绕过分镜审批进入版式。
+- 交付：本地 validate API、版本响应中的政策状态、审批错误契约、Storyboard 1.0 只读升级门禁、legacy adaptation facade 与 Page/Layout consumer 复验、模板兼容元数据。
+- 验收：
+  - validate 不启动外部请求并返回逐页 Findings；违规审批返回 `STORYBOARD_PAGE_POLICY_INVALID`；1.0 审批/修订/Layout 返回 `STORYBOARD_UPGRADE_REQUIRED`；
+  - 人工编辑可保存合法的 1.1 新版本，但不合法格数不能保存或审批；旧 1.0 历史内容保持原样可读；
+  - Layout 创建只接受已批准、当前、政策有效的 1.1 页面，且批准 Panel 与叶子 Frame 严格一一对应；
+  - 1–2 格模板元数据只声明兼容 `cover/splash/special`，3–6 格模板兼容全部页型。
+- 不包含：用户界面或真实模型调用。
+
+### MM-070 改编工作台页型状态与模板兼容体验
+
+- 优先级 / 状态 / 规模：`P0 / Done / 1–2d`；依赖 MM-053、MM-069。
+- 对应：PRD §8.4/§8.5、AC-04/09；技术架构 §4.3、§8.5。
+- 目标：让用户在审批前直接看到模型自动分类、格数和违规原因，并只看到与页型兼容的版式模板。
+- 交付：前端 Storyboard 1.1 类型、页型标签/说明、逐页格数状态、审批禁用原因、Layout 页面选择摘要与模板过滤。
+- 验收：
+  - 每页显示 `standard/cover/splash/special` 的中文标签、格数及合法/违规状态，不要求用户填写例外理由；
+  - 普通页 1–2 格、未知/缺失页型、旧 1.0 在界面明确提示且审批按钮禁用；
+  - 特殊页 1–2 格可选择相同格数模板，普通页只显示 3–6 格模板；无兼容模板时不创建草稿；
+  - 保留已有文本模型配置刷新、编辑和审批交互回归。
+- 不包含：新增页型人工编辑入口。
+
+### MM-071 Storyboard 1.1 回归、迁移与 E2E 门禁
+
+- 优先级 / 状态 / 规模：`P0 / Release Gate / Done / 1–2d`；依赖 MM-068～MM-070。
+- 对应：PRD §15、AC-04；技术架构 §16、§18、DoD 20。
+- 目标：用契约、API、consumer 和产品流证据证明新政策已落地，同时保护既有 NovelAI V5 与历史 Storyboard。
+- 交付：领域/文本修复/API/前端/Layout/页面服务测试；Storyboard 1.0 只读 fixture；既有 Mock/授权验收 fixture 升级；逐页分镜 E2E。
+- 验收：
+  - 覆盖普通页 3/6 成功和 1/2/7/空页失败，特殊页 1/2/6 成功，缺失/未知类型两次修复后停止；
+  - E2E 至少包含一个自动判定的 1–2 格特殊页，其他普通页均为 3–6 格，每个 Panel 恰好映射一个叶子 Frame；
+  - Storyboard 1.0 可读但不能创建新审批/Layout；已有 V5 验收改动不丢失；
+  - 后端定向测试、Ruff、mypy、前端定向测试与生产构建通过；全量测试若存在无关基线失败须逐项记录，不能冒充全绿。
+- 不包含：真实文本模型或额外 NovelAI 付费请求。
+
+完成证据（2026-08-29）：Storyboard 1.1、自动 `page_type`、普通页 3–6 格与特殊页
+1–6 格政策已接入模型结构修复、持久化、人工修改、审批、设定生成、页面草稿和 Layout
+门禁；1.0 保持可读但不能修改或进入下游。改编工作台只读展示模型页型与违规原因，
+版式模板按页型和格数过滤，不提供人工改页型入口。领域、API、consumer、前端和逐页 E2E
+回归均已落地；全量后端测试、48 项前端测试、Ruff、mypy 和生产构建通过。
 
 ## v0.3 P0 / V03-P0-03 候选、质检、接受与发布
 
@@ -853,6 +921,13 @@ MM-044，因此本工单保持 In Progress，不标记 Done。
   - 任何未通过项显式列出，短 smoke 不替代授权章节闭环。
 - 不包含：无人值守生产、提高并发或发布到外部平台。
 
+部分完成证据（2026-08-29）：用户已授权 NovelAI V5 Full、零 Anlas 上限与附件《沙王》
+素材；真实完成 12 页初版、双人第 8 页、四臂第 12 页和 4 次定向 reroll，四格式导出、
+provider payload、秘密扫描与逐页视觉审片通过。证据见 `docs/sandkings-v5-acceptance.md`
+及本机 `workspace/acceptance/sandkings-v5/20260829-130820-reroll-1/`。工单仍为 Blocked，
+因为 MM-045/MM-060/MM-063、多候选接受/PageApproval、真实外部文本模型和完整 v0.3 P0
+报告尚未完成；本次结果不冒充整票 Done。
+
 ## v0.3 P1 / V03-P1-01 分层、Token 感知文本流水线
 
 ### MM-047 ModelCapabilitySnapshot 与 TokenBudget
@@ -1076,7 +1151,7 @@ MM-044，因此本工单保持 In Progress，不标记 Done。
 
 - 固定官方 Swagger 哈希、能力 profile、错误分类和本地 mock。
 - 连接测试由用户点击触发，不进行隐藏图片生成。
-- 完成证据：已固定 2026-08-09 官方 `docs/doc.json` 的 URL、112,680-byte 大小、SHA-256 和映射版本，并明确排除错误的 Observability `/openapi.json`；交付 6 个模型 capability、固定 NovelAI host/path、应用本地加密 Token profile、项目非敏感配置、单次标签建议连接测试、本地 Mock，以及认证、权限、余额、限流、参数、网络、5xx 和异常响应分类。连接测试不自动重试并返回 `generated_images = 0`；49 项后端测试、9 项前端测试、ruff、mypy、契约复验、密钥扫描和生产构建通过，未执行真实 NovelAI 调用。
+- 完成证据：已于 2026-08-29 固定官方 `docs/doc.json` 的 URL、113,758-byte 大小、SHA-256 和 V5 映射版本，并明确排除错误的 Observability `/openapi.json`；交付 8 个模型 capability（V5 Full 为唯一推荐默认）、固定 NovelAI host/path、应用本地加密 Token profile、项目非敏感配置、标签建议与订阅/使用额度连接测试、本地 Mock，以及认证、权限、余额、使用额度、限流、参数、网络、5xx 和异常响应分类。连接测试不自动重试并返回 `generated_images = 0`；真实生成结果另见沙王 V5 验收清单。
 
 ### MM-012 有界串行生成队列
 

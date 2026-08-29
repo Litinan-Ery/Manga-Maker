@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+PageType = Literal["standard", "cover", "splash", "special"]
+
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -17,7 +19,7 @@ class SourceBeatInput(ContractModel):
 
 
 class StoryboardRequest(ContractModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     chapter_id: str = Field(min_length=1, max_length=64)
     chapter_version: int = Field(ge=1)
     chapter_text: str = Field(min_length=1, max_length=2_000_000)
@@ -70,6 +72,7 @@ class SceneCandidate(ContractModel):
 class PageCandidate(ContractModel):
     page_id: UUID
     page_number: int = Field(ge=1, le=64)
+    page_type: PageType | None = None
     turning_point: str = Field(min_length=1, max_length=500)
     scene_ids: list[UUID] = Field(min_length=1, max_length=20)
     panels: list[PanelCandidate] = Field(min_length=1, max_length=6)
@@ -98,7 +101,7 @@ class BeatResolution(ContractModel):
 
 
 class StoryboardDocument(ContractModel):
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     storyboard_id: UUID
     chapter_version: int = Field(ge=1)
     beat_resolutions: list[BeatResolution] = Field(min_length=1, max_length=2000)

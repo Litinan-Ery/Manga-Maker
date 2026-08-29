@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from backend.app.adaptation.models import (
     SourceBeatInput,
     StoryboardDocument,
     StoryboardRequest,
     validate_storyboard_semantics,
+)
+from backend.app.adaptation.page_policy import (
+    STORYBOARD_PAGE_POLICY_VERSION,
+    StoryboardPagePolicyError,
+    validate_storyboard_page_policy,
 )
 from backend.app.adaptation.text_model import (
     OpenAICompatibleTextModel,
@@ -39,7 +46,7 @@ def storyboard_request() -> StoryboardRequest:
 
 def valid_storyboard() -> dict[str, Any]:
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "storyboard_id": "018f0f65-8f2f-7e65-8000-123456789abc",
         "chapter_version": 1,
         "beat_resolutions": [
@@ -65,6 +72,7 @@ def valid_storyboard() -> dict[str, Any]:
             {
                 "page_id": "018f0f65-8f2f-7e65-8000-123456789abd",
                 "page_number": 1,
+                "page_type": "splash",
                 "turning_point": "主角进入房间",
                 "scene_ids": ["018f0f65-8f2f-7e65-8000-123456789abf"],
                 "panels": [
@@ -92,6 +100,25 @@ def envelope(content: str) -> dict[str, Any]:
         "choices": [{"message": {"content": content}}],
         "usage": {"prompt_tokens": 120, "completion_tokens": 80},
     }
+
+
+def storyboard_with(page_type: str | None, panel_count: int) -> dict[str, Any]:
+    payload = copy.deepcopy(valid_storyboard())
+    page = payload["pages"][0]
+    if page_type is None:
+        page.pop("page_type")
+    else:
+        page["page_type"] = page_type
+    base_panel = page["panels"][0]
+    page["panels"] = [
+        {
+            **copy.deepcopy(base_panel),
+            "panel_id": f"018f0f65-8f2f-7e65-8000-{index:012x}",
+            "order": index,
+        }
+        for index in range(1, panel_count + 1)
+    ]
+    return payload
 
 
 def test_openai_compatible_adapter_validates_and_records_provenance() -> None:
@@ -157,6 +184,155 @@ def test_invalid_output_stops_after_two_repairs() -> None:
         nonlocal calls
         calls += 1
         return httpx.Response(200, json=envelope("still-not-json"))
+
+    provider = OpenAICompatibleTextModel(
+        TextModelConfiguration(
+            base_url="https://models.example.test/v1",
+            model="unit-model",
+            credential_profile_id="text-model",
+        ),
+        lambda _profile_id: "unit-value",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(TextModelStructuredOutputError, match="after 2 repairs"):
+        asyncio.run(provider.generate_storyboard(storyboard_request()))
+    assert calls == 3
+
+
+@pytest.mark.parametrize("panel_count", [3, 6])
+def test_standard_pages_accept_three_to_six_panels(panel_count: int) -> None:
+    document = StoryboardDocument.model_validate(storyboard_with("standard", panel_count))
+
+    validate_storyboard_page_policy(document)
+
+
+@pytest.mark.parametrize("page_type", ["cover", "splash", "special"])
+@pytest.mark.parametrize("panel_count", [1, 2, 6])
+def test_special_pages_accept_one_to_six_panels(
+    page_type: str,
+    panel_count: int,
+) -> None:
+    document = StoryboardDocument.model_validate(storyboard_with(page_type, panel_count))
+
+    validate_storyboard_page_policy(document)
+
+
+@pytest.mark.parametrize("panel_count", [1, 2])
+def test_standard_pages_reject_fewer_than_three_panels(panel_count: int) -> None:
+    document = StoryboardDocument.model_validate(storyboard_with("standard", panel_count))
+
+    with pytest.raises(StoryboardPagePolicyError) as error:
+        validate_storyboard_page_policy(document)
+
+    finding = error.value.findings[0]
+    assert finding.code == "STORYBOARD_PAGE_POLICY_INVALID"
+    assert finding.path == "$.pages[0].panels"
+    assert finding.page_type == "standard"
+    assert finding.panel_count == panel_count
+    assert (finding.minimum_panels, finding.maximum_panels) == (3, 6)
+
+
+@pytest.mark.parametrize(
+    ("page_type", "panel_count"),
+    [("standard", 0), ("standard", 7), ("unknown", 3)],
+)
+def test_empty_over_limit_and_unknown_page_shapes_fail_schema(
+    page_type: str,
+    panel_count: int,
+) -> None:
+    with pytest.raises(ValidationError):
+        StoryboardDocument.model_validate(storyboard_with(page_type, panel_count))
+
+
+def test_missing_page_type_and_legacy_schema_are_not_inferred() -> None:
+    missing_type = StoryboardDocument.model_validate(storyboard_with(None, 3))
+    with pytest.raises(StoryboardPagePolicyError) as missing_error:
+        validate_storyboard_page_policy(missing_type)
+    assert missing_error.value.findings[0].path == "$.pages[0].page_type"
+
+    legacy_payload = storyboard_with(None, 1)
+    legacy_payload["schema_version"] = "1.0"
+    legacy = StoryboardDocument.model_validate(legacy_payload)
+    with pytest.raises(StoryboardPagePolicyError) as legacy_error:
+        validate_storyboard_page_policy(legacy)
+    assert legacy_error.value.findings[0].code == "STORYBOARD_UPGRADE_REQUIRED"
+    assert legacy.pages[0].page_type is None
+
+
+def test_page_policy_violation_enters_bounded_structured_repair() -> None:
+    invalid = storyboard_with("standard", 1)
+    responses = iter([json.dumps(invalid), json.dumps(valid_storyboard())])
+    request_bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=envelope(next(responses)))
+
+    provider = OpenAICompatibleTextModel(
+        TextModelConfiguration(
+            base_url="https://models.example.test/v1",
+            model="unit-model",
+            credential_profile_id="text-model",
+        ),
+        lambda _profile_id: "unit-value",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = asyncio.run(provider.generate_storyboard(storyboard_request()))
+
+    assert result.repair_attempts == 1
+    repair_payload = json.loads(request_bodies[1]["messages"][1]["content"])
+    assert repair_payload["request_constraints"]["page_policy_version"] == (
+        STORYBOARD_PAGE_POLICY_VERSION
+    )
+    assert "standard 页面需要 3-6 格" in repair_payload["validation_problem"]
+
+
+@pytest.mark.parametrize("invalid_kind", ["missing", "unknown", "empty", "over_limit"])
+def test_invalid_page_shapes_enter_structured_repair(invalid_kind: str) -> None:
+    invalid = storyboard_with("special", 1)
+    page = invalid["pages"][0]
+    if invalid_kind == "missing":
+        page.pop("page_type")
+    elif invalid_kind == "unknown":
+        page["page_type"] = "poster"
+    elif invalid_kind == "empty":
+        page["panels"] = []
+    else:
+        invalid = storyboard_with("standard", 7)
+    responses = iter([json.dumps(invalid), json.dumps(valid_storyboard())])
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=envelope(next(responses)))
+
+    provider = OpenAICompatibleTextModel(
+        TextModelConfiguration(
+            base_url="https://models.example.test/v1",
+            model="unit-model",
+            credential_profile_id="text-model",
+        ),
+        lambda _profile_id: "unit-value",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = asyncio.run(provider.generate_storyboard(storyboard_request()))
+
+    assert result.repair_attempts == 1
+    assert calls == 2
+
+
+def test_page_policy_failure_stops_after_two_repairs() -> None:
+    invalid = json.dumps(storyboard_with("standard", 1))
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=envelope(invalid))
 
     provider = OpenAICompatibleTextModel(
         TextModelConfiguration(

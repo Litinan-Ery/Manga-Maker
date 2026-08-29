@@ -64,7 +64,7 @@ const vaultStatus: VaultStatus = {
 };
 
 const originalDocument: StoryboardDocument = {
-  schema_version: "1.0",
+  schema_version: "1.1",
   storyboard_id: "018f0f65-8f2f-7e65-8000-123456789abc",
   chapter_version: 1,
   beat_resolutions: [
@@ -90,6 +90,7 @@ const originalDocument: StoryboardDocument = {
     {
       page_id: "018f0f65-8f2f-7e65-8000-123456789abd",
       page_number: 1,
+      page_type: "splash",
       turning_point: "主角进入房间",
       scene_ids: ["018f0f65-8f2f-7e65-8000-123456789abf"],
       panels: [
@@ -150,29 +151,68 @@ it("generates, revises and approves a structured storyboard through user actions
   vi.stubGlobal("fetch", fetchMock);
   const onError = vi.fn();
 
-  render(
+  const { rerender } = render(
     <StoryboardWorkbench
       projectId="project-1"
       chapterSet={chapterSet}
       vaultStatus={vaultStatus}
       onError={onError}
       refreshKey={0}
+      textModelRefreshKey={0}
     />,
   );
 
   const generateButton = screen.getByRole("button", { name: "生成结构化分镜" });
   await screen.findByText(/当前：models.example.test/);
+  rerender(
+    <StoryboardWorkbench
+      projectId="project-1"
+      chapterSet={chapterSet}
+      vaultStatus={vaultStatus}
+      onError={onError}
+      refreshKey={0}
+      textModelRefreshKey={1}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).endsWith("/adaptation/text-model"),
+      ),
+    ).toHaveLength(2),
+  );
+  expect(screen.getByText(/配置入口已统一到页面上方/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("备注名称（可选）")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("checkbox"));
   await waitFor(() => expect(generateButton).not.toBeDisabled());
   fireEvent.click(generateButton);
 
   expect(await screen.findByText("分镜待审批")).toBeInTheDocument();
+  expect(screen.getByText("通页大场面 · 1 格 · 符合规则")).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("场景摘要"), {
     target: { value: "林夏推门进入房间，并发现异常。" },
   });
   fireEvent.change(screen.getByLabelText("本页叙事功能"), {
     target: { value: "主角发现关键线索" },
   });
+  rerender(
+    <StoryboardWorkbench
+      projectId="project-1"
+      chapterSet={chapterSet}
+      vaultStatus={vaultStatus}
+      onError={onError}
+      refreshKey={0}
+      textModelRefreshKey={2}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([path]) =>
+        String(path).endsWith("/adaptation/text-model"),
+      ),
+    ).toHaveLength(3),
+  );
+  expect(screen.getByLabelText("场景摘要")).toHaveValue("林夏推门进入房间，并发现异常。");
   fireEvent.click(screen.getByRole("button", { name: "保存为新版本" }));
 
   expect(await screen.findByText("分镜版本 2")).toBeInTheDocument();
@@ -192,36 +232,26 @@ it("generates, revises and approves a structured storyboard through user actions
   expect(headers.get("X-CSRF-Token")).toBe("csrf-test");
 });
 
-it("saves the four-field text model configuration with a local Key/Password", async () => {
+it("shows page policy violations and blocks approval for a one-panel standard page", async () => {
   window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
   consumeLocalSession();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      const method = init?.method ?? "GET";
-      if (path.endsWith("/adaptation/text-model") && method === "GET") {
-        return Promise.resolve(jsonResponse({ error: { message: "尚未配置" } }, 404));
-      }
-      if (path.endsWith("/adaptation/text-model") && method === "PUT") {
-        return Promise.resolve(
-          jsonResponse(
-            textModelConfiguration({
-              remark_name: "主力分镜模型",
-              credential_profile_id: "text-model-project-1",
-            }),
-          ),
-        );
-      }
-      if (path.endsWith("/story-beats") && method === "GET") {
-        return Promise.resolve(jsonResponse(beatSet));
-      }
-      if (path.includes("/storyboards/current?") && method === "GET") {
-        return Promise.resolve(jsonResponse({ error: { message: "尚无分镜" } }, 404));
-      }
-      return Promise.reject(new Error(`unexpected request: ${method} ${path}`));
-    }),
-  );
+  const invalidDocument = structuredClone(originalDocument);
+  invalidDocument.pages[0].page_type = "standard";
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+    if (path.endsWith("/adaptation/text-model") && method === "GET") {
+      return Promise.resolve(jsonResponse(textModelConfiguration()));
+    }
+    if (path.endsWith("/story-beats") && method === "GET") {
+      return Promise.resolve(jsonResponse(beatSet));
+    }
+    if (path.includes("/storyboards/current?") && method === "GET") {
+      return Promise.resolve(jsonResponse(storyboardVersion(1, "draft", invalidDocument)));
+    }
+    return Promise.reject(new Error(`unexpected request: ${method} ${path}`));
+  });
+  vi.stubGlobal("fetch", fetchMock);
 
   render(
     <StoryboardWorkbench
@@ -230,96 +260,13 @@ it("saves the four-field text model configuration with a local Key/Password", as
       vaultStatus={vaultStatus}
       onError={vi.fn()}
       refreshKey={0}
+      textModelRefreshKey={0}
     />,
   );
 
-  const remarkName = await screen.findByLabelText("备注名称（可选）");
-  const url = screen.getByLabelText("URL");
-  const secret = screen.getByLabelText("Key/Password");
-  const requestModel = screen.getByLabelText("Request Model");
-  fireEvent.change(remarkName, { target: { value: "主力分镜模型" } });
-  fireEvent.change(url, { target: { value: "https://models.example.test/v1" } });
-  fireEvent.change(secret, { target: { value: "unit-secret-value" } });
-  fireEvent.change(requestModel, { target: { value: "unit-model" } });
-  fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
-
-  await screen.findByText(/主力分镜模型/);
-  const put = vi.mocked(fetch).mock.calls.find(
-    ([path, init]) =>
-      String(path).endsWith("/adaptation/text-model") && init?.method === "PUT",
-  );
-  expect(JSON.parse(String(put?.[1]?.body))).toEqual({
-    remark_name: "主力分镜模型",
-    url: "https://models.example.test/v1",
-    key_password: "unit-secret-value",
-    request_model: "unit-model",
-  });
-});
-
-it("updates text model metadata without resending the saved Key/Password", async () => {
-  window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
-  consumeLocalSession();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      const method = init?.method ?? "GET";
-      if (path.endsWith("/adaptation/text-model") && method === "GET") {
-        return Promise.resolve(
-          jsonResponse(textModelConfiguration({ remark_name: "主力分镜模型" })),
-        );
-      }
-      if (path.endsWith("/adaptation/text-model") && method === "PUT") {
-        return Promise.resolve(
-          jsonResponse(
-            textModelConfiguration({
-              remark_name: "备用分镜模型",
-              request_model: "updated-model",
-              model_name: "updated-model",
-              model: "updated-model",
-              revision: 2,
-            }),
-          ),
-        );
-      }
-      if (path.endsWith("/story-beats") && method === "GET") {
-        return Promise.resolve(jsonResponse(beatSet));
-      }
-      if (path.includes("/storyboards/current?") && method === "GET") {
-        return Promise.resolve(jsonResponse({ error: { message: "尚无分镜" } }, 404));
-      }
-      return Promise.reject(new Error(`unexpected request: ${method} ${path}`));
-    }),
-  );
-
-  render(
-    <StoryboardWorkbench
-      projectId="project-1"
-      chapterSet={chapterSet}
-      vaultStatus={vaultStatus}
-      onError={vi.fn()}
-      refreshKey={0}
-    />,
-  );
-
-  const remarkName = await screen.findByDisplayValue("主力分镜模型");
-  fireEvent.change(remarkName, { target: { value: "备用分镜模型" } });
-  fireEvent.change(screen.getByLabelText("Request Model"), {
-    target: { value: "updated-model" },
-  });
-  expect(screen.getByLabelText("Key/Password")).toHaveValue("");
-  fireEvent.click(screen.getByRole("button", { name: "保存模型配置" }));
-
-  await screen.findByText(/备用分镜模型/);
-  const put = vi.mocked(fetch).mock.calls.find(
-    ([path, init]) =>
-      String(path).endsWith("/adaptation/text-model") && init?.method === "PUT",
-  );
-  expect(JSON.parse(String(put?.[1]?.body))).toEqual({
-    remark_name: "备用分镜模型",
-    url: "https://models.example.test/v1",
-    request_model: "updated-model",
-  });
+  expect(await screen.findByText("普通页 · 1 格 · 格数异常")).toBeInTheDocument();
+  expect(screen.getByText(/普通页，需要 3–6 格，当前为 1 格/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "审批当前分镜" })).toBeDisabled();
 });
 
 function storyboardVersion(
@@ -342,6 +289,9 @@ function storyboardVersion(
     approval_hash: status === "approved" ? "a".repeat(64) : null,
     approved_at: status === "approved" ? "2026-08-09T00:00:00Z" : null,
     unresolved_count: 0,
+    page_policy_version: "storyboard-page-count-v1",
+    page_policy_valid: true,
+    page_policy_findings: [],
     is_current: true,
     created_at: "2026-08-09T00:00:00Z",
   };

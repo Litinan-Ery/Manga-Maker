@@ -24,7 +24,7 @@ def create_chat_completion(body: dict[str, Any]) -> dict[str, Any]:
     scene_id = str(uuid.uuid4())
     page_id = str(uuid.uuid4())
     storyboard = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "storyboard_id": str(uuid.uuid4()),
         "chapter_version": request["chapter_version"],
         "beat_resolutions": [
@@ -51,6 +51,7 @@ def create_chat_completion(body: dict[str, Any]) -> dict[str, Any]:
             {
                 "page_id": page_id,
                 "page_number": 1,
+                "page_type": "special",
                 "turning_point": "怀表揭示异常时间",
                 "scene_ids": [scene_id],
                 "panels": [

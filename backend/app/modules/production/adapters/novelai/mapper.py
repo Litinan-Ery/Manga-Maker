@@ -1,18 +1,24 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Never
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .....platform.novelai import (
+    MAPPING_VERSION,
+    require_inpaint_model_profile,
+    require_model_profile,
+)
 from .....shared_kernel import canonical_sha256
 from ....prompting.public import PromptPlan, prompt_plan_sha256
 from ...contracts import ProviderCharacterCaption, ProviderExecutionSpec
 from ...errors import ProviderMappingError
 
-NOVELAI_V4_MAPPING_VERSION = "novelai-image-2026-08-09.3-v03-opus-zero-anlas-1"
-SUPPORTED_V4_MODEL_PREFIX = "nai-diffusion-4"
-MAX_V03_CHARACTERS = 3
+NOVELAI_MAPPING_VERSION = MAPPING_VERSION
+# Compatibility alias for persisted imports from the pre-V5 adapter surface.
+NOVELAI_V4_MAPPING_VERSION = NOVELAI_MAPPING_VERSION
+MAX_STRUCTURED_CHARACTERS = 3
 
 
 class NovelAIAdapterContract(BaseModel):
@@ -24,21 +30,21 @@ class NovelAICoordinates(NovelAIAdapterContract):
     y: float = Field(ge=0, le=1)
 
 
-class NovelAIV4CharacterCaption(NovelAIAdapterContract):
+class NovelAICharacterCaption(NovelAIAdapterContract):
     char_caption: str = Field(min_length=1, max_length=12_000)
     centers: tuple[NovelAICoordinates, ...] = Field(min_length=1, max_length=1)
 
 
-class NovelAIV4ExternalCaption(NovelAIAdapterContract):
+class NovelAIExternalCaption(NovelAIAdapterContract):
     base_caption: str = Field(min_length=1, max_length=12_000)
-    char_captions: tuple[NovelAIV4CharacterCaption, ...] = Field(
+    char_captions: tuple[NovelAICharacterCaption, ...] = Field(
         min_length=1,
-        max_length=MAX_V03_CHARACTERS,
+        max_length=MAX_STRUCTURED_CHARACTERS,
     )
 
 
-class NovelAIV4Condition(NovelAIAdapterContract):
-    caption: NovelAIV4ExternalCaption
+class NovelAIStructuredCondition(NovelAIAdapterContract):
+    caption: NovelAIExternalCaption
     use_coords: Literal[True] = True
     use_order: Literal[True] = True
     legacy_uc: Literal[False] | None = None
@@ -74,8 +80,8 @@ class NovelAIGenerationParameters(NovelAIAdapterContract):
     negative_prompt: str = Field(min_length=1, max_length=12_000)
     prompt: str = Field(min_length=1, max_length=12_000)
     qualityToggle: Literal[True] = True
-    ucPreset: Literal[3] = 3
-    params_version: Literal[3] = 3
+    ucPreset: Literal[3, 4]
+    params_version: Literal[4] = 4
     cfg_rescale: Literal[0] = 0
     dynamic_thresholding: Literal[False] = False
     legacy: Literal[False] = False
@@ -83,8 +89,13 @@ class NovelAIGenerationParameters(NovelAIAdapterContract):
     prefer_brownian: bool
     deliberate_euler_ancestral_bug: Literal[False] = False
     image_format: Literal["png"] = "png"
-    v4_prompt: NovelAIV4Condition
-    v4_negative_prompt: NovelAIV4Condition
+    # NovelAI V5 intentionally retains these V4-named wire fields.
+    v4_prompt: NovelAIStructuredCondition
+    v4_negative_prompt: NovelAIStructuredCondition
+    straight_alpha: Literal[True] | None = None
+    tag_hint_transparent_background: Literal[False] | None = None
+    tag_hint_qt: Literal[1] | None = None
+    tag_hint_uc_preset: Literal[4] | None = None
     director_reference_images: tuple[str, ...] | None = Field(
         default=None, min_length=1, max_length=1
     )
@@ -153,14 +164,14 @@ class NovelAIGenerationParameters(NovelAIAdapterContract):
         return self
 
 
-class NovelAIV4Payload(NovelAIAdapterContract):
+class NovelAIPayload(NovelAIAdapterContract):
     action: Literal["generate", "infill"]
     input: str = Field(min_length=1, max_length=12_000)
     model: str = Field(min_length=1, max_length=100)
     parameters: NovelAIGenerationParameters
 
     @model_validator(mode="after")
-    def action_matches_inputs(self) -> NovelAIV4Payload:
+    def action_matches_inputs(self) -> NovelAIPayload:
         has_inpaint = self.parameters.image is not None
         if (self.action == "infill") != has_inpaint:
             raise ValueError("infill action and image inputs must agree")
@@ -175,7 +186,7 @@ class NovelAIV4Payload(NovelAIAdapterContract):
 
 class MappedNovelAIExecution(NovelAIAdapterContract):
     execution_spec: ProviderExecutionSpec
-    payload: NovelAIV4Payload
+    payload: NovelAIPayload
 
 
 def map_prompt_plan_to_novelai(
@@ -195,7 +206,7 @@ def map_prompt_plan_to_novelai(
     scale: float,
     sampler: str,
     noise_schedule: str,
-    mapping_version: str = NOVELAI_V4_MAPPING_VERSION,
+    mapping_version: str = NOVELAI_MAPPING_VERSION,
     action: Literal["generate", "infill"] = "generate",
     reference: dict[str, Any] | None = None,
     source_image_base64: str | None = None,
@@ -203,23 +214,31 @@ def map_prompt_plan_to_novelai(
     inpaint_strength: float | None = None,
     edit_prompt: str | None = None,
 ) -> MappedNovelAIExecution:
-    """Map stable PromptPlan semantics to one frozen, allowlisted NovelAI V4 payload."""
+    """Map stable PromptPlan semantics to a frozen NovelAI structured payload."""
 
     if prompt_plan_sha256(prompt_plan) != prompt_plan.content_sha256:
         _fail("PROMPT_PLAN_HASH_MISMATCH", "PromptPlan 内容哈希校验失败。")
-    if not model_id.startswith(SUPPORTED_V4_MODEL_PREFIX):
+    try:
+        model_profile = (
+            require_inpaint_model_profile(model_id)
+            if action == "infill"
+            else require_model_profile(model_id)
+        )
+    except ValueError:
+        model_profile = None
+    if model_profile is None or not model_profile.supports_multi_character_prompt:
         _fail(
             "NOVELAI_MULTI_CHARACTER_UNSUPPORTED",
-            "当前模型能力不支持结构化 NovelAI V4 多角色提示。",
+            "当前模型能力不支持 NovelAI 结构化多角色提示。",
             {"model_id": model_id},
         )
-    if mapping_version != NOVELAI_V4_MAPPING_VERSION:
+    if mapping_version != NOVELAI_MAPPING_VERSION:
         _fail(
             "NOVELAI_MAPPING_VERSION_UNSUPPORTED",
             "冻结的 NovelAI 映射版本不受当前适配器支持。",
             {"mapping_version": mapping_version},
         )
-    if not 1 <= len(prompt_plan.characters) <= MAX_V03_CHARACTERS:
+    if not 1 <= len(prompt_plan.characters) <= MAX_STRUCTURED_CHARACTERS:
         _fail(
             "MULTI_CHARACTER_CONTRACT_INVALID",
             "PromptPlan 角色数量不在冻结能力范围内。",
@@ -257,8 +276,8 @@ def map_prompt_plan_to_novelai(
         "base negative tags",
     )
     captions: list[ProviderCharacterCaption] = []
-    positive_payload: list[NovelAIV4CharacterCaption] = []
-    negative_payload: list[NovelAIV4CharacterCaption] = []
+    positive_payload: list[NovelAICharacterCaption] = []
+    negative_payload: list[NovelAICharacterCaption] = []
     for character in ordered:
         positive_tags = _ordered_tags(
             (*character.fixed_tags, *character.variable_positive_tags, character.action),
@@ -276,13 +295,13 @@ def map_prompt_plan_to_novelai(
             )
         )
         positive_payload.append(
-            NovelAIV4CharacterCaption(
+            NovelAICharacterCaption(
                 char_caption=_join_tags(positive_tags),
                 centers=(coordinate,),
             )
         )
         negative_payload.append(
-            NovelAIV4CharacterCaption(
+            NovelAICharacterCaption(
                 char_caption=_join_tags(negative_tags),
                 centers=(coordinate,),
             )
@@ -308,8 +327,8 @@ def map_prompt_plan_to_novelai(
         "prompt": base_prompt,
         "negative_prompt": base_negative,
         "qualityToggle": True,
-        "ucPreset": 3,
-        "params_version": 3,
+        "ucPreset": model_profile.uc_preset,
+        "params_version": model_profile.params_version,
         "cfg_rescale": 0,
         "dynamic_thresholding": False,
         "legacy": False,
@@ -335,7 +354,22 @@ def map_prompt_plan_to_novelai(
             "use_order": True,
         },
     }
+    if model_id.startswith("nai-diffusion-5-"):
+        parameters.update(
+            {
+                "straight_alpha": True,
+                "tag_hint_transparent_background": False,
+                "tag_hint_qt": 1,
+                "tag_hint_uc_preset": 4,
+            }
+        )
     if reference is not None:
+        if not model_profile.supports_precise_reference:
+            _fail(
+                "NOVELAI_REFERENCE_UNSUPPORTED",
+                "当前 NovelAI 模型不支持 Precise Reference。",
+                {"model_id": model_id},
+            )
         try:
             parameters.update(
                 {
@@ -380,7 +414,7 @@ def map_prompt_plan_to_novelai(
             }
         )
     try:
-        payload = NovelAIV4Payload(
+        payload = NovelAIPayload(
             action=action,
             input=base_prompt,
             model=model_id,
@@ -389,7 +423,7 @@ def map_prompt_plan_to_novelai(
     except ValueError as exc:
         raise ProviderMappingError(
             "MULTI_CHARACTER_CONTRACT_INVALID",
-            "NovelAI V4 结构化载荷未通过本地契约校验。",
+            "NovelAI 结构化载荷未通过本地契约校验。",
         ) from exc
     payload_sha256 = _payload_sha256(payload)
     spec_id = provider_execution_spec_id or uuid5(
@@ -425,12 +459,12 @@ def map_prompt_plan_to_novelai(
 
 def require_frozen_novelai_payload(
     execution_spec: ProviderExecutionSpec,
-    payload: NovelAIV4Payload | dict[str, Any],
-) -> NovelAIV4Payload:
+    payload: NovelAIPayload | dict[str, Any],
+) -> NovelAIPayload:
     """Revalidate a persisted payload without remapping or reading a credential."""
 
     try:
-        validated = NovelAIV4Payload.model_validate(payload)
+        validated = NovelAIPayload.model_validate(payload)
     except ValueError as exc:
         raise ProviderMappingError(
             "NOVELAI_FROZEN_PAYLOAD_INVALID",
@@ -508,7 +542,7 @@ def _join_tags(values: tuple[str, ...]) -> str:
     return ", ".join(values)
 
 
-def _payload_sha256(payload: NovelAIV4Payload) -> str:
+def _payload_sha256(payload: NovelAIPayload) -> str:
     return canonical_sha256(payload.model_dump(mode="json", exclude_none=True))
 
 
@@ -516,5 +550,5 @@ def _fold(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
-def _fail(code: str, message: str, details: dict[str, Any] | None = None) -> None:
+def _fail(code: str, message: str, details: dict[str, Any] | None = None) -> Never:
     raise ProviderMappingError(code, message, details)

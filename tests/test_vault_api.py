@@ -46,3 +46,40 @@ def test_vault_api_never_returns_secret(
     )
     assert wrong_password.status_code == 401
     assert secret not in wrong_password.text
+
+
+def test_invalid_credential_update_does_not_invalidate_novelai_configuration(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    client.post(
+        "/api/v1/vault",
+        headers=session_headers,
+        json={"master_password": "correct horse battery staple"},
+    )
+    client.put(
+        "/api/v1/vault/profiles/novelai",
+        headers=session_headers,
+        json={"provider": "novelai", "label": "NovelAI", "secret": "first-token"},
+    )
+    project = client.post(
+        "/api/v1/projects", headers=session_headers, json={"title": "凭据更新测试"}
+    ).json()
+    configured = client.put(
+        f"/api/v1/projects/{project['project_id']}/novelai/config",
+        headers=session_headers,
+        json={
+            "provider_model_id": "nai-diffusion-5-full",
+            "credential_profile_id": "novelai",
+            "timeout_seconds": 30,
+        },
+    ).json()
+
+    rejected = client.put(
+        "/api/v1/vault/profiles/novelai",
+        headers=session_headers,
+        json={"provider": "novelai", "label": "NovelAI", "secret": " "},
+    )
+
+    assert rejected.status_code == 422
+    loaded = client.get(f"/api/v1/projects/{project['project_id']}/novelai/config").json()
+    assert loaded["revision"] == configured["revision"]

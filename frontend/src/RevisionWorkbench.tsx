@@ -38,7 +38,7 @@ export function RevisionWorkbench({
   const [maskFile, setMaskFile] = useState<File | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [strength, setStrength] = useState(0.65);
-  const [costCeiling, setCostCeiling] = useState(10);
+  const [costCeiling, setCostCeiling] = useState(0);
   const [estimate, setEstimate] = useState<RevisionEstimate | null>(null);
   const [job, setJob] = useState<GenerationJob | null>(null);
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
@@ -74,6 +74,7 @@ export function RevisionWorkbench({
 
   function resetPlan(nextOperation: RevisionOperation = operation) {
     setOperation(nextOperation);
+    setCostCeiling(nextOperation === "inpaint" ? 10 : 0);
     setEstimate(null);
     setJob(null);
     setScopeConfirmed(false);
@@ -230,9 +231,13 @@ export function RevisionWorkbench({
           </label>
         )}
         <NumberInput
-          label="每格保守预留（Anlas）"
+          label={
+            operation === "inpaint"
+              ? "每格付费成本上限（Anlas）"
+              : "每格成本上限（0 = 仅使用 V5 Opus 额度）"
+          }
           value={costCeiling}
-          min={1}
+          min={operation === "inpaint" ? 1 : 0}
           max={100000}
           onChange={setCostCeiling}
         />
@@ -273,8 +278,16 @@ export function RevisionWorkbench({
         <div className="revision-approval">
           <p>
             {estimate.panel_count} 格 · 最多 {estimate.estimated_calls} 次请求 ·
-            保守预留 ≤ {estimate.estimated_cost_upper_anlas} Anlas
+            {estimate.billing_mode === "opus_zero_anlas"
+              ? " 本地 Anlas 硬上限 = 0"
+              : ` 保守预留 ≤ ${estimate.estimated_cost_upper_anlas} Anlas`}
           </p>
+          {estimate.billing_mode === "opus_zero_anlas" && (
+            <p>
+              每张 reroll 前都会重新核验 Opus 与 V5 使用额度；核验显示不可用时停止。
+              这是资格检查，不是供应商账单保证；核验通过后的实际扣费仍由 NovelAI 决定。
+            </p>
+          )}
           <label className="confirmation-row">
             <input
               type="checkbox"
@@ -309,7 +322,11 @@ export function RevisionWorkbench({
                   checked={executeConfirmed}
                   onChange={(event) => setExecuteConfirmed(event.target.checked)}
                 />
-                <span>我确认现在执行，这可能产生 NovelAI 费用</span>
+                <span>
+                  {job.cost_basis === "opus_zero_anlas_official_limits_v1"
+                    ? "我确认现在使用 NovelAI V5 Opus 额度执行"
+                    : "我确认现在执行，这可能产生 NovelAI 费用"}
+                </span>
               </label>
               <button
                 type="button"

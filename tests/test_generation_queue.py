@@ -539,7 +539,7 @@ def prepare_generation_inputs(
         f"/api/v1/projects/{project_id}/novelai/config",
         headers=headers,
         json={
-            "provider_model_id": "nai-diffusion-4-5-full",
+            "provider_model_id": "nai-diffusion-5-full",
             "credential_profile_id": "novelai",
             "timeout_seconds": 20,
         },

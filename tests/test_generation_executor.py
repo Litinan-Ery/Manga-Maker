@@ -375,10 +375,70 @@ def test_tampered_frozen_provider_payload_blocks_before_secret_read(
     assert provider.generation_calls == 0
 
 
+def test_rotated_credential_invalidates_approved_job_before_secret_read(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared = prepare_job(client, session_headers, title_suffix="凭据轮换")
+    rotated = client.put(
+        "/api/v1/vault/profiles/novelai",
+        headers=session_headers,
+        json={
+            "provider": "novelai",
+            "label": "NovelAI rotated",
+            "secret": "rotated-unit-novelai-secret",
+        },
+    )
+    assert rotated.status_code == 200
+    started = transition(
+        client, session_headers, prepared["project_id"], prepared["job"], "start"
+    )
+    provider = MockNovelAIClient()
+    install_image_provider(client, provider)
+    secret_reads = 0
+    original_get_secret = client.app.state.vault.get_secret
+
+    def counted_get_secret(profile_id: str) -> str:
+        nonlocal secret_reads
+        secret_reads += 1
+        return original_get_secret(profile_id)
+
+    client.app.state.vault.get_secret = counted_get_secret
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    failed = client.app.state.generation_queue.get_job(
+        prepared["project_id"], started["job_id"]
+    )
+    assert failed["status"] == "failed"
+    assert failed["items"][0]["last_error_code"] == "GENERATION_APPROVAL_STALE"
+    assert failed["calls_started"] == 0
+    assert secret_reads == 0
+    assert provider.generation_calls == 0
+
+
 def test_precise_reference_is_compiled_once_with_hashes_and_padding(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
     project_id, chapter, ready_bundle = prepare_generation_inputs(client, session_headers)
+    configured = client.put(
+        f"/api/v1/projects/{project_id}/novelai/config",
+        headers=session_headers,
+        json={
+            "provider_model_id": "nai-diffusion-4-5-full",
+            "credential_profile_id": "novelai",
+            "timeout_seconds": 20,
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    client.app.state.novelai.provider_factory = (
+        lambda configuration, _secret_reader: MockNovelAIClient(
+            provider_model_id=configuration.provider_model_id
+        )
+    )
+    tested = client.post(
+        f"/api/v1/projects/{project_id}/novelai/connection-test",
+        headers=session_headers,
+    )
+    assert tested.status_code == 200, tested.text
     character = ready_bundle["character_bible"]
     character_id = character["document"]["characters"][0]["character_id"]
     uploaded = client.post(

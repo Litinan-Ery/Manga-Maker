@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 
 from backend.app.modules.production.adapters.novelai import (
-    NOVELAI_V4_MAPPING_VERSION,
+    NOVELAI_MAPPING_VERSION,
     MappedNovelAIExecution,
     map_prompt_plan_to_novelai,
     require_frozen_novelai_payload,
@@ -18,7 +18,7 @@ from backend.app.modules.prompting.public import prompt_plan_sha256
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = ROOT / "contracts" / "fixtures" / "v0.3"
-CONTRACT_SHA256 = "f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8"
+CONTRACT_SHA256 = "2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684"
 CAPABILITY_SHA256 = "a" * 64
 GENERATION_SPEC_ID = UUID("01900000-0000-7000-8000-000000000602")
 
@@ -33,15 +33,15 @@ def mapped(plan: PromptPlan, **overrides: object) -> MappedNovelAIExecution:
     arguments: dict[str, object] = {
         "prompt_plan": plan,
         "generation_spec_id": GENERATION_SPEC_ID,
-        "model_id": "nai-diffusion-4-5-full",
+        "model_id": "nai-diffusion-5-full",
         "contract_sha256": CONTRACT_SHA256,
         "capability_snapshot_sha256": CAPABILITY_SHA256,
         "page_layout_draft_sha256": "b" * 64,
         "width": 1216,
         "height": 896,
         "seed": 424242,
-        "steps": 28,
-        "scale": 5.0,
+        "steps": 23,
+        "scale": 7.0,
         "sampler": "k_euler_ancestral",
         "noise_schedule": "karras",
     }
@@ -66,8 +66,12 @@ def test_single_double_triple_mapping_is_aligned_and_deterministic(
     second = mapped(plan)
 
     assert first == second
-    assert first.execution_spec.mapping_version == NOVELAI_V4_MAPPING_VERSION
+    assert first.execution_spec.mapping_version == NOVELAI_MAPPING_VERSION
     assert first.execution_spec.payload_sha256 == second.execution_spec.payload_sha256
+    assert first.payload.parameters.params_version == 4
+    assert first.payload.parameters.ucPreset == 4
+    assert first.payload.parameters.tag_hint_qt == 1
+    assert first.payload.parameters.tag_hint_uc_preset == 4
     positive = first.payload.parameters.v4_prompt.caption.char_captions
     negative = first.payload.parameters.v4_negative_prompt.caption.char_captions
     assert len(positive) == len(negative) == character_count
@@ -123,11 +127,11 @@ def test_swapping_character_order_keeps_caption_coordinate_action_together() -> 
     (
         (
             "nai-diffusion-3",
-            NOVELAI_V4_MAPPING_VERSION,
+            NOVELAI_MAPPING_VERSION,
             "NOVELAI_MULTI_CHARACTER_UNSUPPORTED",
         ),
         (
-            "nai-diffusion-4-5-full",
+            "nai-diffusion-5-full",
             "novelai-image-future",
             "NOVELAI_MAPPING_VERSION_UNSUPPORTED",
         ),
@@ -168,5 +172,5 @@ def test_provider_spec_fixture_is_materialized_by_the_current_mapper() -> None:
 
     assert result.execution_spec.mapping_version == fixture["mapping_version"]
     assert result.execution_spec.contract_sha256 == fixture["contract_sha256"]
-    assert result.execution_spec.model_id == "nai-diffusion-4-5-full"
+    assert result.execution_spec.model_id == "nai-diffusion-5-full"
     assert len(result.execution_spec.character_captions) == len(fixture["character_captions"])

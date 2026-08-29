@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import re
 import secrets
 import tempfile
+import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -67,6 +70,19 @@ class CredentialVault:
         self.path = path
         self.kdf = kdf or KdfParameters()
         self._key: bytearray | None = None
+        self._credential_lock = threading.RLock()
+
+    @contextlib.contextmanager
+    def credential_transaction(self) -> Iterator[None]:
+        """Serialize credential rotation with generation's final secret read."""
+
+        with self._credential_lock:
+            yield
+
+    def validate_secret_update(self, profile_id: str, secret: str) -> None:
+        self._validate_profile_id(profile_id)
+        if not secret.strip():
+            raise ValueError("secret must not be empty")
 
     @property
     def is_configured(self) -> bool:

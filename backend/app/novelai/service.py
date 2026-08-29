@@ -21,6 +21,7 @@ from .client import (
     NovelAIRateLimitError,
     NovelAIResponseFormatError,
     NovelAITemporaryError,
+    NovelAIUsageLimitUnavailableError,
     SecretReader,
 )
 from .contracts import (
@@ -182,6 +183,21 @@ class NovelAIService:
 
     async def test_connection(self, project_id: str) -> dict[str, Any]:
         row = self._configuration_row(project_id)
+        if (
+            str(row["mapping_version"]) != MAPPING_VERSION
+            or str(row["contract_sha256"]) != CONTRACT_SHA256
+        ):
+            self._record_connection_result(
+                project_id,
+                config_revision=int(row["revision"]),
+                result="failed",
+                error_code="NOVELAI_CONFIGURATION_STALE",
+            )
+            raise ApplicationError(
+                code="NOVELAI_CONFIGURATION_STALE",
+                message="NovelAI 契约已更新，请先重新保存当前模型配置。",
+                status_code=409,
+            )
         configuration = NovelAIConfiguration(
             provider_model_id=str(row["provider_model_id"]),
             credential_profile_id=str(row["credential_profile_id"]),
@@ -204,7 +220,13 @@ class NovelAIService:
         model_supports_zero_anlas = require_model_profile(
             str(row["provider_model_id"])
         ).supports_opus_zero_anlas
-        zero_anlas_ready = subscription.opus_active and model_supports_zero_anlas
+        model_is_v5 = str(row["provider_model_id"]).startswith("nai-diffusion-5-")
+        usage_ready = (
+            subscription.v5_allowance_available is True if model_is_v5 else True
+        )
+        zero_anlas_ready = (
+            subscription.opus_active and model_supports_zero_anlas and usage_ready
+        )
         self._record_connection_result(
             project_id,
             config_revision=int(row["revision"]),
@@ -227,6 +249,43 @@ class NovelAIService:
             "generated_images": 0,
             "last_connection_at": refreshed["last_connection_at"],
         }
+
+    def invalidate_credential_profile(self, profile_id: str) -> int:
+        """Fail closed when a credential value changes behind a frozen job."""
+
+        with self.database.writer() as connection:
+            rows = connection.execute(
+                """
+                SELECT project_id, revision
+                FROM novelai_configs
+                WHERE credential_profile_id = ?
+                """,
+                (profile_id,),
+            ).fetchall()
+            for row in rows:
+                project_id = str(row["project_id"])
+                previous_revision = int(row["revision"])
+                next_revision = previous_revision + 1
+                connection.execute(
+                    """
+                    UPDATE novelai_configs
+                    SET revision = ?, last_connection_status = NULL,
+                        last_connection_at = NULL, updated_at = CURRENT_TIMESTAMP
+                    WHERE project_id = ? AND revision = ?
+                    """,
+                    (next_revision, project_id, previous_revision),
+                )
+                self._audit(
+                    connection,
+                    project_id,
+                    "novelai.credential_binding_invalidated",
+                    {
+                        "credential_profile_id": profile_id,
+                        "previous_revision": previous_revision,
+                        "revision": next_revision,
+                    },
+                )
+        return len(rows)
 
     def _record_connection_result(
         self,
@@ -332,6 +391,12 @@ class NovelAIService:
         if isinstance(exc, NovelAIOpusRequiredError):
             return ApplicationError(
                 "NOVELAI_OPUS_REQUIRED", "零 Anlas 生成需要有效的 NovelAI Opus 订阅。", 409
+            )
+        if isinstance(exc, NovelAIUsageLimitUnavailableError):
+            return ApplicationError(
+                "NOVELAI_V5_USAGE_LIMIT_UNAVAILABLE",
+                "NovelAI V5 的 Opus 免费使用额度当前不可用。",
+                409,
             )
         if isinstance(exc, NovelAIRateLimitError):
             return ApplicationError("NOVELAI_RATE_LIMITED", "NovelAI 当前请求过多。", 429)

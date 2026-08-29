@@ -64,7 +64,7 @@ LEGACY_API_APP_STATE_LOOKUPS: Final[Mapping[str, frozenset[str]]] = MappingProxy
         "projects.py": frozenset({"ingestion", "local_session", "projects"}),
         "prompting.py": frozenset({"local_session", "prompting"}),
         "recovery.py": frozenset({"local_session", "recovery"}),
-        "vault.py": frozenset({"local_session", "vault"}),
+        "vault.py": frozenset({"local_session", "novelai", "vault"}),
     }
 )
 

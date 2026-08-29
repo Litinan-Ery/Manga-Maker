@@ -54,6 +54,8 @@ class StubAdaptationFacade:
             project_id=project_id,
             chapter_id=CHAPTER_ID,
             page_id=page_id,
+            page_type="standard" if len(self._panel_ids) >= 3 else "special",
+            page_policy_version="storyboard-page-count-v1",
             storyboard=self.storyboard,
             panel_ids=self._panel_ids,
         )

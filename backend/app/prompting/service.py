@@ -8,9 +8,10 @@ from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from ..adaptation.models import StoryboardDocument
+from ..adaptation.page_policy import StoryboardPagePolicyError, validate_storyboard_page_policy
 from ..adaptation.service import AdaptationService, canonical_json
 from ..bibles.models import CharacterBibleDocument, StyleBibleDocument
-from ..bibles.service import BibleService
+from ..bibles.service import BibleService, storyboard_policy_error
 from ..database import Database
 from ..errors import ApplicationError
 from ..ids import uuid7
@@ -679,8 +680,16 @@ class PromptingService:
                 "当前已审批分镜与设定版本不一致。",
                 409,
             )
+        storyboard = StoryboardDocument.model_validate_json(str(row["document_json"]))
+        try:
+            validate_storyboard_page_policy(storyboard)
+        except StoryboardPagePolicyError as exc:
+            raise storyboard_policy_error(
+                exc,
+                "当前分镜页型或格数不合法，不能生成 Prompt。",
+            ) from exc
         return {
-            "storyboard": StoryboardDocument.model_validate_json(str(row["document_json"])),
+            "storyboard": storyboard,
             "storyboard_version_id": storyboard_version_id,
             "characters": characters,
             "style": style,

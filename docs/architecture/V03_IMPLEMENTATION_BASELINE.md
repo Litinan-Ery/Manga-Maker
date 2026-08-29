@@ -120,16 +120,16 @@ fixture 不包含真实凭证、真实小说全文或供应商响应中的敏感
 | 字段 | 固定值 |
 |---|---|
 | source URL | `https://image.novelai.net/docs/doc.json` |
-| fetched on | 2026-08-09 |
-| bytes | 112,680 |
-| SHA-256 | `f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8` |
+| fetched on | 2026-08-29 |
+| bytes | 113,758 |
+| SHA-256 | `2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684` |
 | Swagger/title/version | `2.0` / `Omegalaser API` / `1.0` |
-| Manga Maker mapping | `novelai-image-2026-08-09.3-v03-opus-zero-anlas-1` |
+| Manga Maker mapping | `novelai-image-2026-08-29.4-v5-full-1` |
 | machine-readable metadata | `contracts/novelai/image-api.contract.json` |
 
-哈希变化只触发人工 diff，不会在启动时联网升级。MM-036 已把 ProviderExecutionSpec
-mapping 固定为 `novelai-image-2026-08-09.3-v03-opus-zero-anlas-1`；本表不声称
-2026-08-09 快照仍是最新上游契约。
+哈希变化只触发人工 diff，不会在启动时联网升级。MM-036 的结构化
+ProviderExecutionSpec 现映射到 `novelai-image-2026-08-29.4-v5-full-1`；V4 命名的
+结构化提示字段是 V5 仍使用的线协议字段，不代表运行模型回退到 V4。
 
 ## 8. 文档一致性报告
 
@@ -145,3 +145,7 @@ mapping 固定为 `novelai-image-2026-08-09.3-v03-opus-zero-anlas-1`；本表不
 | 真实服务 | 未执行 | 仍需 MM-046/MM-051 的用户单独授权 |
 
 本报告只确认设计可实施和文档可追踪。Canonical Schema、代码边界、迁移、状态机、UI、恢复和真实生产分别由后续工单验收。
+
+> 后续状态（2026-08-29）：本基线之后已完成《沙王》真实 NovelAI V5 Full 零 Anlas
+> 12 页图像与 reroll 验收，见 `../sandkings-v5-acceptance.md`。上表“未执行”保留为本报告
+> 建立时的历史快照；真实外部文本模型、付费路径和完整 MM-046/MM-051 仍未完成。

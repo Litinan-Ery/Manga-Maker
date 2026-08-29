@@ -176,7 +176,7 @@ function promptVersion(approved: boolean): NonNullable<PromptingWorkflow["prompt
       text_model_config_revision: 1,
       text_model_name: "unit-model",
       prompt_template_version: "novelai-panel-prompts-1.0",
-      provider_model_id: "nai-diffusion-4-5-full",
+      provider_model_id: "nai-diffusion-5-full",
       layout_snapshot_sha256: "1".repeat(64),
       packages: [
         {
@@ -297,11 +297,11 @@ function promptInspector() {
         provider_payload_sha256: "5".repeat(64),
         provider_payload: {
           action: "generate",
-          model: "nai-diffusion-4-5-full",
+          model: "nai-diffusion-5-full",
           parameters: { seed: 42 },
         },
         mapping_version: "unit-mapping",
-        model_id: "nai-diffusion-4-5-full",
+        model_id: "nai-diffusion-5-full",
       },
     ],
     impact: { impacts: [], requires_reestimate: false },

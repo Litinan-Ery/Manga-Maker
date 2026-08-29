@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..modules.production.adapters.novelai import NovelAIV4Payload
+from ..modules.production.adapters.novelai import NovelAIPayload
 from ..modules.production.contracts import ProviderExecutionSpec
 from ..novelai.client import NovelAIImageRequest
 from ..novelai.contracts import OPUS_ZERO_ANLAS_DIMENSIONS, OPUS_ZERO_ANLAS_MAX_STEPS
@@ -184,11 +184,11 @@ class GenerationSpecDocument(BaseModel):
         elif any(value is not None for value in inpaint_fields):
             raise ValueError("non-inpaint generation cannot include mask inputs")
         if self.billing_mode == "opus_zero_anlas" and (
-            self.action != "generate"
+            self.action not in {"generate", "reroll"}
             or (self.width, self.height) not in OPUS_ZERO_ANLAS_DIMENSIONS
             or self.steps > OPUS_ZERO_ANLAS_MAX_STEPS
             or bool(self.references)
-            or any(value is not None for value in parent_fields)
+            or any(value is not None for value in inpaint_fields)
         ):
             raise ValueError("Opus zero-Anlas specs must satisfy the pinned free profile")
         return self
@@ -198,5 +198,5 @@ class GenerationSpecDocument(BaseModel):
 class CompiledGenerationSpec:
     document: GenerationSpecDocument
     provider_execution_spec: ProviderExecutionSpec
-    provider_payload: NovelAIV4Payload
+    provider_payload: NovelAIPayload
     provider_request: NovelAIImageRequest

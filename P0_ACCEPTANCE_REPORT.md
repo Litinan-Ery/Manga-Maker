@@ -1,5 +1,9 @@
 # Manga Maker P0 分层验收报告
 
+> 历史报告说明：本文记录 v0.2 离线 Mock 验收当时的证据。2026-08-29 后续已完成
+> 《沙王》真实 NovelAI V5 Full 零 Anlas 12 页图像与 reroll 验收，见
+> `docs/sandkings-v5-acceptance.md`；下文“真实请求为 0”仍是本次历史运行本身的准确记录。
+
 | 项目 | 结果 |
 |---|---|
 | 日期 | 2026-08-09 |
