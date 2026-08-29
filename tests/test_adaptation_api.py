@@ -4,6 +4,7 @@ import json
 from typing import Any, Literal
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.adaptation.models import (
@@ -20,6 +21,7 @@ from backend.app.adaptation.text_model import (
     TextModelAuthenticationError,
     TextModelConfiguration,
 )
+from backend.app.errors import ApplicationError
 
 
 class StubTextModel:
@@ -49,7 +51,7 @@ class StubTextModel:
             provider="openai-compatible",
             model=self.configuration.model,
             endpoint_host="models.example.test",
-            prompt_template_version="storyboard-1.0",
+            prompt_template_version="storyboard-1.1",
             response_sha256="a" * 64,
             input_tokens=120,
             output_tokens=80,
@@ -69,7 +71,7 @@ def storyboard_document(
     resolution_status = status  # keep the test fixture readable at construction sites
     scene_id = uuid4()
     return StoryboardDocument(
-        schema_version="1.0",
+        schema_version="1.1",
         storyboard_id=uuid4(),
         chapter_version=request.chapter_version,
         beat_resolutions=[
@@ -96,6 +98,7 @@ def storyboard_document(
             PageCandidate(
                 page_id=uuid4(),
                 page_number=1,
+                page_type="splash",
                 turning_point="主角进入房间",
                 scene_ids=[scene_id],
                 panels=[
@@ -341,7 +344,7 @@ def test_configuration_generation_revision_and_approval_are_versioned(
         headers=session_headers,
         json={"document": revised_document},
     )
-    assert revised.status_code == 201
+    assert revised.status_code == 201, revised.json()
     second = revised.json()
     assert second["version"] == 2
     assert second["approval_status"] == "draft"
@@ -393,6 +396,122 @@ def test_unresolved_story_beats_block_approval(
     )
     assert approval.status_code == 422
     assert approval.json()["error"]["code"] == "STORYBOARD_NOT_APPROVABLE"
+
+
+def test_page_policy_validation_blocks_invalid_standard_page_approval(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _beat_set = create_project_and_source(client, session_headers)
+    configure_vault_and_model(client, session_headers, project_id)
+    install_stub(client)
+    generated = client.post(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/generate",
+        headers=session_headers,
+        json={"chapter_id": chapter["chapter_id"], "page_budget": 2},
+    ).json()
+    invalid_document = json.loads(json.dumps(generated["document"]))
+    invalid_document["pages"][0]["page_type"] = "standard"
+
+    revised = client.post(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/"
+        f"{generated['storyboard_version_id']}/revisions",
+        headers=session_headers,
+        json={"document": invalid_document},
+    )
+    assert revised.status_code == 422, revised.json()
+    assert revised.json()["error"]["code"] == "STORYBOARD_PAGE_POLICY_INVALID"
+    with client.app.state.database.writer() as connection:
+        connection.execute(
+            "UPDATE storyboard_versions SET document_json = ? "
+            "WHERE storyboard_version_id = ?",
+            (json.dumps(invalid_document), generated["storyboard_version_id"]),
+        )
+
+    validation = client.post(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/"
+        f"{generated['storyboard_version_id']}/validate",
+        headers=session_headers,
+    )
+    assert validation.status_code == 200
+    assert validation.json()["valid"] is False
+    assert validation.json()["external_requests_started"] == 0
+    assert validation.json()["findings"][0]["allowed_range"] == {
+        "minimum": 3,
+        "maximum": 6,
+    }
+
+    approval = client.post(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/"
+        f"{generated['storyboard_version_id']}/approve",
+        headers=session_headers,
+    )
+    assert approval.status_code == 422
+    assert approval.json()["error"]["code"] == "STORYBOARD_PAGE_POLICY_INVALID"
+
+
+def test_storyboard_1_0_remains_readable_but_requires_replanning(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id, chapter, _beat_set = create_project_and_source(client, session_headers)
+    configure_vault_and_model(client, session_headers, project_id)
+    install_stub(client)
+    generated = client.post(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/generate",
+        headers=session_headers,
+        json={"chapter_id": chapter["chapter_id"], "page_budget": 2},
+    ).json()
+    legacy_document = json.loads(json.dumps(generated["document"]))
+    legacy_document["schema_version"] = "1.0"
+    legacy_document["pages"][0].pop("page_type")
+    with client.app.state.database.writer() as connection:
+        connection.execute(
+            "UPDATE storyboard_versions SET document_json = ? "
+            "WHERE storyboard_version_id = ?",
+            (json.dumps(legacy_document), generated["storyboard_version_id"]),
+        )
+        connection.execute(
+            "INSERT INTO storyboard_approvals(approval_id, storyboard_version_id, "
+            "approval_hash) VALUES (?, ?, ?)",
+            (str(uuid4()), generated["storyboard_version_id"], "a" * 64),
+        )
+
+    loaded = client.get(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/"
+        f"{generated['storyboard_version_id']}"
+    )
+    assert loaded.status_code == 200
+    assert loaded.json()["document"]["schema_version"] == "1.0"
+    assert "page_type" not in loaded.json()["document"]["pages"][0]
+    assert loaded.json()["document"] == legacy_document
+    assert loaded.json()["page_policy_findings"][0]["code"] == (
+        "STORYBOARD_UPGRADE_REQUIRED"
+    )
+
+    for action, body in (
+        ("approve", None),
+        ("revisions", {"document": legacy_document}),
+    ):
+        response = client.post(
+            f"/api/v1/projects/{project_id}/adaptation/storyboards/"
+            f"{generated['storyboard_version_id']}/{action}",
+            headers=session_headers,
+            json=body,
+        )
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "STORYBOARD_UPGRADE_REQUIRED"
+
+    page_id = legacy_document["pages"][0]["page_id"]
+    with pytest.raises(ApplicationError) as layout_error:
+        client.app.state.container.adaptation_facade.storyboard_page(
+            project_id,
+            generated["storyboard_version_id"],
+            page_id,
+        )
+    assert layout_error.value.code == "STORYBOARD_UPGRADE_REQUIRED"
+
+    with pytest.raises(ApplicationError) as page_error:
+        client.app.state.pages.draft_pages(project_id, chapter["chapter_id"])
+    assert page_error.value.code == "STORYBOARD_UPGRADE_REQUIRED"
 
 
 def test_new_beat_set_marks_storyboard_stale(

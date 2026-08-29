@@ -8,8 +8,9 @@ from typing import Any, Literal, cast
 from uuid import NAMESPACE_URL, uuid5
 
 from ..adaptation.models import StoryboardDocument
+from ..adaptation.page_policy import StoryboardPagePolicyError, validate_storyboard_page_policy
 from ..bibles.models import CharacterBibleDocument, CharacterProfile, StyleBibleDocument
-from ..bibles.service import BibleService
+from ..bibles.service import BibleService, storyboard_policy_error
 from ..database import Database
 from ..errors import ApplicationError
 from ..ids import uuid7
@@ -24,7 +25,7 @@ from .references import ReferencePreparationError, prepare_precise_reference
 
 DEFAULT_CANDIDATE_COUNT_PER_PANEL = 1
 QUALITY_RULE_VERSION = "quality-rules-v1"
-GENERATION_PARAMETER_VERSION = "novelai-v4-safe-defaults-1"
+GENERATION_PARAMETER_VERSION = "novelai-v5-safe-defaults-1"
 OPUS_ZERO_ANLAS_COST_BASIS = "opus_zero_anlas_official_limits_v1"
 STANDARD_COST_BASIS = "user_confirmed_per_panel_ceiling"
 
@@ -267,8 +268,9 @@ class GenerationPlan:
             "billing_mode": self.billing_mode,
             "cost_basis": self.cost_basis,
             "cost_notice": (
-                "已冻结为 Opus 零 Anlas 资格载荷: 单次 1 张、普通尺寸、28 步、无基础图或参考图; "
-                "本地 Anlas 预留为 0，每次出图前还会实时核验账户仍为有效 Opus。"
+                "已冻结为 Opus 零 Anlas 资格载荷: 单次 1 张、普通尺寸、不超过 28 步、"
+                "无基础图或参考图; 本地 Anlas 预留为 0，每次出图前还会实时核验账户"
+                "仍为有效 Opus 且 V5 使用额度可用。"
                 "资格核验不是账单回执。供应商未回传逐次扣费时，实际费用保持未核实。"
                 if self.billing_mode == "opus_zero_anlas"
                 else (
@@ -1431,7 +1433,15 @@ class GenerationQueueService:
                 "NovelAI 契约映射已经升级，请重新保存配置并执行连接测试。",
                 409,
             )
+        model_profile = require_model_profile(str(novelai_row["provider_model_id"]))
         document = StoryboardDocument.model_validate_json(str(storyboard_row["document_json"]))
+        try:
+            validate_storyboard_page_policy(document)
+        except StoryboardPagePolicyError as exc:
+            raise storyboard_policy_error(
+                exc,
+                "当前分镜页型或格数不合法，不能创建新的生成任务。",
+            ) from exc
         panels: list[PlannedPanel] = []
         ordinal = 0
         for page in document.pages:
@@ -1490,8 +1500,7 @@ class GenerationQueueService:
                 )
                 if reference_candidate is not None:
                     reference_asset_id, description = reference_candidate
-                    profile = require_model_profile(str(novelai_row["provider_model_id"]))
-                    if not profile.supports_precise_reference:
+                    if not model_profile.supports_precise_reference:
                         raise ApplicationError(
                             "GENERATION_REFERENCE_UNSUPPORTED",
                             "已审批设定包含参考图，但所选模型不支持 Precise Reference。",
@@ -1552,8 +1561,8 @@ class GenerationQueueService:
                         width=int(binding["selected_width"]),
                         height=int(binding["selected_height"]),
                         seed=provider_seed,
-                        steps=28,
-                        scale=5.0,
+                        steps=model_profile.default_steps,
+                        scale=model_profile.default_scale,
                         sampler="k_euler_ancestral",
                         noise_schedule="karras",
                         mapping_version=str(novelai_row["mapping_version"]),

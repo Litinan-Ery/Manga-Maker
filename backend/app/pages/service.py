@@ -9,6 +9,10 @@ from typing import Any, Literal, cast
 from pydantic import ValidationError
 
 from ..adaptation.models import PageCandidate, StoryboardDocument
+from ..adaptation.page_policy import (
+    STORYBOARD_PAGE_POLICY_VERSION,
+    storyboard_page_policy_findings,
+)
 from ..database import Database
 from ..errors import ApplicationError
 from ..generation.assets import canonical_json, fsync_directory, write_synced
@@ -627,9 +631,30 @@ class PageService:
             raise ApplicationError(
                 "PAGE_STORYBOARD_NOT_APPROVED", "请先审批当前分镜。", 409
             )
-        return str(row["storyboard_version_id"]), StoryboardDocument.model_validate_json(
-            str(row["document_json"])
-        )
+        document = StoryboardDocument.model_validate_json(str(row["document_json"]))
+        findings = storyboard_page_policy_findings(document)
+        if findings:
+            upgrade_required = any(
+                finding.code == "STORYBOARD_UPGRADE_REQUIRED" for finding in findings
+            )
+            raise ApplicationError(
+                code=(
+                    "STORYBOARD_UPGRADE_REQUIRED"
+                    if upgrade_required
+                    else "STORYBOARD_PAGE_POLICY_INVALID"
+                ),
+                message=(
+                    "Storyboard 1.0 仅供历史只读，请重新生成 1.1 分镜。"
+                    if upgrade_required
+                    else "Storyboard 页面政策无效，不能创建页面草稿。"
+                ),
+                status_code=409 if upgrade_required else 422,
+                details={
+                    "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+                    "findings": [finding.payload() for finding in findings],
+                },
+            )
+        return str(row["storyboard_version_id"]), document
 
     def _current_assets_for_page(
         self, project_id: str, page: PageCandidate

@@ -132,11 +132,16 @@ export interface NovelAIModelCapability {
   inpaint_model_id: string;
   recommended: boolean;
   supports_opus_zero_anlas: boolean;
+  opus_allowance_is_usage_limited: boolean;
   supports_precise_reference: boolean;
   supports_multi_character_prompt: boolean;
   supports_vibe_transfer: boolean;
   precise_reference_excludes_vibe_transfer: boolean;
   prompt_token_note: string;
+  default_steps: number;
+  default_scale: number;
+  params_version: number;
+  uc_preset: number;
 }
 
 export interface NovelAICapabilities {
@@ -156,6 +161,7 @@ export interface NovelAICapabilities {
     n_samples: number;
     requires_single_image: true;
     allows_base_or_reference_image: false;
+    v5_allowance_is_usage_limited: boolean;
     default_dimensions: Array<{ width: number; height: number }>;
     official_docs: string[];
   };
@@ -246,7 +252,8 @@ export interface RevisionEstimate {
   panel_count: number;
   estimated_calls: number;
   estimated_cost_upper_anlas: number;
-  cost_basis: "user_confirmed_per_panel_ceiling";
+  billing_mode: "standard" | "opus_zero_anlas";
+  cost_basis: "user_confirmed_per_panel_ceiling" | "opus_zero_anlas_official_limits_v1";
   cost_notice: string;
   plan_fingerprint: string;
   targets: RevisionTarget[];
@@ -810,9 +817,12 @@ export interface StoryboardScene {
   beat_ids: string[];
 }
 
+export type StoryboardPageType = "standard" | "cover" | "splash" | "special";
+
 export interface StoryboardPage {
   page_id: string;
   page_number: number;
+  page_type?: StoryboardPageType | null;
   turning_point: string;
   scene_ids: string[];
   panels: StoryboardPanel[];
@@ -826,12 +836,23 @@ export interface BeatResolution {
 }
 
 export interface StoryboardDocument {
-  schema_version: "1.0";
+  schema_version: "1.0" | "1.1";
   storyboard_id: string;
   chapter_version: number;
   beat_resolutions: BeatResolution[];
   scenes: StoryboardScene[];
   pages: StoryboardPage[];
+}
+
+export interface StoryboardPagePolicyFinding {
+  code: "STORYBOARD_PAGE_POLICY_INVALID" | "STORYBOARD_UPGRADE_REQUIRED";
+  path: string;
+  message: string;
+  page_id: string | null;
+  page_number: number | null;
+  page_type: string | null;
+  panel_count: number | null;
+  allowed_range: { minimum: number; maximum: number } | null;
 }
 
 export interface StoryboardVersion {
@@ -849,6 +870,9 @@ export interface StoryboardVersion {
   approval_hash: string | null;
   approved_at: string | null;
   unresolved_count: number;
+  page_policy_version: string;
+  page_policy_valid: boolean;
+  page_policy_findings: StoryboardPagePolicyFinding[];
   is_current: boolean;
   created_at: string;
 }
@@ -1522,6 +1546,10 @@ export function testNovelAIConnection(projectId: string): Promise<{
     subscription_tier: number;
     is_grace_period: boolean;
     opus_active: boolean;
+    usage_percent: number | null;
+    usage_is_negative: boolean | null;
+    usage_time_until_next_percent: number | null;
+    v5_allowance_available: boolean | null;
   };
   zero_anlas_ready: boolean;
   model_supports_zero_anlas: boolean;

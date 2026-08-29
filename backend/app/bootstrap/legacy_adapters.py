@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from ..adaptation.models import StoryboardDocument
+from ..adaptation.page_policy import (
+    STORYBOARD_PAGE_POLICY_VERSION,
+    StoryboardPagePolicyError,
+    storyboard_page_policy_findings,
+)
 from ..adaptation.service import AdaptationService
+from ..errors import ApplicationError
 from ..modules.adaptation.contracts import StoryboardPageSnapshotV1, StoryboardVersionRefV1
 from ..shared_kernel import canonical_sha256
 
@@ -28,6 +35,16 @@ class LegacyAdaptationFacade:
         document = payload["document"]
         if not isinstance(document, dict):
             raise ValueError("storyboard document is invalid")
+        parsed_document = StoryboardDocument.model_validate(document)
+        findings = storyboard_page_policy_findings(parsed_document)
+        if findings:
+            raise page_policy_application_error(StoryboardPagePolicyError(findings))
+        if payload["approval_status"] != "approved":
+            raise ApplicationError(
+                code="STORYBOARD_NOT_APPROVED",
+                message="请先审批当前 Storyboard。",
+                status_code=409,
+            )
         pages = document.get("pages")
         if not isinstance(pages, list):
             raise ValueError("storyboard pages are invalid")
@@ -44,14 +61,18 @@ class LegacyAdaptationFacade:
         panels = page.get("panels")
         if not isinstance(panels, list):
             raise ValueError("storyboard page panels are invalid")
+        page_type = page.get("page_type")
+        if page_type not in {"standard", "cover", "splash", "special"}:
+            raise ValueError("storyboard page type is invalid")
         return StoryboardPageSnapshotV1(
             project_id=project_id,
             chapter_id=str(payload["chapter_id"]),
             page_id=page_id,
+            page_type=page_type,
+            page_policy_version=STORYBOARD_PAGE_POLICY_VERSION,
             storyboard=self._ref(payload),
             panel_ids=tuple(str(panel["panel_id"]) for panel in panels),
         )
-
     @staticmethod
     def _ref(payload: dict[str, object]) -> StoryboardVersionRefV1:
         document = payload["document"]
@@ -62,3 +83,26 @@ class LegacyAdaptationFacade:
             content_sha256=canonical_sha256(document),
             approved=payload["approval_status"] == "approved",
         )
+
+
+def page_policy_application_error(error: StoryboardPagePolicyError) -> ApplicationError:
+    upgrade_required = any(
+        finding.code == "STORYBOARD_UPGRADE_REQUIRED" for finding in error.findings
+    )
+    return ApplicationError(
+        code=(
+            "STORYBOARD_UPGRADE_REQUIRED"
+            if upgrade_required
+            else "STORYBOARD_PAGE_POLICY_INVALID"
+        ),
+        message=(
+            "Storyboard 1.0 仅供历史只读，请重新生成 1.1 分镜。"
+            if upgrade_required
+            else "Storyboard 页面政策无效，不能创建或修改版式。"
+        ),
+        status_code=409 if upgrade_required else 422,
+        details={
+            "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+            "findings": [finding.payload() for finding in error.findings],
+        },
+    )

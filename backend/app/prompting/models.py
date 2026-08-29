@@ -103,6 +103,7 @@ class PromptCharacterBlockDraft(ContractModel):
     def unique_tags(self) -> PromptCharacterBlockDraft:
         _validate_tag_list(self.variable_tags, "variable_tags")
         _validate_tag_list(self.negative_tags, "negative_tags")
+        _validate_tag_list([self.action], "action")
         return self
 
 
@@ -133,6 +134,8 @@ class PanelPromptDraft(ContractModel):
             raise ValueError("prompt character block order must be contiguous and start at zero")
         if len(self.character_blocks) > 1 and self.relationship_action is None:
             raise ValueError("multi-character prompts require a relationship action")
+        if self.relationship_action is not None:
+            _validate_tag_list([self.relationship_action], "relationship_action")
         return self
 
 

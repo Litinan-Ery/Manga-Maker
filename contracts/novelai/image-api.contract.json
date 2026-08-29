@@ -10,16 +10,18 @@
     "subscription": "/user/subscription",
     "upscale": "/ai/upscale"
   },
-  "contract_bytes": 112680,
-  "fetched_on": "2026-08-09",
-  "mapping_version": "novelai-image-2026-08-09.3-v03-opus-zero-anlas-1",
+  "contract_bytes": 113758,
+  "fetched_on": "2026-08-29",
+  "mapping_version": "novelai-image-2026-08-29.4-v5-full-1",
   "observed_contract": {
     "generation_request_fields": ["action", "input", "model", "parameters", "url"],
     "inpaint_parameter_fields": ["add_original_image", "color_correct", "image", "img2img", "mask", "noise", "strength"],
     "security": "ApiKeyAuth via Authorization header",
-    "tag_suggestion_query": ["model", "prompt", "lang"]
+    "tag_suggestion_query": ["model", "prompt", "lang"],
+    "subscription_usage_fields": ["percent", "isNegative", "timeUntilNextPercent"],
+    "v5_parameter_fields": ["straight_alpha", "tag_hint_qt", "tag_hint_transparent_background", "tag_hint_uc_preset"]
   },
-  "sha256": "f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8",
+  "sha256": "2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684",
   "source_url": "https://image.novelai.net/docs/doc.json",
   "swagger_version": "2.0"
 }

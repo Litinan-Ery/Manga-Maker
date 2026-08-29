@@ -119,6 +119,7 @@ function storyboardFor(fixture: PageLayoutDraft): ApprovedStoryboardSummary {
       {
         page_id: fixture.page_id,
         page_number: 1,
+        page_type: leafFrames(fixture).length < 3 ? "special" : "standard",
         turning_point: "fixture turning point",
         panels: leafFrames(fixture).map((frame, index) => ({
           panel_id: frame.panel_id ?? crypto.randomUUID(),

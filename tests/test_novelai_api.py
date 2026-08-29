@@ -28,12 +28,17 @@ def test_pinned_contract_snapshot_matches_runtime_profile() -> None:
     assert snapshot["mapping_version"] == MAPPING_VERSION
     assert snapshot["source_url"].endswith("/docs/doc.json")
     assert snapshot["allowed_paths"]["connection_test"] == CONNECTION_TEST_PATH
-    assert len(MODEL_PROFILES) == 6
+    assert len(MODEL_PROFILES) == 8
     assert sum(profile.recommended for profile in MODEL_PROFILES) == 1
+    assert [str(profile.model) for profile in MODEL_PROFILES if profile.recommended] == [
+        "nai-diffusion-5-full"
+    ]
     assert [profile.label for profile in MODEL_PROFILES if profile.supports_precise_reference] == [
         "Anime V4.5 Full",
         "Anime V4.5 Curated",
     ]
+    assert contract_payload()["models"][0]["params_version"] == 4
+    assert contract_payload()["models"][0]["default_scale"] == 7.0
     assert contract_payload()["sha256"] == snapshot["sha256"]
 
 
@@ -54,7 +59,7 @@ def test_configuration_and_explicit_mock_connection_test_do_not_persist_secret(
         f"/api/v1/projects/{project_id}/novelai/config",
         headers=session_headers,
         json={
-            "provider_model_id": "nai-diffusion-4-5-full",
+            "provider_model_id": "nai-diffusion-5-full",
             "credential_profile_id": "novelai",
             "timeout_seconds": 20,
         },
@@ -127,6 +132,36 @@ def test_connection_reports_legacy_model_as_standard_billing_only(
     assert tested.json()["zero_anlas_ready"] is False
 
 
+def test_connection_rejects_stale_contract_before_provider_access(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    project_id = create_project(client, session_headers)
+    create_vault_profile(
+        client, session_headers, provider="novelai", secret="unit-novelai-secret"
+    )
+    saved = save_configuration(client, session_headers, project_id)
+    assert saved.status_code == 200
+    with client.app.state.database.writer() as connection:
+        connection.execute(
+            "UPDATE novelai_configs SET mapping_version = 'stale-mapping' WHERE project_id = ?",
+            (project_id,),
+        )
+    mock = MockNovelAIClient()
+    client.app.state.novelai.provider_factory = lambda _configuration, _secret_reader: mock
+
+    tested = client.post(
+        f"/api/v1/projects/{project_id}/novelai/connection-test",
+        headers=session_headers,
+    )
+
+    assert tested.status_code == 409
+    assert tested.json()["error"]["code"] == "NOVELAI_CONFIGURATION_STALE"
+    assert mock.connection_calls == 0
+    assert mock.subscription_calls == 0
+    loaded = client.get(f"/api/v1/projects/{project_id}/novelai/config")
+    assert loaded.json()["last_connection_status"] == "failed"
+
+
 def test_configuration_requires_unlocked_novelai_profile(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
@@ -183,7 +218,7 @@ def save_configuration(
         f"/api/v1/projects/{project_id}/novelai/config",
         headers=headers,
         json={
-            "provider_model_id": "nai-diffusion-4-5-full",
+            "provider_model_id": "nai-diffusion-5-full",
             "credential_profile_id": "novelai",
             "timeout_seconds": 30,
         },

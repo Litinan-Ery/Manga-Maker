@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Manga Maker"
-    app_version: str = "0.2.0"
+    app_version: str = "0.2.1"
     environment: str = "development"
     bind_host: str = "127.0.0.1"
     bind_port: int = Field(default=0, ge=0, le=65535)

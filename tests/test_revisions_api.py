@@ -12,7 +12,7 @@ from tests.test_generation_queue import transition
 from tests.test_pages_api import prepare_page
 
 
-def test_revision_zero_anlas_ceiling_is_rejected_before_provider_request(
+def test_panel_reroll_zero_anlas_is_frozen_and_reverified_before_image_request(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
     prepared, provider, page = prepare_page(client, session_headers)
@@ -31,7 +31,57 @@ def test_revision_zero_anlas_ceiling_is_rejected_before_provider_request(
         },
     )
 
+    assert response.status_code == 200, response.text
+    estimate = response.json()
+    assert estimate["billing_mode"] == "opus_zero_anlas"
+    assert estimate["cost_basis"] == "opus_zero_anlas_official_limits_v1"
+    assert estimate["estimated_cost_upper_anlas"] == 0
+    created = create_revision_job(client, session_headers, project_id, estimate)
+    assert created.status_code == 201, created.text
+    started = transition(client, session_headers, project_id, created.json(), "start")
+    asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
+
+    completed = client.app.state.generation_queue.get_job(project_id, started["job_id"])
+    assert completed["status"] == "completed"
+    assert completed["max_cost_anlas"] == 0
+    assert completed["verification_calls_started"] == 1
+    assert provider.subscription_calls == 1
+    assert provider.generation_calls == calls_before + 1
+
+
+def test_inpaint_zero_anlas_is_rejected_before_provider_request(
+    client: TestClient, session_headers: dict[str, str]
+) -> None:
+    prepared, provider, page = prepare_page(client, session_headers)
+    project_id = prepared["project_id"]
+    panel = page["document"]["panels"][0]
+    uploaded = upload_mask(
+        client,
+        session_headers,
+        project_id,
+        panel["panel_id"],
+        panel["asset_version_id"],
+        mask_bytes(832, 1216, box=(100, 100, 300, 300)),
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    calls_before = provider.generation_calls
+
+    response = client.post(
+        f"/api/v1/projects/{project_id}/generation/revisions/estimate",
+        headers=session_headers,
+        json={
+            "operation": "inpaint",
+            "page_id": page["page_id"],
+            "panel_id": panel["panel_id"],
+            "mask_asset_id": uploaded.json()["mask_asset_id"],
+            "edit_prompt": "修正右手",
+            "inpaint_strength": 0.65,
+            "per_panel_cost_ceiling_anlas": 0,
+        },
+    )
+
     assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REVISION_ZERO_ANLAS_INELIGIBLE"
     assert provider.generation_calls == calls_before
 
 

@@ -55,7 +55,7 @@ class RevisionEstimateRequest(BaseModel):
     mask_asset_id: str | None = Field(default=None, min_length=1, max_length=64)
     edit_prompt: str | None = Field(default=None, min_length=1, max_length=2_000)
     inpaint_strength: float | None = Field(default=None, ge=0.1, le=1)
-    per_panel_cost_ceiling_anlas: int = Field(default=10, ge=1, le=100_000)
+    per_panel_cost_ceiling_anlas: int = Field(default=0, ge=0, le=100_000)
 
 
 class CreateRevisionJobRequest(RevisionEstimateRequest):

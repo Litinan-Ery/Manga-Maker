@@ -138,7 +138,7 @@ describe("App", () => {
         return Promise.resolve(
           jsonResponse({
             status: "ok",
-            version: "0.2.0",
+            version: "0.2.1",
             environment: "test",
             database: "ok",
             schema_version: 30,

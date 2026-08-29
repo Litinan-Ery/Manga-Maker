@@ -71,11 +71,28 @@ export const LAYOUT_TEMPLATES: LayoutTemplate[] = [
   },
 ];
 
+export function templateCompatibleWithPage(
+  template: LayoutTemplate,
+  page: StoryboardPageSummary,
+): boolean {
+  const panelCount = page.panels.length;
+  if (!page.page_type || template.rects.length !== panelCount) return false;
+  if (panelCount < 1 || panelCount > 6) return false;
+  return page.page_type !== "standard" || panelCount >= 3;
+}
+
+export function templatesForPage(page: StoryboardPageSummary): LayoutTemplate[] {
+  return LAYOUT_TEMPLATES.filter((template) => templateCompatibleWithPage(template, page));
+}
+
 export function createLayoutDraft(
   page: StoryboardPageSummary,
   template: LayoutTemplate,
   profile: PageProfile = "print_portrait_2_3",
 ): PageLayoutDraft {
+  if (!templateCompatibleWithPage(template, page)) {
+    throw new Error("版式模板与 Storyboard 页型或分镜数量不兼容。");
+  }
   const canvas = profile === "vertical_strip" ? { width: 1536, height: 4096 } : { width: 2048, height: 3072 };
   const rootId = crypto.randomUUID();
   const frames: FrameSpec[] = [

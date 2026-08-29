@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { NovelAISettings } from "./NovelAISettings";
 import { clearLocalSession, consumeLocalSession } from "./api";
 
 afterEach(() => {
+  cleanup();
   clearLocalSession();
   window.history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
@@ -29,15 +30,19 @@ it("saves locally before an explicit non-generating connection test", async () =
         jsonResponse({
           status: "ok",
           provider: "novelai",
-          provider_model_id: "nai-diffusion-4-5-full",
+          provider_model_id: "nai-diffusion-5-full",
           config_revision: 1,
           suggestion_count: 1,
           subscription: {
-            profile_version: "novelai-opus-zero-anlas-2026-08-14.1",
+            profile_version: "novelai-opus-zero-anlas-2026-08-29.2",
             subscription_active: true,
             subscription_tier: 3,
             is_grace_period: false,
             opus_active: true,
+            usage_percent: 100,
+            usage_is_negative: false,
+            usage_time_until_next_percent: 0,
+            v5_allowance_available: true,
           },
           zero_anlas_ready: true,
           model_supports_zero_anlas: true,
@@ -69,7 +74,8 @@ it("saves locally before an explicit non-generating connection test", async () =
     />,
   );
 
-  expect(await screen.findByText(/支持 V4.5 Precise Reference/)).toBeInTheDocument();
+  expect(await screen.findByText(/当前模型不支持 Precise Reference/)).toBeInTheDocument();
+  expect(screen.getByText(/V5 额度按用量限流/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /连接测试/ })).toBeDisabled();
 
   fireEvent.click(screen.getByRole("button", { name: "仅保存本地配置" }));
@@ -90,26 +96,109 @@ it("saves locally before an explicit non-generating connection test", async () =
   fireEvent.change(screen.getByLabelText("图像模型"), {
     target: { value: "nai-diffusion-3" },
   });
-  expect(screen.getByText(/当前结构化 V4 生成链路不支持此模型/)).toBeInTheDocument();
+  expect(screen.getByText(/当前结构化生成链路不支持此模型/)).toBeInTheDocument();
+  expect(screen.getByText("尚未验证")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /连接测试/ })).toBeDisabled();
+});
+
+it("refreshes credential availability when the vault locks and unlocks", async () => {
+  window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
+  consumeLocalSession();
+  let locked = false;
+  let fingerprint = "…cret";
+  const fetchMock = vi.fn((path: RequestInfo | URL) => {
+    const url = String(path);
+    if (url.endsWith("/novelai/capabilities")) {
+      return Promise.resolve(jsonResponse(capabilities));
+    }
+    if (url.endsWith("/novelai/config")) {
+      return Promise.resolve(
+        jsonResponse({
+          ...configuration,
+          credential_status: locked ? "locked" : "available",
+          credential_fingerprint: fingerprint,
+          last_connection_status: fingerprint === "…cret" ? "ok" : null,
+        }),
+      );
+    }
+    return Promise.reject(new Error(`unexpected request: ${url}`));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const unlockedStatus = {
+    configured: true,
+    unlocked: true,
+    profiles: [
+      {
+        profile_id: "novelai",
+        provider: "novelai",
+        label: "NovelAI 图像生成",
+        fingerprint: "…cret",
+      },
+    ],
+  };
+  const { rerender } = render(
+    <NovelAISettings projectId="project-1" vaultStatus={unlockedStatus} onError={vi.fn()} />,
+  );
+
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /连接测试/ })).toBeEnabled(),
+  );
+  expect(screen.getByText("连接已验证")).toBeInTheDocument();
+
+  locked = true;
+  rerender(
+    <NovelAISettings
+      projectId="project-1"
+      vaultStatus={{ ...unlockedStatus, unlocked: false, profiles: [] }}
+      onError={vi.fn()}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /连接测试/ })).toBeDisabled(),
+  );
+  expect(screen.getByText("尚未验证")).toBeInTheDocument();
+
+  locked = false;
+  rerender(
+    <NovelAISettings projectId="project-1" vaultStatus={unlockedStatus} onError={vi.fn()} />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /连接测试/ })).toBeEnabled(),
+  );
+
+  fingerprint = "…ated";
+  rerender(
+    <NovelAISettings
+      projectId="project-1"
+      vaultStatus={{
+        ...unlockedStatus,
+        profiles: [{ ...unlockedStatus.profiles[0], fingerprint }],
+      }}
+      onError={vi.fn()}
+    />,
+  );
+  await waitFor(() => expect(screen.getByText("尚未验证")).toBeInTheDocument());
+  expect(screen.getByRole("button", { name: /连接测试/ })).toBeEnabled();
 });
 
 const capabilities = {
   source_url: "https://image.novelai.net/docs/doc.json",
-  sha256: "f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8",
-  fetched_on: "2026-08-09",
+  sha256: "2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684",
+  fetched_on: "2026-08-29",
   swagger_version: "2.0",
   api_title: "Omegalaser API",
   api_version: "1.0",
-  mapping_version: "novelai-image-2026-08-09.3-v03-opus-zero-anlas-1",
+  mapping_version: "novelai-image-2026-08-29.4-v5-full-1",
   allowed_paths: {},
   opus_zero_anlas_profile: {
-    profile_version: "novelai-opus-zero-anlas-2026-08-14.1",
+    profile_version: "novelai-opus-zero-anlas-2026-08-29.2",
     required_tier: 3,
     max_pixels: 1_048_576,
     max_steps: 28,
     n_samples: 1,
     requires_single_image: true,
     allows_base_or_reference_image: false,
+    v5_allowance_is_usage_limited: true,
     default_dimensions: [
       { width: 832, height: 1216 },
       { width: 1216, height: 832 },
@@ -119,16 +208,21 @@ const capabilities = {
   },
   models: [
     {
-      provider_model_id: "nai-diffusion-4-5-full",
-      label: "Anime V4.5 Full",
-      inpaint_model_id: "nai-diffusion-4-5-full-inpainting",
+      provider_model_id: "nai-diffusion-5-full",
+      label: "NovelAI Diffusion V5 Full",
+      inpaint_model_id: "nai-diffusion-5-full-inpainting",
       recommended: true,
       supports_opus_zero_anlas: true,
-      supports_precise_reference: true,
+      opus_allowance_is_usage_limited: true,
+      supports_precise_reference: false,
       supports_multi_character_prompt: true,
-      supports_vibe_transfer: true,
-      precise_reference_excludes_vibe_transfer: true,
-      prompt_token_note: "约 512 T5 tokens",
+      supports_vibe_transfer: false,
+      precise_reference_excludes_vibe_transfer: false,
+      prompt_token_note: "约 1471 tokens",
+      default_steps: 23,
+      default_scale: 7,
+      params_version: 4,
+      uc_preset: 4,
     },
     {
       provider_model_id: "nai-diffusion-3",
@@ -136,11 +230,16 @@ const capabilities = {
       inpaint_model_id: "nai-diffusion-3-inpainting",
       recommended: false,
       supports_opus_zero_anlas: false,
+      opus_allowance_is_usage_limited: false,
       supports_precise_reference: false,
       supports_multi_character_prompt: false,
       supports_vibe_transfer: true,
       precise_reference_excludes_vibe_transfer: false,
       prompt_token_note: "旧版模型",
+      default_steps: 23,
+      default_scale: 5,
+      params_version: 4,
+      uc_preset: 3,
     },
   ],
 };
@@ -148,9 +247,9 @@ const capabilities = {
 const configuration = {
   project_id: "project-1",
   provider: "novelai",
-  model_label: "Anime V4.5 Full",
-  provider_model_id: "nai-diffusion-4-5-full",
-  inpaint_model_id: "nai-diffusion-4-5-full-inpainting",
+  model_label: "NovelAI Diffusion V5 Full",
+  provider_model_id: "nai-diffusion-5-full",
+  inpaint_model_id: "nai-diffusion-5-full-inpainting",
   credential_profile_id: "novelai",
   credential_fingerprint: "…cret",
   credential_status: "available",

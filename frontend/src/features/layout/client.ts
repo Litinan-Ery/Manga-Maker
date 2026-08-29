@@ -11,6 +11,7 @@ export interface StoryboardPanelSummary {
 export interface StoryboardPageSummary {
   page_id: string;
   page_number: number;
+  page_type?: "standard" | "cover" | "splash" | "special" | null;
   turning_point: string;
   panels: StoryboardPanelSummary[];
 }

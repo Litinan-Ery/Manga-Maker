@@ -1618,7 +1618,7 @@ button.quiet-button:hover:not(:disabled) {
 
 .page-card > header {
   display: grid;
-  grid-template-columns: 100px 1fr;
+  grid-template-columns: 100px minmax(140px, auto) 1fr;
   gap: 14px;
   align-items: end;
   padding: 16px;
@@ -1629,6 +1629,26 @@ button.quiet-button:hover:not(:disabled) {
   align-self: center;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 20px;
+}
+
+.page-card > header > .page-policy-valid,
+.page-card > header > .page-policy-invalid {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.page-card > header > .page-policy-valid {
+  color: #376945;
+}
+
+.page-card > header > .page-policy-invalid {
+  color: #9b3d2f;
+}
+
+.storyboard-policy-warning ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
 }
 
 .panel-card {

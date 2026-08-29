@@ -14,6 +14,11 @@ from uuid import UUID
 from PIL import Image, UnidentifiedImageError
 
 from ..adaptation.models import StoryboardDocument
+from ..adaptation.page_policy import (
+    STORYBOARD_PAGE_POLICY_VERSION,
+    StoryboardPagePolicyError,
+    validate_storyboard_page_policy,
+)
 from ..adaptation.service import AdaptationService, canonical_json
 from ..database import Database
 from ..errors import ApplicationError
@@ -37,6 +42,8 @@ IMAGE_FORMATS: dict[str, tuple[str, str]] = {
     "JPEG": ("image/jpeg", "jpg"),
     "WEBP": ("image/webp", "webp"),
 }
+
+
 @dataclass(frozen=True, slots=True)
 class ReferenceImageMetadata:
     media_type: str
@@ -833,7 +840,15 @@ class BibleService:
                 message="请先审批当前且来源未变化的结构化分镜。",
                 status_code=409,
             )
-        return row, StoryboardDocument.model_validate_json(str(row["document_json"]))
+        document = StoryboardDocument.model_validate_json(str(row["document_json"]))
+        try:
+            validate_storyboard_page_policy(document)
+        except StoryboardPagePolicyError as exc:
+            raise storyboard_policy_error(
+                exc,
+                "当前分镜页型或格数不合法，不能生成设定。",
+            ) from exc
+        return row, document
 
     def _storyboard_row(self, project_id: str, storyboard_version_id: str) -> sqlite3.Row:
         with self.database.reader() as connection:
@@ -867,7 +882,14 @@ class BibleService:
 
     def _storyboard_version_is_ready(self, project_id: str, storyboard_version_id: str) -> bool:
         row = self._storyboard_row(project_id, storyboard_version_id)
-        return bool(row["is_current"] and row["approval_hash"] and row["source_current"])
+        if not bool(row["is_current"] and row["approval_hash"] and row["source_current"]):
+            return False
+        document = StoryboardDocument.model_validate_json(str(row["document_json"]))
+        try:
+            validate_storyboard_page_policy(document)
+        except StoryboardPagePolicyError:
+            return False
+        return True
 
     def _require_current_and_fresh(self, row: sqlite3.Row) -> None:
         if not bool(row["is_current"]):
@@ -1059,6 +1081,32 @@ def inspect_reference_image(data: bytes) -> ReferenceImageMetadata:
 def safe_original_filename(filename: str) -> str:
     normalized = Path(filename.replace("\x00", "")).name.strip()
     return normalized[:255] or "reference-image"
+
+
+def storyboard_policy_error(
+    error: StoryboardPagePolicyError,
+    message: str,
+) -> ApplicationError:
+    upgrade_required = any(
+        finding.code == "STORYBOARD_UPGRADE_REQUIRED" for finding in error.findings
+    )
+    return ApplicationError(
+        code=(
+            "STORYBOARD_UPGRADE_REQUIRED"
+            if upgrade_required
+            else "STORYBOARD_PAGE_POLICY_INVALID"
+        ),
+        message=(
+            "Storyboard 1.0 仅供历史只读，请重新生成 1.1 分镜。"
+            if upgrade_required
+            else message
+        ),
+        status_code=409 if upgrade_required else 422,
+        details={
+            "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+            "findings": [finding.payload() for finding in error.findings],
+        },
+    )
 
 
 def document_reference_ids(

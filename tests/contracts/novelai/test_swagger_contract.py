@@ -9,7 +9,7 @@ CONTRACT = json.loads(
     (ROOT / "contracts" / "novelai" / "image-api.contract.json").read_text(encoding="utf-8")
 )
 CAPABILITY = json.loads(
-    (ROOT / "contracts" / "novelai" / "v4-multi-character.capability.json").read_text(
+    (ROOT / "contracts" / "novelai" / "v5-multi-character.capability.json").read_text(
         encoding="utf-8"
     )
 )
@@ -18,9 +18,13 @@ CAPABILITY = json.loads(
 def swagger_multi_character_shape(swagger: dict[str, Any]) -> dict[str, list[str]]:
     definitions = swagger["definitions"]
     return {
-        "v4_condition_fields": sorted(definitions["image.V4ConditionInput"]["properties"]),
-        "v4_external_caption_fields": sorted(definitions["image.V4ExternalCaption"]["properties"]),
-        "v4_character_caption_fields": sorted(
+        "structured_condition_fields": sorted(
+            definitions["image.V4ConditionInput"]["properties"]
+        ),
+        "structured_external_caption_fields": sorted(
+            definitions["image.V4ExternalCaption"]["properties"]
+        ),
+        "structured_character_caption_fields": sorted(
             definitions["image.V4ExternalCharacterCaption"]["properties"]
         ),
         "coordinate_fields": sorted(definitions["image.Coordinates"]["properties"]),
@@ -32,7 +36,7 @@ def test_checked_in_capability_is_bound_to_the_audited_contract() -> None:
     assert CAPABILITY["contract_sha256"] == CONTRACT["sha256"]
     assert CAPABILITY["mapping_version"] == CONTRACT["mapping_version"]
     assert (
-        CAPABILITY["manga_maker_v03_character_limit"]
+        CAPABILITY["manga_maker_character_limit"]
         <= CAPABILITY["official_documented_character_limit"]
     )
     assert CAPABILITY["runtime_refresh"] is False
@@ -57,9 +61,9 @@ def test_swagger_shape_diff_reports_a_removed_multi_character_field() -> None:
     expected = {
         key: sorted(CAPABILITY[key])
         for key in (
-            "v4_condition_fields",
-            "v4_external_caption_fields",
-            "v4_character_caption_fields",
+            "structured_condition_fields",
+            "structured_external_caption_fields",
+            "structured_character_caption_fields",
             "coordinate_fields",
         )
     }

@@ -21,6 +21,13 @@ from .models import (
     StoryboardRequest,
     validate_storyboard_semantics,
 )
+from .page_policy import (
+    STORYBOARD_PAGE_POLICY_VERSION,
+    StoryboardPagePolicyError,
+    StoryboardPagePolicyFinding,
+    storyboard_page_policy_findings,
+    validate_storyboard_page_policy,
+)
 from .text_model import (
     OpenAICompatibleTextModel,
     SecretReader,
@@ -339,6 +346,7 @@ class AdaptationService:
             candidate.document,
             page_budget=page_budget,
             provenance=provenance,
+            enforce_page_policy=True,
         )
         return self.get_storyboard_version(project_id, version_id)
 
@@ -370,6 +378,12 @@ class AdaptationService:
             resolution.status == "unresolved" for resolution in document.beat_resolutions
         )
         approval_status = "stale" if stale else "approved" if approved_at else "draft"
+        page_policy_findings = storyboard_page_policy_findings(document)
+        document_payload = document.model_dump(mode="json")
+        if document.schema_version == "1.0":
+            for page in cast(list[dict[str, Any]], document_payload["pages"]):
+                if page.get("page_type") is None:
+                    page.pop("page_type", None)
         return {
             "storyboard_id": str(row["storyboard_id"]),
             "storyboard_version_id": str(row["storyboard_version_id"]),
@@ -379,12 +393,17 @@ class AdaptationService:
             "beat_set_id": str(row["beat_set_id"]),
             "page_budget": int(row["page_budget"]),
             "source_fingerprint": str(row["source_fingerprint"]),
-            "document": document.model_dump(mode="json"),
+            "document": document_payload,
             "provenance": json.loads(str(row["provenance_json"])),
             "approval_status": approval_status,
             "approval_hash": str(row["approval_hash"]) if row["approval_hash"] else None,
             "approved_at": approved_at,
             "unresolved_count": unresolved_count,
+            "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+            "page_policy_valid": not page_policy_findings,
+            "page_policy_findings": [
+                finding.payload() for finding in page_policy_findings
+            ],
             "is_current": bool(row["is_current"]),
             "created_at": str(row["created_at"]),
         }
@@ -408,6 +427,18 @@ class AdaptationService:
                 message="章节或剧情节拍已经变化，请重新生成分镜。",
                 status_code=409,
             )
+        parent_document = StoryboardDocument.model_validate_json(str(parent["document_json"]))
+        if parent_document.schema_version != "1.1" or document.schema_version != "1.1":
+            legacy_document = (
+                parent_document
+                if parent_document.schema_version != "1.1"
+                else document
+            )
+            raise self._page_policy_application_error(
+                StoryboardPagePolicyError(
+                    storyboard_page_policy_findings(legacy_document)
+                )
+            )
         source = self._source_context(
             project_id,
             str(parent["chapter_id"]),
@@ -422,6 +453,9 @@ class AdaptationService:
         )
         try:
             validate_storyboard_semantics(normalized_document, source.request)
+            validate_storyboard_page_policy(normalized_document)
+        except StoryboardPagePolicyError as exc:
+            raise self._page_policy_application_error(exc) from exc
         except ValueError as exc:
             raise ApplicationError(
                 code="INVALID_STORYBOARD_REVISION",
@@ -438,6 +472,7 @@ class AdaptationService:
                 "change_type": "manual_edit",
                 "parent_storyboard_version_id": storyboard_version_id,
             },
+            enforce_page_policy=True,
         )
         return self.get_storyboard_version(project_id, version_id)
 
@@ -464,7 +499,10 @@ class AdaptationService:
         )
         try:
             validate_storyboard_semantics(document, source.request)
+            validate_storyboard_page_policy(document)
             validate_approval_readiness(document, source.request)
+        except StoryboardPagePolicyError as exc:
+            raise self._page_policy_application_error(exc) from exc
         except ValueError as exc:
             raise ApplicationError(
                 code="STORYBOARD_NOT_APPROVABLE",
@@ -504,9 +542,42 @@ class AdaptationService:
                     {
                         "storyboard_version_id": storyboard_version_id,
                         "approval_hash": approval_hash,
+                        "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
                     },
                 )
         return self.get_storyboard_version(project_id, storyboard_version_id)
+
+    def validate_storyboard(
+        self,
+        project_id: str,
+        storyboard_version_id: str,
+    ) -> dict[str, Any]:
+        row = self._version_row(project_id, storyboard_version_id)
+        document = StoryboardDocument.model_validate_json(str(row["document_json"]))
+        findings = storyboard_page_policy_findings(document)
+        try:
+            source = self._source_context(
+                project_id,
+                str(row["chapter_id"]),
+                page_budget=int(row["page_budget"]),
+                adaptation_preferences=[],
+            )
+            validate_storyboard_semantics(document, source.request)
+            validate_approval_readiness(document, source.request)
+        except ValueError as exc:
+            findings = (
+                *findings,
+                self._semantic_finding(str(exc)),
+            )
+        return {
+            "contract_version": "1.0",
+            "storyboard_version_id": storyboard_version_id,
+            "storyboard_schema_version": document.schema_version,
+            "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+            "valid": not findings,
+            "findings": [finding.payload() for finding in findings],
+            "external_requests_started": 0,
+        }
 
     def _persist_document(
         self,
@@ -516,6 +587,7 @@ class AdaptationService:
         *,
         page_budget: int,
         provenance: dict[str, Any],
+        enforce_page_policy: bool,
     ) -> str:
         with self.database.writer() as connection:
             current_source = connection.execute(
@@ -578,6 +650,18 @@ class AdaptationService:
             )
             try:
                 validate_storyboard_semantics(normalized_document, source.request)
+                if enforce_page_policy:
+                    validate_storyboard_page_policy(normalized_document)
+            except StoryboardPagePolicyError as exc:
+                raise ApplicationError(
+                    code="INVALID_STORYBOARD_DOCUMENT",
+                    message="模型分镜未通过逐页页型与格数校验。",
+                    status_code=422,
+                    details={
+                        "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+                        "findings": [finding.payload() for finding in exc.findings],
+                    },
+                ) from exc
             except ValueError as exc:
                 raise ApplicationError(
                     code="INVALID_STORYBOARD_DOCUMENT",
@@ -618,6 +702,45 @@ class AdaptationService:
                 },
             )
         return storyboard_version_id
+
+    @staticmethod
+    def _page_policy_application_error(
+        error: StoryboardPagePolicyError,
+    ) -> ApplicationError:
+        upgrade_required = any(
+            finding.code == "STORYBOARD_UPGRADE_REQUIRED" for finding in error.findings
+        )
+        return ApplicationError(
+            code=(
+                "STORYBOARD_UPGRADE_REQUIRED"
+                if upgrade_required
+                else "STORYBOARD_PAGE_POLICY_INVALID"
+            ),
+            message=(
+                "Storyboard 1.0 仅供历史只读，请重新生成 1.1 分镜。"
+                if upgrade_required
+                else "分镜页型或逐页格数不符合审批规则。"
+            ),
+            status_code=409 if upgrade_required else 422,
+            details={
+                "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
+                "findings": [finding.payload() for finding in error.findings],
+            },
+        )
+
+    @staticmethod
+    def _semantic_finding(problem: str) -> StoryboardPagePolicyFinding:
+        return StoryboardPagePolicyFinding(
+            code="STORYBOARD_SEMANTICS_INVALID",
+            path="$",
+            message=problem,
+            page_id=None,
+            page_number=None,
+            page_type=None,
+            panel_count=None,
+            minimum_panels=None,
+            maximum_panels=None,
+        )
 
     def _source_context(
         self,

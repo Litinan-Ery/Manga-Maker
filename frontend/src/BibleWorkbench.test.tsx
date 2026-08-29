@@ -117,6 +117,9 @@ const storyboardVersion: StoryboardVersion = {
   approval_hash: "a".repeat(64),
   approved_at: "2026-08-09T00:00:00Z",
   unresolved_count: 0,
+  page_policy_version: "storyboard-page-count-v1",
+  page_policy_valid: false,
+  page_policy_findings: [],
   is_current: true,
   created_at: "2026-08-09T00:00:00Z",
 };

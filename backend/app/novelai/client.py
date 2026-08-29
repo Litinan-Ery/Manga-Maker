@@ -18,7 +18,7 @@ import httpx
 from PIL import Image, UnidentifiedImageError
 
 from ..modules.production.adapters.novelai import (
-    NovelAIV4Payload,
+    NovelAIPayload,
     require_frozen_novelai_payload,
 )
 from ..modules.production.contracts import ProviderExecutionSpec
@@ -71,6 +71,10 @@ class NovelAIInsufficientBalanceError(NovelAIError):
 
 
 class NovelAIOpusRequiredError(NovelAIError):
+    pass
+
+
+class NovelAIUsageLimitUnavailableError(NovelAIError):
     pass
 
 
@@ -128,7 +132,7 @@ class NovelAIImageRequest:
     mask_base64: str | None = None
     inpaint_strength: float | None = None
     provider_execution_spec: ProviderExecutionSpec | None = None
-    frozen_payload: NovelAIV4Payload | None = None
+    frozen_payload: NovelAIPayload | None = None
 
     def __post_init__(self) -> None:
         if (self.provider_execution_spec is None) != (self.frozen_payload is None):
@@ -237,10 +241,19 @@ class NovelAISubscriptionResult:
     tier: int
     expires_at: int | None
     is_grace_period: bool
+    usage_percent: int | None = None
+    usage_is_negative: bool | None = None
+    usage_time_until_next_percent: int | None = None
 
     @property
     def opus_active(self) -> bool:
         return self.active and self.tier == OPUS_TIER
+
+    @property
+    def v5_allowance_available(self) -> bool | None:
+        if self.usage_percent is None or self.usage_is_negative is None:
+            return None
+        return not self.usage_is_negative and self.usage_percent > 0
 
     def zero_anlas_verification(self) -> dict[str, Any]:
         return {
@@ -249,6 +262,10 @@ class NovelAISubscriptionResult:
             "subscription_tier": self.tier,
             "is_grace_period": self.is_grace_period,
             "opus_active": self.opus_active,
+            "usage_percent": self.usage_percent,
+            "usage_is_negative": self.usage_is_negative,
+            "usage_time_until_next_percent": self.usage_time_until_next_percent,
+            "v5_allowance_available": self.v5_allowance_available,
         }
 
 
@@ -261,7 +278,7 @@ class NovelAIProvider(Protocol):
 
 
 class NovelAIClient:
-    """Minimal, non-generating NovelAI client used by the explicit connection test."""
+    """Allowlisted NovelAI client for explicit connection checks and image generation."""
 
     def __init__(
         self,
@@ -401,7 +418,15 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
         except ProviderMappingError as exc:
             raise NovelAIConfigurationError(exc.message) from exc
         return payload.model_dump(mode="json", exclude_none=True)
-    is_v4 = "diffusion-4" in request.provider_model_id
+    is_structured = any(
+        family in request.provider_model_id for family in ("diffusion-4", "diffusion-5")
+    )
+    is_v5 = "diffusion-5" in request.provider_model_id
+    profile = (
+        require_model_profile(request.provider_model_id)
+        if request.action == "generate"
+        else require_inpaint_model_profile(request.provider_model_id)
+    )
     parameters: dict[str, Any] = {
         "width": request.width,
         "height": request.height,
@@ -413,8 +438,8 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
         "n_samples": 1,
         "negative_prompt": request.negative_prompt,
         "qualityToggle": True,
-        "ucPreset": 3,
-        "params_version": 3 if is_v4 else 1,
+        "ucPreset": profile.uc_preset,
+        "params_version": profile.params_version,
         "cfg_rescale": 0,
         "dynamic_thresholding": False,
         "legacy": False,
@@ -423,7 +448,7 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
         "deliberate_euler_ancestral_bug": False,
         "image_format": "png",
     }
-    if is_v4:
+    if is_structured:
         parameters["v4_prompt"] = {
             "caption": {"base_caption": request.prompt, "char_captions": []},
             "use_coords": False,
@@ -433,6 +458,15 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
             "caption": {"base_caption": request.negative_prompt, "char_captions": []},
             "legacy_uc": False,
         }
+    if is_v5:
+        parameters.update(
+            {
+                "straight_alpha": True,
+                "tag_hint_transparent_background": False,
+                "tag_hint_qt": 1,
+                "tag_hint_uc_preset": 4,
+            }
+        )
     reference = request.precise_reference
     if reference is not None:
         profile = require_model_profile(request.provider_model_id)
@@ -498,13 +532,13 @@ def require_opus_zero_anlas_request(request: NovelAIImageRequest) -> None:
 
 
 def require_opus_zero_anlas_payload(
-    payload: NovelAIV4Payload | dict[str, Any],
+    payload: NovelAIPayload | dict[str, Any],
 ) -> None:
     """Validate a mapped or serialized provider payload against the pinned free profile."""
 
     serialized = (
         payload.model_dump(mode="json", exclude_none=True)
-        if isinstance(payload, NovelAIV4Payload)
+        if isinstance(payload, NovelAIPayload)
         else payload
     )
     try:
@@ -533,7 +567,7 @@ def require_opus_zero_anlas_payload(
     )
     eligible = (
         action == "generate"
-        and model.startswith("nai-diffusion-4-5-")
+        and model.startswith(("nai-diffusion-5-", "nai-diffusion-4-5-"))
         and (width, height) in OPUS_ZERO_ANLAS_DIMENSIONS
         and steps <= OPUS_ZERO_ANLAS_MAX_STEPS
         and n_samples == 1
@@ -549,6 +583,22 @@ def require_active_opus(subscription: NovelAISubscriptionResult) -> None:
     if not subscription.opus_active:
         raise NovelAIOpusRequiredError(
             "an active NovelAI Opus subscription is required for zero-Anlas generation"
+        )
+
+
+def require_opus_zero_anlas_available(
+    subscription: NovelAISubscriptionResult,
+    provider_model_id: str,
+) -> None:
+    """Require both Opus and the explicit V5 usage allowance before generation."""
+
+    require_active_opus(subscription)
+    if (
+        provider_model_id.startswith("nai-diffusion-5-")
+        and subscription.v5_allowance_available is not True
+    ):
+        raise NovelAIUsageLimitUnavailableError(
+            "NovelAI V5 Opus usage allowance is unavailable or could not be verified"
         )
 
 
@@ -746,6 +796,7 @@ def validate_subscription_response(response: httpx.Response) -> NovelAISubscript
     tier = payload.get("tier")
     expires_at = payload.get("expiresAt")
     grace = payload.get("isGracePeriod", False)
+    usage = payload.get("usage")
     if not isinstance(active, bool):
         raise NovelAIResponseFormatError("NovelAI subscription active flag is invalid")
     if isinstance(tier, bool) or not isinstance(tier, int) or not 0 <= tier <= 100:
@@ -756,9 +807,31 @@ def validate_subscription_response(response: httpx.Response) -> NovelAISubscript
         raise NovelAIResponseFormatError("NovelAI subscription expiry is invalid")
     if not isinstance(grace, bool):
         raise NovelAIResponseFormatError("NovelAI subscription grace flag is invalid")
+    usage_percent: int | None = None
+    usage_is_negative: bool | None = None
+    usage_time_until_next_percent: int | None = None
+    if usage is not None:
+        if not isinstance(usage, dict):
+            raise NovelAIResponseFormatError("NovelAI subscription usage status is invalid")
+        usage_percent = usage.get("percent")
+        usage_is_negative = usage.get("isNegative")
+        usage_time_until_next_percent = usage.get("timeUntilNextPercent")
+        if (
+            isinstance(usage_percent, bool)
+            or not isinstance(usage_percent, int)
+            or usage_percent < 0
+            or not isinstance(usage_is_negative, bool)
+            or isinstance(usage_time_until_next_percent, bool)
+            or not isinstance(usage_time_until_next_percent, int)
+            or usage_time_until_next_percent < 0
+        ):
+            raise NovelAIResponseFormatError("NovelAI subscription usage status is invalid")
     return NovelAISubscriptionResult(
         active=active,
         tier=tier,
         expires_at=expires_at,
         is_grace_period=grace,
+        usage_percent=usage_percent,
+        usage_is_negative=usage_is_negative,
+        usage_time_until_next_percent=usage_time_until_next_percent,
     )

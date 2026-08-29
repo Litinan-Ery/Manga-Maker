@@ -14,6 +14,7 @@ import {
   mergeFrame,
   moveReadingOrder,
   splitFrame,
+  templatesForPage,
   updateFrameAbsoluteRect,
 } from "./templates";
 
@@ -33,6 +34,15 @@ describe("layout templates and hierarchy transforms", () => {
       );
       expect(draft.frames.filter((frame) => frame.parent_frame_id === null)).toHaveLength(1);
     }
+  });
+
+  it("reserves one and two panel templates for model-classified special pages", () => {
+    expect(templatesForPage(pageWithPanels(1, "standard"))).toEqual([]);
+    expect(templatesForPage(pageWithPanels(2, "standard"))).toEqual([]);
+    expect(templatesForPage(pageWithPanels(3, "standard"))).toHaveLength(1);
+    expect(templatesForPage(pageWithPanels(6, "standard"))).toHaveLength(1);
+    expect(templatesForPage(pageWithPanels(1, "splash"))).toHaveLength(1);
+    expect(templatesForPage(pageWithPanels(2, "cover"))).toHaveLength(1);
   });
 
   it("splits and merges hierarchy without changing panel coverage or absolute geometry", () => {
@@ -86,10 +96,14 @@ describe("layout templates and hierarchy transforms", () => {
   });
 });
 
-function pageWithPanels(count: number): StoryboardPageSummary {
+function pageWithPanels(
+  count: number,
+  pageType: StoryboardPageSummary["page_type"] = "special",
+): StoryboardPageSummary {
   return {
     page_id: "01900000-0000-7000-8000-000000009000",
     page_number: 1,
+    page_type: pageType,
     turning_point: "template fixture",
     panels: Array.from({ length: count }, (_, index) => ({
       panel_id: `01900000-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,

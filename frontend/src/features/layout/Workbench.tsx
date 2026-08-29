@@ -32,6 +32,7 @@ import {
   mergeFrame,
   moveReadingOrder,
   splitFrame,
+  templatesForPage,
   updateFrame,
   updateFrameAbsoluteRect,
 } from "./templates";
@@ -291,7 +292,7 @@ export function LayoutWorkbench({ projectId, chapters, client, onError }: Layout
             <select value={pageId} onChange={(event) => void loadPage(event.target.value)}>
               {storyboard.pages.map((item) => (
                 <option key={item.page_id} value={item.page_id}>
-                  第 {item.page_number} 页 · {item.panels.length} 格 · {item.turning_point}
+                  第 {item.page_number} 页 · {layoutPageTypeLabel(item.page_type)} · {item.panels.length} 格 · {item.turning_point}
                 </option>
               ))}
             </select>
@@ -304,7 +305,7 @@ export function LayoutWorkbench({ projectId, chapters, client, onError }: Layout
           <h3>选择起始节奏</h3>
           <p>模板只建立本地格框；每个 Storyboard panel 会映射到一个叶子 frame。</p>
           <div>
-            {LAYOUT_TEMPLATES.filter((template) => template.rects.length === page.panels.length).map(
+            {templatesForPage(page).map(
               (template) => (
                 <button
                   type="button"
@@ -317,6 +318,11 @@ export function LayoutWorkbench({ projectId, chapters, client, onError }: Layout
               ),
             )}
           </div>
+          {templatesForPage(page).length === 0 && (
+            <p className="warning-inline" role="alert">
+              当前页型与分镜数量不符合规则，不能创建版式草稿。
+            </p>
+          )}
         </div>
       )}
 
@@ -360,7 +366,7 @@ export function LayoutWorkbench({ projectId, chapters, client, onError }: Layout
                 }}
               >
                 <option value="" disabled>选择相同格数模板</option>
-                {LAYOUT_TEMPLATES.filter((template) => template.rects.length === page.panels.length).map(
+                {templatesForPage(page).map(
                   (template) => <option key={template.id} value={template.id}>{template.label}</option>,
                 )}
               </select>
@@ -725,6 +731,14 @@ function ImpactPreview({ impact }: { impact: LayoutImpact | null }) {
 
 function idempotencyKey(kind: string, resourceId: string): string {
   return `layout-${kind}-${resourceId}-${crypto.randomUUID()}`;
+}
+
+function layoutPageTypeLabel(pageType: StoryboardPageSummary["page_type"]): string {
+  if (pageType === "standard") return "普通页";
+  if (pageType === "cover") return "封面";
+  if (pageType === "splash") return "通页大场面";
+  if (pageType === "special") return "特殊页";
+  return "未分类";
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

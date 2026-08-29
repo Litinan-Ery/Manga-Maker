@@ -14,6 +14,7 @@ from backend.app.modules.production.contracts import ProviderExecutionSpec
 from backend.app.modules.prompting.contracts import PromptPackage, PromptPlan
 from backend.app.modules.review.contracts import ReviewSnapshot
 from backend.app.modules.text_execution.contracts import TextStageRun
+from backend.app.novelai.contracts import MAPPING_VERSION
 from backend.app.shared_kernel.canonical_json import canonical_json_bytes, canonical_sha256
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,7 +68,7 @@ def test_provider_fixture_keeps_positive_negative_and_position_per_character() -
     spec = ProviderExecutionSpec.model_validate(load_fixture("provider-execution-spec.json"))
 
     assert spec.provider == "novelai"
-    assert spec.mapping_version.endswith("v03-opus-zero-anlas-1")
+    assert spec.mapping_version == MAPPING_VERSION
     assert [caption.order for caption in spec.character_captions] == [0, 1]
     assert all(caption.positive_tags for caption in spec.character_captions)
     assert all(caption.negative_tags for caption in spec.character_captions)

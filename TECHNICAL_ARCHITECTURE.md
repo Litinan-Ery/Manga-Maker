@@ -4,12 +4,12 @@
 |---|---|
 | 文档版本 | v0.3 |
 | 日期 | 2026-08-13 |
-| 状态 | v0.2 本地/Mock 基线已实现；v0.3 架构底座、版式先行、PromptPlan/PromptPackage v2、NovelAI 多角色映射、审批冻结与 Prompt Inspector 已完成 Mock 验收，候选/审片、迁移发布门禁与 Token 流水线仍待实现 |
+| 状态 | v0.2 本地/Mock 基线已实现；v0.3 架构底座、Storyboard 1.1 逐页政策、版式先行、PromptPlan/PromptPackage v2、NovelAI 多角色映射、审批冻结与 Prompt Inspector 已完成 Mock 验收，候选/审片、迁移发布门禁与 Token 流水线仍待实现 |
 | 对应产品文档 | [README.md](README.md)、[PRD.md](PRD.md) |
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义 v0.3 目标系统边界、组件、数据流、接口和验收方法。当前 v0.2 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；跨章节连续性、整本有界计划、高级页面 profile、扩展模板和可复用素材库也已存在。v0.3 已按工单完成架构底座、版式先行、结构化多角色映射、审批冻结和 Prompt Inspector，其他目标不得由本文推断为已交付。云模型链路仍只通过离线 Mock 验收，尚未执行真实付费图像调用或代表性授权章节的真实闭环。
+> 本文定义 v0.3 目标系统边界、组件、数据流、接口和验收方法。当前 v0.2 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；跨章节连续性、整本有界计划、高级页面 profile、扩展模板和可复用素材库也已存在。v0.3 已按工单完成架构底座、Storyboard 1.1 自动 `page_type` 与普通页 3–6 格本地门禁、版式先行、结构化多角色映射、审批冻结和 Prompt Inspector，其他目标不得由本文推断为已交付。2026-08-29 已以授权《沙王》完成真实 NovelAI V5 Full 零 Anlas 12 页图像、重绘、排版与导出闭环；Storyboard 1.1 已完成本地 Mock/E2E 验收，但外部文本模型真实分类、付费 Anlas、多候选接受/PageApproval 和其余 v0.3 目标仍未验收。
 
 ## 1. 架构结论
 
@@ -33,11 +33,13 @@ Manga Maker v0.3 继续采用本地模块化单体：React/TypeScript 提供阶�
 14. **按业务能力纵向切模块。** 每个模块拥有自己的领域规则、用例、端口、持久化适配器、迁移和测试；不继续扩张全局 `services/models/repositories` 横向大层。
 15. **跨模块只依赖公开契约。** 业务模块不得导入其他模块的领域实体、repository、SQL、供应商 DTO 或内部 service；同步交互使用版本化 Query/Command 契约，异步副作用使用 outbox 事件。
 16. **高内聚、低耦合是自动化门禁。** 禁止依赖、循环依赖、跨模块写表、未版本化事件和绕过 composition root 的真实客户端构造必须由架构测试在 CI 中阻断，而不是依靠评审记忆。
+17. **模型分类、本地门禁。** 文本模型为每页提出 `page_type` 和分镜，本地 `adaptation` 领域以 Storyboard 1.1 的版本化规则确定性校验：普通页 3–6 格，特殊页 1–6 格，空页或超过 6 格一律不能写入有效检查点、批准或进入版式阶段。
 
-### 1.1 v0.3 四个架构驱动
+### 1.1 v0.3 核心架构驱动
 
 | PRD 项目 | 架构驱动 | 关键新对象 | 硬门禁 |
 |---|---|---|---|
+| FR-05/FR-06 逐页分镜 | 模型自动分类页面，领域层确定性约束格数 | `StoryboardPageV1_1`、`PageType`、`StoryboardPagePolicyValidator` | 缺页型、未知页型、空页或格数违规不能形成检查点、分镜审批或 LayoutDraft |
 | V03-P0-01 版式先行 | 布局成为生成输入，不再是生成后的装饰 | `PageLayoutDraft`、`FrameSpec`、`DimensionSelection` | 未批准版式不能创建 PromptPackage/GenerationSpec |
 | V03-P0-02 多角色契约 | 结构化角色语义贯穿领域层和供应商映射 | `PromptPlan.characters[]`、`ProviderExecutionSpec` | 角色区块遗漏、错序、空数组或扁平回退时不发请求 |
 | V03-P0-03 候选闭环 | 分离文件成功、规则质检、人工接受和页面批准 | `PanelCandidateSet`、`QualityFinding`、`ReviewDecision`、`PageApproval` | 无有效 accepted 候选或有 blocker 时不能正式导出 |
@@ -83,10 +85,10 @@ P2 可以评估一个**完全独立的可选伴侣脚本**：在用户授权后�
 
 ### 2.4 Image API 的 P0 接口面
 
-2026-08-09 的实现基线读取 `https://image.novelai.net/docs/doc.json`：Swagger 2.0，
-标题 `Omegalaser API`，版本 `1.0`，112,680 bytes，SHA-256 为
-`f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8`。映射版本为
-`novelai-image-2026-08-09.3-v03-opus-zero-anlas-1`。注意同主机的 `/openapi.json` 当前标题为
+2026-08-29 的实现基线读取 `https://image.novelai.net/docs/doc.json`：Swagger 2.0，
+标题 `Omegalaser API`，版本 `1.0`，113,758 bytes，SHA-256 为
+`2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684`。映射版本为
+`novelai-image-2026-08-29.4-v5-full-1`。注意同主机的 `/openapi.json` 当前标题为
 `Observability API`，只包含错误追踪能力，不是 Image API 契约。审计元数据保存在
 `contracts/novelai/`，应用启动时不会自动联网替换。
 
@@ -207,8 +209,8 @@ flowchart LR
 |---|---|
 | Project Shell | 项目阶段、保存状态、全局错误和恢复入口 |
 | TXT Importer | 编码预览、章节拆分/合并、范围确认 |
-| Adaptation Workbench | 原文/StoryBeat、分层 TextStageRun、TokenBudget、页面树、分格编辑与来源覆盖 |
-| Layout Workbench | PageLayoutDraft、格框/阅读顺序、焦点、人物粗略位置、文字安全区、目标尺寸预览与审批 |
+| Adaptation Workbench | 原文/StoryBeat、分层 TextStageRun、TokenBudget、页面树、模型判定的 `page_type`、分镜数量/违规状态、分格编辑与来源覆盖 |
+| Layout Workbench | PageLayoutDraft、按 `page_type` 过滤的 1–6 格模板、格框/阅读顺序、焦点、人物粗略位置、文字安全区、目标尺寸预览与审批 |
 | Bible Editor | 角色设定、风格板、参考图与审批 |
 | Prompt Inspector | 供应商无关 PromptPlan、各角色独立正负区块、坐标、固定 Tags 与 NovelAI 映射预览 |
 | Generation Console | 候选数、任务范围、成本估算、开始/暂停/恢复/取消、错误处置 |
@@ -227,9 +229,9 @@ flowchart LR
 |---|---|---|
 | `project_source` | Project、SourceFile/SourceChapter、SourceAnchor、工作区身份、导入与章节边界 | Storyboard、模型调用、生成任务 |
 | `text_execution` | TextModelProfile 非敏感配置引用、ModelCapabilitySnapshot、TokenBudget、TextStageRun、checkpoint、token ledger | 理解漫画语义、决定页/格内容、构造 NovelAI Prompt |
-| `adaptation` | StoryBeat、Storyboard、来源覆盖、章节/场景/页/格改编不变量 | 页面几何、角色固定 Tags、供应商请求 |
+| `adaptation` | StoryBeat、Storyboard 1.1、`PageType`、逐页非空与格数政策、来源覆盖、章节/场景/页/格改编不变量和分镜审批 | 页面几何、角色固定 Tags、供应商请求 |
 | `world_bible` | CharacterBible、CharacterTagSet、StyleBible、ContinuityLedger、参考素材的语义归属与审批 | 生成排队、页面渲染、候选接受 |
-| `layout` | PageLayoutDraft、FrameSpec、阅读顺序、焦点/安全区、DimensionSelection、版式审批 | 图像 HTTP、最终页面文字渲染 |
+| `layout` | 消费已批准 StoryboardPage Snapshot，按页型/格数选择模板；拥有 PageLayoutDraft、FrameSpec、阅读顺序、焦点/安全区、DimensionSelection 和版式审批 | 推断或修改 `page_type`、图像 HTTP、最终页面文字渲染 |
 | `prompting` | PromptPlan/PromptPackage、固定 Tags 注入、角色区块与冲突校验、Prompt 审批 | 文本模型/NovelAI HTTP、任务调度、图片落盘 |
 | `production` | GenerationApproval、GenerationSpec、ProviderExecutionSpec、GenerationJob/Item/Attempt、AssetVersion、用于 inpaint 的 MaskAsset | 候选美术判断、页面批准、成品导出 |
 | `review` | PanelCandidateSet、QualityRun/Finding、ReviewDecision、PageApproval、接受率等质量指标 | 修改原始素材、发起未获授权的生成、最终编码格式 |
@@ -436,7 +438,7 @@ Port 由使用它的 application module 定义，具体 adapter 只在 compositi
 | 未来变化 | 预期主要改动面 | 默认不应修改 |
 |---|---|---|
 | 新增另一个 OpenAI-compatible 文本供应商方言 | `text_execution/adapters`、bootstrap、该 Port contract fixture | adaptation/layout/prompting 的领域规则 |
-| NovelAI 更改 V4 payload 字段或尺寸枚举 | `production/adapters/novelai`、capability/mapping fixture | PromptPlan、ReviewDecision、PageVersion |
+| NovelAI 更改 V5 payload 字段或尺寸枚举 | `production/adapters/novelai`、capability/mapping fixture | PromptPlan、ReviewDecision、PageVersion |
 | 新增“手部异常”本地质检规则 | `review` rule + finding UI + 模块测试 | production、prompting、exporting repository |
 | 新增页面模板 | `layout` template/validator；如渲染能力变化，再改 `composition` adapter | text_execution、world_bible、NovelAI client |
 | 修改角色固定 Tags 不变量 | `world_bible` domain；只有公开 Snapshot 变化时升级 prompting consumer contract | generation queue、page renderer、exporter |
@@ -453,7 +455,7 @@ Port 由使用它的 application module 定义，具体 adapter 只在 compositi
 |---|---|---|
 | `project_source` | `projects`、`source_files`、`source_chapters`、`source_anchors` | 源版本不可变；offset 与摘录哈希可复核 |
 | `text_execution` | `text_model_profiles`、`model_capability_snapshots`、`text_stage_runs`、`text_stage_checkpoints`、`token_ledgers` | 输入/输出版本和预算不可变；缓存键包含配置、模板、Schema 与上游哈希 |
-| `adaptation` | `story_beats`、`storyboards`、`storyboard_versions`、`storyboard_approvals` | StoryBeat 覆盖和 Storyboard 版本由同一模块维护 |
+| `adaptation` | `story_beats`、`storyboards`、`storyboard_versions`、`storyboard_approvals` | Storyboard 1.1 内容保存 `page_type` 与 panels；版本哈希和审批冻结页型、逐页格数及政策版本，派生索引不是真源 |
 | `world_bible` | `character_bibles`、`character_tag_sets`、`style_bibles`、`continuity_ledgers`、对应 approvals | 设定/连续性版本和批准绑定精确内容哈希 |
 | `layout` | `page_layout_drafts`、`layout_approvals`、`dimension_selections` | frame、尺寸选择与审批版本一致，不存供应商请求 |
 | `prompting` | `prompt_packages`、`prompt_approvals` | PromptPlan 保持角色结构；不保存 NovelAI 私有 DTO |
@@ -554,9 +556,10 @@ SourceChapter / StoryBeat
 | `POST /api/v1/projects/{id}/adaptation/text-stages` | 用户触发一个有界 TextStageRun，先持久化 work item |
 | `GET /api/v1/projects/{id}/adaptation/text-stages/{run_id}` | 读取阶段状态、检查点、Token/裁剪与安全错误 |
 | `POST /api/v1/projects/{id}/adaptation/text-stages/{run_id}/retry` | 从最小失败检查点创建新 run；不覆盖旧结果 |
-| `POST /api/v1/projects/{id}/adaptation/storyboards/generate` | 兼容入口；内部编排多个 TextStageRun，不允许单次整章大请求 |
-| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/revisions` | 将人工修改保存为不可变新版本 |
-| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/approve` | 对固定内容哈希进行分镜审批 |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/generate` | 兼容入口；内部编排多个 TextStageRun，组装 Storyboard 1.1，不允许单次整章大请求 |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/revisions` | 将人工分格修改保存为不可变 Storyboard 1.1 新版本；沿用并复验模型生成的 `page_type` |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/validate` | 纯本地校验来源覆盖、`page_type`、逐页非空和格数政策，返回精确 page/error path，不调用模型 |
+| `POST /api/v1/projects/{id}/adaptation/storyboards/{version_id}/approve` | 同步复验 Storyboard 1.1 内容哈希与页面政策后创建分镜审批 |
 | `POST /api/v1/projects/{id}/layouts/drafts` | 从已批准 Storyboard 创建 PageLayoutDraft 草稿，不调用模型 |
 | `POST /api/v1/projects/{id}/layouts/{version_id}/revisions` | 以乐观锁保存不可变版式版本并计算最小失效范围 |
 | `POST /api/v1/projects/{id}/layouts/{version_id}/validate` | 校验格框、顺序、安全区、尺寸选择与裁切风险 |
@@ -591,7 +594,7 @@ SourceChapter / StoryBeat
 | `POST /api/v1/projects/{id}/generation/masks` | 校验并冻结与父素材绑定的本地 PNG 蒙版 |
 | `POST /api/v1/projects/{id}/generation/revisions/estimate` | 固定 reroll/inpaint 父版本、目标和成本预留，不出图 |
 | `POST /api/v1/projects/{id}/generation/revisions/jobs` | 第一次确认后创建有界 revision Job，不出图 |
-| `GET /api/v1/projects/{id}/pages/templates` | 读取本机 16 种分页/条漫模板，不访问外部服务 |
+| `GET /api/v1/projects/{id}/pages/templates` | 读取本机 16 种分页/条漫模板及 `page_type`/panel count 兼容元数据；1–2 格模板只兼容特殊页，不访问外部服务 |
 | `POST /api/v1/projects/{id}/pages/draft` | 从当前已生成素材创建规范 PageVersion 与 PNG |
 | `GET /api/v1/projects/{id}/pages?chapter_id=...` | 列出章节的当前页面版本 |
 | `POST /api/v1/projects/{id}/pages/{page_id}/versions` | 以乐观锁保存布局/文字新版本，仅在本机渲染 |
@@ -643,6 +646,15 @@ flowchart LR
     BT --> PR
 ```
 
+`page_plan` 为每个稳定 `page_id` 生成 `page_type = standard | cover | splash | special`；用户不需要手工标记或填写例外理由。`panel_plan` 为每页生成完整 `panels`，最终由 `adaptation` 模块的纯领域服务组装和校验 Storyboard 1.1：
+
+- `standard` 是普通叙事页，必须恰有 3–6 个 Panel；
+- `cover`、`splash`、`special` 是模型自动判定的特殊页，可有 1–6 个 Panel；
+- 所有页面必须非空，任何类型都不得超过 6 格；
+- 缺失/未知 `page_type`、空页、普通页 1–2 格和任意 7 格以上页面返回 `STORYBOARD_PAGE_POLICY_INVALID`，错误包含 `page_id`、JSON path、实际类型/格数和允许范围。
+
+`StoryboardPagePolicyValidator` 与 `panel_count_policy_version` 由 `adaptation` 拥有；`text_execution` 只执行供应商请求和有界修复，不能自行放宽业务规则。基本结构完整但违反上述可修复不变量时，将机器可读错误报告送入最多两次 `repair_structured_output`；仍失败则不写成功 checkpoint、不发布 Storyboard artifact，也不解锁审批或 Layout。`StoryboardApproval` 冻结 Storyboard schema/content SHA-256、逐页 `page_type`/panel ID 摘要和政策版本。
+
 每个 `TextStageRun` 具有：
 
 - 精确输入 artifact 版本和内容哈希；
@@ -673,11 +685,14 @@ class ImageGenerationProvider(Protocol):
 
 `LayoutPlanner` 接受已批准 Storyboard 和 ProductionProfile，输出 PageLayoutDraft。FrameSpec 使用 0–1 规范化坐标，至少包含 rect、order、aspect ratio、focal point、character positions、text safe zones 和 crop safe rect。版式校验是纯本地确定性函数，检查：
 
+- Storyboard schema 为 1.1、审批和页面政策版本有效；普通页格数为 3–6，特殊页格数为 1–6；
 - Panel 与 frame 一一对应、坐标有限且在画布内；
 - 格框面积下限、非法重叠、gutter 和阅读顺序图无环；
 - 角色位置和文字安全区位于目标格内；
 - crop safe rect 可被至少一个当前模型合法尺寸满足；
 - PageLayoutDraft 内容哈希和审批仍有效。
+
+`LayoutTemplateCatalog` 以 `(page_type, panel_count, production_profile)` 查询模板：`standard` 只返回 3–6 格模板，`cover/splash/special` 可返回 1–6 格模板。前端的模板过滤只是体验层，后端 `LayoutPlanner` 与 `LayoutValidator` 必须重复执行同一公开政策；layout 不得根据格数反推或改写 `page_type`。用户把普通页手工编辑为 1–2 格时保存 Storyboard 新版本，但分镜审批和 Layout 创建均失败，直到页面规划阶段由模型生成合法的新分类/分镜。
 
 `DimensionSelector` 不硬编码统一 `832×1216`。它从版本化 capability profile 的合法 `(width, height, pixel_limit, cost_class)` 集合中，按以下稳定排序选择：先最小化宽高比误差，再最小化 crop safe rect 风险，再接近目标像素，最后按成本与固定尺寸键破同分。输出 `DimensionSelection`，保存候选列表、规则版本、选中原因和 expected crop ratio，成为 GenerationSpec 的一部分。
 
@@ -758,14 +773,14 @@ character[i] = 已批准 CharacterTagSet 固定 Tags
 
 ### 8.4 多角色策略
 
-官方文档说明 V4 及以上支持最多六个角色的独立提示，并能给出粗略位置；角色数量标签应放在 base prompt，单个角色框只描述角色本身。位置只是建议，不能当作严格布局约束。
+官方 V5 文档说明最多支持 22 个角色的独立提示，并能给出粗略位置；Manga Maker 当前为可审阅性把单格上限收紧为 3。角色数量标签应放在 base prompt，单个角色框只描述角色本身。位置只是建议，不能当作严格布局约束。
 
 v0.3 顺序：
 
-1. 单角色面板优先使用一个 V4.5 Precise Reference；
+1. V5 单角色面板使用已批准固定 Tags、独立 character caption 与冻结 seed；
 2. 多角色面板使用 base prompt + 独立 character captions + 坐标；
-3. 不同时叠加多个角色 Precise Reference，因为官方文档明确会把多个角色参考融合；
-4. 角色仍混淆时，拆成分步 img2img/inpaint，由用户选择结果；
+3. V5 不附带 Precise Reference 或 Vibe Transfer；
+4. 角色仍混淆时，拆格或由用户明确批准付费 img2img/inpaint；
 5. 最终以人工一致性抽检为准。
 
 映射前不变量：角色 ID 唯一；order 从 0 连续；正负区块一一对应；坐标均在 0–1；角色数量不超过冻结 capability；固定 Tags 的有序序列与 CharacterTagSet 哈希 100% 一致；base 中的角色数量标签与数组长度一致。任何不变量失败都属于 `MULTI_CHARACTER_CONTRACT_INVALID`，不会构造 Authorization header。
@@ -774,9 +789,9 @@ v0.2 兼容说明：旧 PromptPackage 的扁平 `compiled_prompt` 可以继续�
 
 ### 8.5 Precise Reference 预处理
 
-官方文档的当前约束：
+这是旧 V4.5 工作流的兼容能力，不是 V5 生产路径。官方文档的当前约束：
 
-- 仅 V4.5 模型可用；
+- 仅 V4.5 模型可用，V5 配置必须在本地拒绝；
 - 类型为 Character、Style、Character & Style；
 - 每张参考图当前每次生成额外消耗 5 Anlas，数量叠加；
 - 推荐大尺寸为 1024×1536、1472×1472 或 1536×1024；
@@ -822,7 +837,7 @@ inpaint 流程：
 
 “开始生成”不是一个无限授权，而是创建不可变 `GenerationApproval`：
 
-- 精确 storyboard/bible 版本与哈希；
+- 精确 Storyboard 1.1/bible 版本与哈希，以及逐页 `page_type`、panel ID 摘要和 `panel_count_policy_version`；
 - 精确 PageLayoutDraft/frame、PromptPlan 与 ProviderExecutionSpec mapping version/hash；
 - 明确 panel ID 列表；
 - 每格候选数与至多多少次尝试；
@@ -936,6 +951,8 @@ PageApproval 冻结 PageVersion、ordered accepted AssetVersion、finding 状态
 | 场景 | 分类 | 自动行为 |
 |---|---|---|
 | 本地参数/schema 错误 | `INVALID_SPEC` | 不发请求，要求修正 |
+| Storyboard 页型缺失/未知、空页或格数违规 | `STORYBOARD_PAGE_POLICY_INVALID` | 不写成功检查点、不批准、不创建 Layout；模型产物最多结构修复两次 |
+| Storyboard 1.0 用于新的审批或生产 | `STORYBOARD_UPGRADE_REQUIRED` | 历史版本保持只读；提示用户明确触发模型重新规划为 1.1，不猜测或默认页型 |
 | 版式未批准、frame 非法或尺寸不可满足 | `LAYOUT_NOT_READY` | 不创建 Prompt/GenerationSpec，返回具体 frame 与裁切风险 |
 | TokenBudget 无法容纳硬约束 | `TEXT_BUDGET_EXCEEDED` | 不发请求，缩小 shard 并重新估算 |
 | 文本 content 为空或 finish reason 截断 | `TEXT_OUTPUT_INCOMPLETE` | 不推进阶段；按错误类型分片或人工重试，不盲目结构修复 |
@@ -979,7 +996,7 @@ Precise Reference 当前的 5 Anlas/参考图/生成可进入官方规则快照�
 
 PageVersion 是以下内容的不可变快照：
 
-- 已批准 PageLayoutDraft 版本与哈希、页面尺寸、阅读方向和模板版本；
+- 已批准 StoryboardPage 1.1 的 `page_type`/panel 摘要、PageLayoutDraft 版本与哈希、页面尺寸、阅读方向和模板版本；
 - 每个格框的规范化坐标、层级和裁切；
 - 每个 Panel 选用的 accepted AssetVersion 与有效 ReviewDecision；
 - 气泡、对白、旁白、音效、页码的文本与样式；
@@ -1006,7 +1023,7 @@ Approved PageLayoutDraft + accepted ReviewDecisions
 
 浏览器和后端共享坐标模型与文本测量测试，但正式导出以后端为准。前端显示“预览与正式渲染差异”警告，黄金页面测试比较像素差、文字边界和页序。
 
-PageDocument v1 继续固定 2048 × 3072、黑白、左到右，保证既有页面可重现。v2 使用有界动态画布（宽 512–4096、高 512–16000，总像素不超过 3200 万），支持 `grayscale / color`、LTR/RTL/从上到下和十六进制底色。模板共 16 种：六种基础 1–6 格分页、四种对开/主镜头/RTL 分页和六种 1440 px 宽竖向条漫。所有格框和文字矩形必须落在选定画布内。
+PageDocument v1 继续固定 2048 × 3072、黑白、左到右，保证既有页面可重现。v2 使用有界动态画布（宽 512–4096、高 512–16000，总像素不超过 3200 万），支持 `grayscale / color`、LTR/RTL/从上到下和十六进制底色。模板共 16 种：六种基础 1–6 格分页、四种对开/主镜头/RTL 分页和六种 1440 px 宽竖向条漫。模板存在不代表任意页型都可选：普通页只能进入 3–6 格模板，1–2 格分页只允许已批准的 `cover/splash/special` 页面。所有格框和文字矩形必须落在选定画布内。
 
 Pillow renderer v2 按 `color_mode` 明确保留 RGB 或转灰度，再绘制 10 px 格框、对白椭圆、旁白圆角框、描边音效字和可选页码。素材以 cover-crop 加焦点与缩放参数放置；生成前 DimensionSelection 负责降低宽高比误差，渲染时仍必须验证实际裁切没有越过 `crop_safe_rect`。中文按字符换行，无法在边界内排下时拒绝版本而不生成不可读页面。PNG 压缩参数、画布 profile、Layout 版本、accepted AssetVersion/ReviewDecision、渲染器版本和字体 SHA-256 进入 PageVersion 哈希；同一输入比较完整文件哈希。`comic_pages` 保存当前指针，`page_versions` 只追加并可用 `source_job_id` 回溯 revision Job，`mask_assets` 固定父素材和蒙版哈希。
 
@@ -1089,6 +1106,7 @@ NovelAI 当前条款说明用户保留其内容权利、请求内容默认不在
 
 - `event_id`、时间、事件类型；
 - project/job/item/panel/page ID；
+- storyboard schema、`page_type`、panel count、page policy version 和安全的政策违规代码；
 - artifact version、dependency edge/invalidation ID、candidate set、review decision、page approval ID；
 - user_action_id、attempt_id、correlation_id；
 - 状态迁移前后、耗时、重试序号；
@@ -1105,6 +1123,7 @@ NovelAI 当前条款说明用户保留其内容权利、请求内容默认不在
 进度只显示可核验计数：
 
 - 目标面板数；
+- 普通/特殊页面数、逐页分镜数和待修复格数违规数；
 - pending/running/succeeded/failed/needs_review 数；
 - generated/qc_pending/review_required/accepted/rejected/needs_fix 候选数；
 - 已合成/待审批/已批准/stale 页面数；
@@ -1143,14 +1162,14 @@ MM-011 已保存经审阅的官方 Swagger 快照元数据：URL、抓取时间�
 
 | 层级 | 内容 |
 |---|---|
-| 单元 | LayoutValidator、DimensionSelector、TokenBudget/Truncation、Prompt Compiler、角色结构、质量规则、审批失效、参考图 padding、蒙版、状态机、版本指针、TXT/SourceAnchor |
-| Schema | Storyboard、PageLayoutDraft、PromptPlan、GenerationSpec、ProviderExecutionSpec、Candidate/Finding/Review/PageApproval、PageVersion、工程包 |
-| 文本模型 mock | capability 快照、Token 超限、空 content、finish_reason 截断、Schema 修复、stage checkpoint、shard 最小重跑和缓存失效 |
+| 单元 | StoryboardPagePolicyValidator（standard 3/6 通过，1/2/7 与空页失败；特殊页 1/2/6 通过，7 失败）、LayoutValidator、DimensionSelector、TokenBudget/Truncation、Prompt Compiler、角色结构、质量规则、审批失效、参考图 padding、蒙版、状态机、版本指针、TXT/SourceAnchor |
+| Schema | Storyboard 1.1 的 `page_type` 枚举/条件格数、PageLayoutDraft、PromptPlan、GenerationSpec、ProviderExecutionSpec、Candidate/Finding/Review/PageApproval、PageVersion、工程包 |
+| 文本模型 mock | `page_type` 缺失/未知、空页和格数违规的两次结构修复上限、capability 快照、Token 超限、空 content、finish_reason 截断、stage checkpoint、shard 最小重跑和缓存失效 |
 | NovelAI mock | 连接、图像 200/201 JSON/ZIP、401/403/余额/429/5xx、发送前网络失败、发送后结果不明、异常 JSON/base64/ZIP/尺寸、单/双/三角色正负 captions/坐标、Precise Reference 和有界重试 |
 | 质量/审片 | 候选完整性、规则幂等、finding 重开/豁免、接受/失效、PageApproval 与导出 blocker |
 | 恢复 | durable job/outbox 租约、每个两阶段提交断点、在途请求崩溃、staging reconciliation、取消/暂停、TextStage checkpoint |
-| 渲染 | 16 种分页/条漫模板、彩色/灰度、RTL、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
-| E2E mock | TXT → 分层改编 → 版式审批 → 多角色 PromptPlan → 候选/质检/接受 → PageApproval → 四类导出、reroll/inpaint 和恢复 |
+| 渲染 | 普通页只可选择 3–6 格、特殊页可选择 1–6 格、16 种分页/条漫模板、彩色/灰度、RTL、中文字体、溢出、黄金页、PNG/PDF/CBZ 页序 |
+| E2E mock | TXT → 每页非空 Storyboard 1.1（普通页 3–6 格且至少一个自动分类的 1–2 格特殊页）→ Panel/叶子 Frame 一一对应 → 版式审批 → 多角色 PromptPlan → 候选/质检/接受 → PageApproval → 四类导出、reroll/inpaint 和恢复 |
 | 真实 smoke | 用户确认后一次低成本文本阶段、单角色和双角色图像生成，记录完整载荷/成本边界证据 |
 | 真实单章 | 授权章节的首轮接受率、候选/修复数、每页成本/耗时、质量 finding 和人工一致性抽检 |
 
@@ -1200,12 +1219,14 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 
 迁移只追加新表和状态，不重写 v0.2 不可变素材：
 
-1. 为既有 Storyboard/PageVersion 建立 artifact_version 节点和可证明的依赖边；无法证明的边标记 `legacy_unknown`。
-2. 从既有 PageVersion 几何创建 `PageLayoutDraft(imported_legacy)` 草稿，但不自动审批，因为原版式是在生成后形成。
-3. 既有 PromptPackage 标记 `legacy_flat_prompt`；单角色可供查看和复现旧素材，多角色必须重新编译 PromptPlan v2 才能用于新 Job。
-4. 既有 ready AssetVersion 可加入 `legacy` CandidateSet，但没有自动 accepted ReviewDecision；用户可在审片台显式接受。
-5. 既有 PageVersion 没有 PageApproval，仍可恢复和作为历史工程导出；正式 v0.3 发布格式必须重新质检并批准。
-6. migration 有前向、回滚到备份和重复执行测试；迁移失败不删除原数据库/文件，应用以只读恢复模式启动。
+1. Storyboard 1.0 保持不可变、可读和可复现历史页面；不得按格数猜测 `page_type`，也不得静默默认成 `standard`。它不能用于新的分镜审批、Layout、Prompt 或 GenerationSpec。
+2. 用户触发重新规划后，由文本模型自动生成 `page_type` 和逐页分镜，`adaptation` 校验通过后创建新的 Storyboard 1.1 版本；旧批准和旧素材保留为历史分支，不原地改写。
+3. 为既有 Storyboard/PageVersion 建立 artifact_version 节点和可证明的依赖边；无法证明的边标记 `legacy_unknown`。
+4. 从既有 PageVersion 几何创建 `PageLayoutDraft(imported_legacy)` 草稿，但不自动审批，因为原版式是在生成后形成。
+5. 既有 PromptPackage 标记 `legacy_flat_prompt`；单角色可供查看和复现旧素材，多角色必须重新编译 PromptPlan v2 才能用于新 Job。
+6. 既有 ready AssetVersion 可加入 `legacy` CandidateSet，但没有自动 accepted ReviewDecision；用户可在审片台显式接受。
+7. 既有 PageVersion 没有 PageApproval，仍可恢复和作为历史工程导出；正式 v0.3 发布格式必须重新质检并批准。
+8. migration 有前向、回滚到备份和重复执行测试；迁移失败不删除原数据库/文件，应用以只读恢复模式启动。
 
 数据库迁移脚本从单一 `database.py` 中逐步提取为编号文件。旧迁移保持不可修改，新迁移在临时数据库、v0.2 真实结构副本和工程包恢复上验证；不为代码整洁重写历史 migration。
 
@@ -1231,6 +1252,7 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 | ADR-016 | 按业务能力纵向模块化，模块内部再分层 | 规则、数据、端口和测试同地演进；需要渐进迁移旧横向 service |
 | ADR-017 | 跨模块只使用版本化公开契约，表由单一模块写入 | 降低变更扩散并支持独立测试；部分聚合查询需 facade/read projection |
 | ADR-018 | typed composition root + 架构适应性函数 | 测试可替换、依赖可审计；增加少量 installer、Protocol 和 CI 维护成本 |
+| ADR-019 | 文本模型自动生成 PageType，本地 adaptation 以 Storyboard 1.1 政策确定性校验 | 不增加用户例外标记步骤且保留创作弹性；需要版本化跨字段校验、结构修复和旧 Storyboard 升级路径 |
 
 ### 被拒绝的方案
 
@@ -1238,7 +1260,7 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 - **NovelAI Scripting 站内全流程**：没有任意网络和图片生成接口，脚本瞬态且存储受限。
 - **完整页面一次生成**：格框和中文文字不可控，无法最小范围 reroll。
 - **所有格子固定统一生成尺寸，再由 PageVersion 裁切**：忽略格子比例、主体与文字安全区，增加不可控构图和重抽成本。
-- **把多角色 Tags 拼成一个 base prompt**：丢失角色身份边界、负向区块和位置，无法可靠映射 V4 角色契约。
+- **把多角色 Tags 拼成一个 base prompt**：丢失角色身份边界、负向区块和位置，无法可靠映射 V5 结构化角色契约。
 - **供应商成功后自动激活最新素材**：文件有效不代表画面可用，会绕过质检和人工接受。
 - **自动质量评分直接批准页面**：规则只能提供证据，不能替代用户的审美与发布责任。
 - **整章单次文本请求**：上下文和输出截断难以恢复，局部失败会迫使整章重跑。
@@ -1250,22 +1272,25 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 - **Service locator / 任意位置读取 `app.state`**：依赖不可见、难以替换测试；只在 compatibility seam 保留，新增代码使用 typed constructor/Depends 注入。
 - **多角色直接堆叠 Precise Reference**：官方明确会融合角色特征。
 - **导入即自动出图**：跳过分镜、设定和成本审批。
+- **只在 Prompt 中要求“普通页 3–6 格”而不做本地校验**：模型输出不可作为门禁真源，会让空页、未知页型或超限页面进入 Layout。
+- **按现有格数猜测旧页面类型或把缺失 `page_type` 默认为 `standard`**：会改写历史语义并让 1–2 格旧页面产生不可解释迁移；旧版只读，新生产必须生成 Storyboard 1.1。
 - **启动时自动续跑**：可能在用户不知情时继续付费调用。
 - **无限重试或并发提速**：与错误成本控制及服务负载边界冲突。
 
 ## 18. v0.3 实施顺序
 
-1. **模块与契约基线**：冻结 PRD/本文、模块所有权表、依赖白名单、公开契约、PageLayoutDraft/PromptPlan/Review Schema、ADR、官方 Swagger hash 和 v0.2 → v0.3 fixture。
+1. **模块与契约基线**：冻结 PRD/本文、模块所有权表、依赖白名单、Storyboard 1.1/PageType/页面政策、PageLayoutDraft/PromptPlan/Review Schema、ADR、官方 Swagger hash 和 v0.2 → v0.3 fixture。
 2. **先建架构护栏**：建立纵向 module skeleton、typed AppContainer、table/migration registry、Port contract harness 和 backend/frontend architecture tests；用 legacy adapter 保持现有行为。
 3. **依赖图与 durable work 基础**：增加 artifact/dependency/invalidation、work item/outbox/lease；先接纯本地任务并实现 SSE replay，不改变现有付费授权边界。
-4. **V03-P0-01 版式先行**：在独立 `layout` 模块实现 Layout Workbench、LayoutValidator、DimensionSelector、审批与最小失效；关闭新项目旧的“固定竖图先生成”入口。
-5. **V03-P0-02 多角色契约**：在 `prompting`/`production` 公共边界实现 PromptPlan v2、固定 Tags 结构化注入、ProviderExecutionSpec 与单/双/三角色 fixture；真实调用开关保持关闭直到 payload 预览通过。
-6. **V03-P0-03 候选与质检**：在独立 `review` 模块让生成结果进入 CandidateSet；实现规则、Finding、联系表、ReviewDecision、reroll/inpaint 回环和质量指标。
-7. **页面审批与真实预检**：由 `composition` 产出 PageVersion，`review` 批准页面，`exporting` 执行 TOCTOU 安全的 ExportPreflight；正式 PNG/PDF/CBZ 只接受有效批准页。
-8. **P0 模块/破坏/恢复测试**：覆盖 Port 契约、禁止依赖、table ownership、durable job/outbox、依赖失效、候选/QC/接受、双/三角色映射、进程崩溃和旧工程迁移。
-9. **P0 真实生产证明**：用户批准后完成最小单/双角色 smoke，再完成代表性授权章节，报告候选接受率、修复、成本、耗时和质量问题。
-10. **V03-P1-01 分层 Token 流水线**：在 `text_execution` 内引入 CapabilitySnapshot、TokenBudget、stage/shard/checkpoint/cache，由公开 Port 逐阶段替换旧的一次性文本调用。
-11. **P1 长章节验收**：用超限、截断和中途失败 fixture 证明硬约束保留与最小重跑，再运行用户批准的长章节文本任务。
+4. **逐页分镜政策**：在 `adaptation` 模块实现 Storyboard 1.1、PageType、StoryboardPagePolicyValidator、两次结构修复上限、审批快照和 1.0 只读升级路径；前端展示模型分类、格数和精确违规。
+5. **V03-P0-01 版式先行**：在独立 `layout` 模块实现按页型过滤的 Layout Workbench、LayoutValidator、DimensionSelector、审批与最小失效；关闭新项目旧的“固定竖图先生成”入口。
+6. **V03-P0-02 多角色契约**：在 `prompting`/`production` 公共边界实现 PromptPlan v2、固定 Tags 结构化注入、ProviderExecutionSpec 与单/双/三角色 fixture；真实调用开关保持关闭直到 payload 预览通过。
+7. **V03-P0-03 候选与质检**：在独立 `review` 模块让生成结果进入 CandidateSet；实现规则、Finding、联系表、ReviewDecision、reroll/inpaint 回环和质量指标。
+8. **页面审批与真实预检**：由 `composition` 产出 PageVersion，`review` 批准页面，`exporting` 执行 TOCTOU 安全的 ExportPreflight；正式 PNG/PDF/CBZ 只接受有效批准页。
+9. **P0 模块/破坏/恢复测试**：覆盖 Port 契约、禁止依赖、table ownership、durable job/outbox、逐页分镜政策、依赖失效、候选/QC/接受、双/三角色映射、进程崩溃和旧工程迁移。
+10. **P0 真实生产证明**：用户批准后完成最小单/双角色 smoke，再完成代表性授权章节，报告候选接受率、修复、成本、耗时和质量问题。
+11. **V03-P1-01 分层 Token 流水线**：在 `text_execution` 内引入 CapabilitySnapshot、TokenBudget、stage/shard/checkpoint/cache，由公开 Port 逐阶段替换旧的一次性文本调用。
+12. **P1 长章节验收**：用超限、截断和中途失败 fixture 证明硬约束保留与最小重跑，再运行用户批准的长章节文本任务。
 
 每一步先迁移读路径与测试，再切写路径和默认入口。兼容入口必须显式标记 legacy，不能在失败时静默回退；P0 真实验收未完成前不以并发、额外供应商或更多出版格式扩大范围。
 
@@ -1277,10 +1302,10 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 | OPEN-02 | 一次用户批准有界单章队列是否满足最新人工触发要求 | 实现前复核；不确定则降级逐页/逐格确认 |
 | OPEN-03 | 当前模型 ID、参数范围、采样器和尺寸组合 | capability fixture + mock + 用户批准 smoke |
 | OPEN-04 | inpaint mask 与请求字段的当前精确编码 | 官方契约样本和低成本真实验证 |
-| OPEN-05 | 多角色 + 单角色 Precise Reference 的稳定组合 | 金标面板人工抽检；不稳定则分步 inpaint |
+| OPEN-05 | V5 固定 Tags、独立角色区块与 seed 的角色稳定性 | 金标面板人工抽检；不稳定则拆格或经批准分步 inpaint |
 | OPEN-06 | PDF 中文字体的可分发许可 | 缺少合法字体时阻止正式导出 |
 | OPEN-07 | 当前模型合法尺寸、像素/成本级别能否覆盖目标 frame 比例 | capability fixture + DimensionSelector 黄金样例 + 真实低成本裁切抽检 |
-| OPEN-08 | V4 正负角色 captions 与坐标的当前精确字段/兼容组合 | canonical ProviderExecutionSpec fixture、Swagger diff 和用户批准的双角色 smoke |
+| OPEN-08 | V5 正负角色 captions 与坐标的当前精确字段/兼容组合（线字段仍名为 `v4_prompt`） | canonical ProviderExecutionSpec fixture、Swagger diff 和用户批准的双角色 smoke |
 | OPEN-09 | 各 TextModelProfile 的准确 tokenizer、上下文和输出上限 | 能力来源分级；未知时保守默认并阻止长章节真实生产 |
 | OPEN-10 | P0 自动质量规则对随机文字、角色数量和 crop risk 的误报/漏报 | 授权金标候选集人工标注；规则只告警，不自动接受 |
 | OPEN-11 | blocker 的人工豁免是否允许进入正式发布 | 默认允许有理由的显式豁免并进入 manifest；产品验收前用真实章节确认交互与责任提示 |
@@ -1309,7 +1334,8 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 16. durable job/outbox、SSE replay、租约恢复和外部未知结果边界通过崩溃测试；
 17. 用户明确批准的最小真实文本、单角色和双角色调用通过；
 18. 一个授权章节完成版式 → 多角色 → 候选/QC/接受 → PageApproval → 导出的真实闭环，并报告接受率、修复、调用、估算/实际成本边界、墙钟和人工质量；
-19. 未通过项明确列出，不能用社区项目、文档或 mock 代替真实产品验收。
+19. 未通过项明确列出，不能用社区项目、文档或 mock 代替真实产品验收；
+20. Storyboard 1.1 的 PageType/逐页格数政策完成单元、Schema、文本修复、API、Layout consumer、E2E 和 1.0 只读升级测试；普通页 3/6 格通过，1/2/7 格与空页失败，特殊页 1/2/6 格通过且不要求用户另行标记。
 
 ## 21. 官方参考
 
@@ -1328,7 +1354,7 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 ## 22. 文档边界
 
 - 本文以技术设计为主，不应据此推断功能已经交付；当前实现边界以 README 和开发工单为准。
-- v0.3 的 PageLayoutDraft、Artifact Dependency Graph、durable job/outbox、PromptPlan/PromptPackage v2、结构化多角色 ProviderExecutionSpec、GenerationApproval 冻结和 Prompt Inspector 已按工单完成 Mock 验收；Candidate/Quality/Review/PageApproval、迁移发布门禁和分层 Token Pipeline 仍是待实现目标。Mock 通过不等于真实服务与发布门禁已满足。
+- v0.3 的 Storyboard 1.1 自动 `page_type` 与普通页 3–6 格政策、PageLayoutDraft、Artifact Dependency Graph、durable job/outbox、PromptPlan/PromptPackage v2、结构化多角色 ProviderExecutionSpec、GenerationApproval 冻结和 Prompt Inspector 已按工单完成 Mock 验收；Candidate/Quality/Review/PageApproval、迁移发布门禁和分层 Token Pipeline 仍是待实现目标。Mock 通过不等于外部文本模型真实分类、真实付费服务或发布门禁已经验收。
 - GitHub 社区项目仅作为公开设计参考，未被安装，也不构成 Manga Maker 的供应商支持承诺。
 - 本文不是法律意见。用户仍需确认小说、参考图、字体和生成内容的权利与发布条件。
 - 开发 NovelAI 适配器与每次真实验收前必须重新读取官方 Swagger、文档和条款，并记录新的核对日期。

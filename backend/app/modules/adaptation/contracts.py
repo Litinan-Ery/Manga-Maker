@@ -24,5 +24,7 @@ class StoryboardPageSnapshotV1(BaseModel):
     project_id: UUID
     chapter_id: UUID
     page_id: UUID
+    page_type: Literal["standard", "cover", "splash", "special"]
+    page_policy_version: str = Field(min_length=1, max_length=64)
     storyboard: StoryboardVersionRefV1
     panel_ids: tuple[UUID, ...] = Field(min_length=1, max_length=100)

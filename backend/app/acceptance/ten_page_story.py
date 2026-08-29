@@ -210,7 +210,7 @@ class TenPageAcceptanceTextModel:
         self._require_profile()
         scene_id = uuid4()
         document = StoryboardDocument(
-            schema_version="1.0",
+            schema_version="1.1",
             storyboard_id=uuid4(),
             chapter_version=request.chapter_version,
             beat_resolutions=[
@@ -236,6 +236,7 @@ class TenPageAcceptanceTextModel:
                 PageCandidate(
                     page_id=uuid4(),
                     page_number=page_number,
+                    page_type="splash" if page_number == 1 else "special",
                     turning_point=str(beat["turning_point"]),
                     scene_ids=[scene_id],
                     panels=[

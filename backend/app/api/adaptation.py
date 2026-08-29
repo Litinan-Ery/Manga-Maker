@@ -147,3 +147,14 @@ def approve_storyboard(
 ) -> dict[str, Any]:
     verify_session(request, headers)
     return adaptation_service(request).approve_storyboard(project_id, storyboard_version_id)
+
+
+@router.post("/storyboards/{storyboard_version_id}/validate")
+def validate_storyboard(
+    project_id: str,
+    storyboard_version_id: str,
+    request: Request,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return adaptation_service(request).validate_storyboard(project_id, storyboard_version_id)

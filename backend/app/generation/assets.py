@@ -18,7 +18,7 @@ from ..modules.lineage.contracts import (
 )
 from ..modules.lineage.public import LineageFacade
 from ..modules.production.adapters.novelai import (
-    NovelAIV4Payload,
+    NovelAIPayload,
     require_frozen_novelai_payload,
 )
 from ..modules.production.contracts import ProviderExecutionSpec
@@ -45,7 +45,7 @@ class AssetStore:
         self,
         document: GenerationSpecDocument,
         provider_execution_spec: ProviderExecutionSpec,
-        provider_payload: NovelAIV4Payload,
+        provider_payload: NovelAIPayload,
     ) -> str:
         serialized = canonical_json(document.model_dump(mode="json"))
         spec_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()

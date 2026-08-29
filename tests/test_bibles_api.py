@@ -52,7 +52,7 @@ class StubTextModel:
         self.secret_reader(self.configuration.credential_profile_id)
         scene_id = uuid4()
         document = StoryboardDocument(
-            schema_version="1.0",
+            schema_version="1.1",
             storyboard_id=uuid4(),
             chapter_version=request.chapter_version,
             beat_resolutions=[
@@ -78,6 +78,7 @@ class StubTextModel:
                 PageCandidate(
                     page_id=uuid4(),
                     page_number=1,
+                    page_type="splash",
                     turning_point="林夏发现关键线索",
                     scene_ids=[scene_id],
                     panels=[
@@ -103,7 +104,7 @@ class StubTextModel:
             provider="openai-compatible",
             model=self.configuration.model,
             endpoint_host="models.example.test",
-            prompt_template_version="storyboard-1.0",
+            prompt_template_version="storyboard-1.1",
             response_sha256="a" * 64,
             input_tokens=20,
             output_tokens=30,

@@ -19,11 +19,14 @@ from ..ids import uuid7
 from ..modules.production.adapters.novelai import map_prompt_plan_to_novelai
 from ..modules.production.errors import ProviderMappingError
 from ..modules.prompting.public import PromptPlan
+from ..novelai.client import NovelAIConfigurationError, require_opus_zero_anlas_payload
+from ..novelai.contracts import require_inpaint_model_profile, require_model_profile
 from ..pages.models import PageDocument
 from ..pages.service import PageService
 from ..shared_kernel import canonical_sha256
 from .assets import canonical_json, fsync_directory, write_synced
 from .queue import (
+    OPUS_ZERO_ANLAS_COST_BASIS,
     STANDARD_COST_BASIS,
     GenerationPlan,
     GenerationQueueService,
@@ -119,6 +122,18 @@ class RevisionPlan:
     def estimated_cost_upper_anlas(self) -> int:
         return sum(target.cost_ceiling_anlas for target in self.targets)
 
+    @property
+    def billing_mode(self) -> Literal["standard", "opus_zero_anlas"]:
+        return "opus_zero_anlas" if self.estimated_cost_upper_anlas == 0 else "standard"
+
+    @property
+    def cost_basis(self) -> str:
+        return (
+            OPUS_ZERO_ANLAS_COST_BASIS
+            if self.billing_mode == "opus_zero_anlas"
+            else STANDARD_COST_BASIS
+        )
+
     def payload(self) -> dict[str, Any]:
         return {
             "operation": self.operation,
@@ -136,8 +151,14 @@ class RevisionPlan:
             "panel_count": len(self.targets),
             "estimated_calls": len(self.targets),
             "estimated_cost_upper_anlas": self.estimated_cost_upper_anlas,
-            "cost_basis": "user_confirmed_per_panel_ceiling",
-            "cost_notice": "这是用户确认的保守预留，不是供应商实际扣费。",
+            "billing_mode": self.billing_mode,
+            "cost_basis": self.cost_basis,
+            "cost_notice": (
+                "每次出图前都会重新验证 Opus 与 V5 使用额度; 核验显示不可用时会停止。"
+                "这是资格检查, 不是供应商账单保证; 核验通过后的实际扣费仍由 NovelAI 决定。"
+                if self.billing_mode == "opus_zero_anlas"
+                else "这是用户确认的保守预留，不是供应商实际扣费。"
+            ),
             "plan_fingerprint": self.fingerprint,
             "targets": [target.payload() for target in self.targets],
             "external_request_created": False,
@@ -417,8 +438,8 @@ class RevisionService:
             "contract_sha256": plan.base.contract_sha256,
             "candidate_count_per_panel": 1,
             "quality_rule_version": plan.base.quality_rule_version,
-            "billing_mode": "standard",
-            "cost_basis": STANDARD_COST_BASIS,
+            "billing_mode": plan.billing_mode,
+            "cost_basis": plan.cost_basis,
             "max_calls": max_calls,
             "max_cost_anlas": max_cost_anlas,
             "targets": [target.freeze_payload() for target in plan.targets],
@@ -466,7 +487,7 @@ class RevisionService:
                         prompt_approval_hash, prompt_snapshot_sha256,
                         candidate_count_per_panel, quality_rule_version
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 1,
-                              ?, ?, ?, ?, 'user_confirmed_per_panel_ceiling', ?, ?, ?,
+                              ?, ?, ?, ?, ?, ?, ?, ?,
                               ?, ?, ?, ?, 1, ?)
                     """,
                     (
@@ -492,6 +513,7 @@ class RevisionService:
                         max_calls,
                         max_cost_anlas,
                         plan.estimated_cost_upper_anlas,
+                        plan.cost_basis,
                         operation,
                         page_id,
                         plan.page_version_id,
@@ -673,6 +695,16 @@ class RevisionService:
         inpaint_strength: float | None,
         per_panel_cost_ceiling_anlas: int,
     ) -> RevisionPlan:
+        if per_panel_cost_ceiling_anlas < 0:
+            raise ApplicationError(
+                "GENERATION_COST_LIMIT_INVALID", "每格成本上限不能小于 0。", 422
+            )
+        if operation == "inpaint" and per_panel_cost_ceiling_anlas == 0:
+            raise ApplicationError(
+                "REVISION_ZERO_ANLAS_INELIGIBLE",
+                "NovelAI 的零 Anlas 配置不覆盖局部重绘，请明确填写付费成本上限。",
+                422,
+            )
         page = self.pages.get_current(project_id, page_id)
         document = PageDocument.model_validate(page["document"])
         base = self.queue.build_plan(
@@ -762,24 +794,30 @@ class RevisionService:
                 source_image_base64 = _base64(parent_raw)
                 mask_base64 = _base64(mask_raw)
             try:
+                selected_model_id = (
+                    base.inpaint_model_id
+                    if operation == "inpaint"
+                    else base.provider_model_id
+                )
+                model_profile = (
+                    require_inpaint_model_profile(selected_model_id)
+                    if operation == "inpaint"
+                    else require_model_profile(selected_model_id)
+                )
                 mapped = map_prompt_plan_to_novelai(
                     prompt_plan=prompt_plan,
                     generation_spec_id=generation_preview_id,
                     provider_execution_spec_id=provider_spec_id,
                     seed_material=str(provider_spec_id),
-                    model_id=(
-                        base.inpaint_model_id
-                        if operation == "inpaint"
-                        else base.provider_model_id
-                    ),
+                    model_id=selected_model_id,
                     contract_sha256=base.contract_sha256,
                     capability_snapshot_sha256=base_panel.capability_snapshot_sha256,
                     page_layout_draft_sha256=base_panel.layout_content_sha256,
                     width=base_panel.selected_width,
                     height=base_panel.selected_height,
                     seed=provider_seed,
-                    steps=28,
-                    scale=5.0,
+                    steps=model_profile.default_steps,
+                    scale=model_profile.default_scale,
                     sampler="k_euler_ancestral",
                     noise_schedule="karras",
                     mapping_version=base.mapping_version,
@@ -798,6 +836,15 @@ class RevisionService:
                 )
             except ProviderMappingError as exc:
                 raise ApplicationError(exc.code, exc.message, 409, exc.details) from exc
+            if per_panel_cost_ceiling_anlas == 0:
+                try:
+                    require_opus_zero_anlas_payload(mapped.payload)
+                except NovelAIConfigurationError as exc:
+                    raise ApplicationError(
+                        "REVISION_ZERO_ANLAS_INELIGIBLE",
+                        "当前 reroll 的冻结载荷不满足 NovelAI 零 Anlas 条件。",
+                        422,
+                    ) from exc
             targets.append(
                 RevisionTarget(
                     ordinal=ordinal,

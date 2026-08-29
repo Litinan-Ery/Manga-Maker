@@ -27,10 +27,13 @@ from backend.app.novelai.client import (
     NovelAIPermissionError,
     NovelAIRateLimitError,
     NovelAIResponseFormatError,
+    NovelAISubscriptionResult,
     NovelAITemporaryError,
     NovelAIUnknownOutcomeError,
+    NovelAIUsageLimitUnavailableError,
     PreciseReferenceInput,
     novelai_correlation_id,
+    require_opus_zero_anlas_available,
 )
 from backend.app.novelai.contracts import (
     CONNECTION_TEST_PATH,
@@ -51,7 +54,7 @@ def test_connection_test_uses_only_tag_suggestions_and_never_generates() -> None
 
     client = NovelAIClient(
         NovelAIConfiguration(
-            provider_model_id="nai-diffusion-4-5-full",
+            provider_model_id="nai-diffusion-5-full",
             credential_profile_id="novelai",
         ),
         lambda _profile_id: "unit-test-secret",
@@ -64,7 +67,7 @@ def test_connection_test_uses_only_tag_suggestions_and_never_generates() -> None
     request = requests[0]
     assert request.url.path == CONNECTION_TEST_PATH
     assert request.url.path != GENERATION_PATH
-    assert request.url.params["model"] == "nai-diffusion-4-5-full"
+    assert request.url.params["model"] == "nai-diffusion-5-full"
     assert request.url.params["prompt"] == "manga"
     assert request.headers["Authorization"] == "Bearer unit-test-secret"
     assert request.method == "GET"
@@ -96,6 +99,11 @@ def test_subscription_probe_validates_active_opus_without_generating() -> None:
                 "expiresAt": 1_800_000_000,
                 "isGracePeriod": False,
                 "perks": {},
+                "usage": {
+                    "percent": 84,
+                    "isNegative": False,
+                    "timeUntilNextPercent": 42,
+                },
             },
         )
 
@@ -103,8 +111,43 @@ def test_subscription_probe_validates_active_opus_without_generating() -> None:
 
     assert result.opus_active is True
     assert result.zero_anlas_verification()["subscription_tier"] == 3
+    assert result.v5_allowance_available is True
+    assert result.zero_anlas_verification()["usage_percent"] == 84
     assert [request.url.path for request in requests] == [SUBSCRIPTION_PATH]
     assert all(request.url.path != GENERATION_PATH for request in requests)
+
+
+def test_v5_zero_anlas_requires_explicit_available_usage_allowance() -> None:
+    available = NovelAISubscriptionResult(
+        active=True,
+        tier=3,
+        expires_at=None,
+        is_grace_period=False,
+        usage_percent=1,
+        usage_is_negative=False,
+        usage_time_until_next_percent=30,
+    )
+    require_opus_zero_anlas_available(available, "nai-diffusion-5-full")
+
+    for unavailable in (
+        available.__class__(
+            active=True,
+            tier=3,
+            expires_at=None,
+            is_grace_period=False,
+        ),
+        available.__class__(
+            active=True,
+            tier=3,
+            expires_at=None,
+            is_grace_period=False,
+            usage_percent=0,
+            usage_is_negative=True,
+            usage_time_until_next_percent=60,
+        ),
+    ):
+        with pytest.raises(NovelAIUsageLimitUnavailableError):
+            require_opus_zero_anlas_available(unavailable, "nai-diffusion-5-full")
 
 
 @pytest.mark.parametrize(
@@ -177,13 +220,16 @@ def test_network_error_is_temporary_and_not_retried() -> None:
     assert request_count == 1
 
 
-def make_client(transport: httpx.AsyncBaseTransport) -> NovelAIClient:
+def make_client(
+    transport: httpx.AsyncBaseTransport,
+    provider_model_id: str = "nai-diffusion-5-full",
+) -> NovelAIClient:
     def secret_reader(_profile_id: str) -> str:
         return "unit-test-secret"
 
     return NovelAIClient(
         NovelAIConfiguration(
-            provider_model_id="nai-diffusion-4-5-full",
+            provider_model_id=provider_model_id,
             credential_profile_id="novelai",
         ),
         secret_reader,
@@ -309,7 +355,7 @@ def test_image_generation_uses_pinned_json_contract_and_validates_png() -> None:
     assert request.headers["X-Correlation-ID"] == "Ab12Cd"
     payload = json.loads(request.content)
     assert payload["action"] == "generate"
-    assert payload["model"] == "nai-diffusion-4-5-full"
+    assert payload["model"] == "nai-diffusion-5-full"
     assert payload["parameters"]["n_samples"] == 1
     assert payload["parameters"]["image_format"] == "png"
     assert payload["parameters"]["v4_prompt"]["caption"]["base_caption"] == "manga panel"
@@ -336,6 +382,7 @@ def test_precise_reference_is_mapped_as_one_aligned_reference() -> None:
         )
 
     request = image_request(
+        provider_model_id="nai-diffusion-4-5-full",
         precise_reference=PreciseReferenceInput(
             png_base64=base64.b64encode(png_bytes(1024, 1536)).decode("ascii"),
             description="character",
@@ -343,7 +390,12 @@ def test_precise_reference_is_mapped_as_one_aligned_reference() -> None:
             fidelity=0.8,
         )
     )
-    asyncio.run(make_client(httpx.MockTransport(handler)).generate_image(request))
+    asyncio.run(
+        make_client(
+            httpx.MockTransport(handler),
+            provider_model_id="nai-diffusion-4-5-full",
+        ).generate_image(request)
+    )
 
     parameters = captured["parameters"]
     assert isinstance(parameters, dict)
@@ -378,7 +430,7 @@ def test_inpaint_uses_pinned_infill_fields_and_inpaint_model() -> None:
 
     client = NovelAIClient(
         NovelAIConfiguration(
-            provider_model_id="nai-diffusion-4-5-full-inpainting",
+            provider_model_id="nai-diffusion-5-full-inpainting",
             credential_profile_id="novelai",
         ),
         lambda _profile_id: "unit-test-secret",
@@ -386,7 +438,7 @@ def test_inpaint_uses_pinned_infill_fields_and_inpaint_model() -> None:
     )
     request = NovelAIImageRequest(
         correlation_id="InP4nt",
-        provider_model_id="nai-diffusion-4-5-full-inpainting",
+        provider_model_id="nai-diffusion-5-full-inpainting",
         prompt="correct hand",
         negative_prompt="text, watermark",
         width=832,
@@ -402,7 +454,7 @@ def test_inpaint_uses_pinned_infill_fields_and_inpaint_model() -> None:
     asyncio.run(client.generate_image(request))
 
     assert captured["action"] == "infill"
-    assert captured["model"] == "nai-diffusion-4-5-full-inpainting"
+    assert captured["model"] == "nai-diffusion-5-full-inpainting"
     parameters = captured["parameters"]
     assert isinstance(parameters, dict)
     assert parameters["image"] == request.source_image_base64
@@ -489,8 +541,8 @@ def test_invalid_frozen_payload_fails_before_secret_is_read() -> None:
     mapped = map_prompt_plan_to_novelai(
         prompt_plan=plan,
         generation_spec_id=UUID("01900000-0000-7000-8000-000000000602"),
-        model_id="nai-diffusion-4-5-full",
-        contract_sha256="f43ea4feff0d390dc65e5ed704d4cf7e75af741bb413b86981f465fb8fb556f8",
+        model_id="nai-diffusion-5-full",
+        contract_sha256="2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684",
         capability_snapshot_sha256="a" * 64,
         page_layout_draft_sha256="b" * 64,
         width=1216,
@@ -516,7 +568,7 @@ def test_invalid_frozen_payload_fails_before_secret_is_read() -> None:
 
     client = NovelAIClient(
         NovelAIConfiguration(
-            provider_model_id="nai-diffusion-4-5-full",
+            provider_model_id="nai-diffusion-5-full",
             credential_profile_id="novelai",
         ),
         secret_reader,
@@ -525,7 +577,7 @@ def test_invalid_frozen_payload_fails_before_secret_is_read() -> None:
     with pytest.raises(NovelAIConfigurationError):
         request = NovelAIImageRequest(
             correlation_id="Fr0zen",
-            provider_model_id="nai-diffusion-4-5-full",
+            provider_model_id="nai-diffusion-5-full",
             prompt="compatibility-only",
             negative_prompt="compatibility-only",
             width=1216,
@@ -562,7 +614,7 @@ def test_opus_zero_anlas_mode_accepts_only_pinned_free_payloads() -> None:
     with pytest.raises(NovelAIConfigurationError, match="zero-Anlas profile"):
         NovelAIImageRequest(
             correlation_id="Big001",
-            provider_model_id="nai-diffusion-4-5-full",
+            provider_model_id="nai-diffusion-5-full",
             prompt="manga panel",
             negative_prompt="text, watermark",
             width=1024,
@@ -574,6 +626,7 @@ def test_opus_zero_anlas_mode_accepts_only_pinned_free_payloads() -> None:
         )
     with pytest.raises(NovelAIConfigurationError, match="zero-Anlas profile"):
         image_request(
+            provider_model_id="nai-diffusion-4-5-full",
             billing_mode="opus_zero_anlas",
             precise_reference=PreciseReferenceInput(
                 png_base64=base64.b64encode(png_bytes(832, 1216)).decode("ascii"),
@@ -586,13 +639,14 @@ def test_opus_zero_anlas_mode_accepts_only_pinned_free_payloads() -> None:
 
 def image_request(
     *,
+    provider_model_id: str = "nai-diffusion-5-full",
     precise_reference: PreciseReferenceInput | None = None,
     correlation_id: str = "Ab12Cd",
     billing_mode: Literal["standard", "opus_zero_anlas"] = "standard",
 ) -> NovelAIImageRequest:
     return NovelAIImageRequest(
         correlation_id=correlation_id,
-        provider_model_id="nai-diffusion-4-5-full",
+        provider_model_id=provider_model_id,
         prompt="manga panel",
         negative_prompt="text, watermark",
         width=832,
