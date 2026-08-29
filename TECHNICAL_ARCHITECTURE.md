@@ -4,12 +4,12 @@
 |---|---|
 | 文档版本 | v0.3 |
 | 日期 | 2026-08-13 |
-| 状态 | v0.2 本地/Mock 基线已实现；v0.3 架构底座、版式先行、PromptPlan/PromptPackage v2、NovelAI 多角色映射、审批冻结与 Prompt Inspector 已完成 Mock 验收，候选/审片、迁移发布门禁与 Token 流水线仍待实现 |
+| 状态 | v0.2 本地/Mock 基线已实现；v0.3 架构底座、Storyboard 1.1 逐页政策、版式先行、PromptPlan/PromptPackage v2、NovelAI 多角色映射、审批冻结与 Prompt Inspector 已完成 Mock 验收，候选/审片、迁移发布门禁与 Token 流水线仍待实现 |
 | 对应产品文档 | [README.md](README.md)、[PRD.md](PRD.md) |
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
-> 本文定义 v0.3 目标系统边界、组件、数据流、接口和验收方法。当前 v0.2 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；跨章节连续性、整本有界计划、高级页面 profile、扩展模板和可复用素材库也已存在。v0.3 已按工单完成架构底座、版式先行、结构化多角色映射、审批冻结和 Prompt Inspector，其他目标不得由本文推断为已交付。2026-08-29 已以授权《沙王》完成真实 NovelAI V5 Full 零 Anlas 12 页图像、重绘、排版与导出闭环；外部文本模型、付费 Anlas、多候选接受/PageApproval 和其余 v0.3 目标仍未验收。本文新增的 Storyboard 1.1、自动 `page_type` 分类和普通页 3–6 格门禁是目标架构，尚未据此宣称实现。
+> 本文定义 v0.3 目标系统边界、组件、数据流、接口和验收方法。当前 v0.2 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；跨章节连续性、整本有界计划、高级页面 profile、扩展模板和可复用素材库也已存在。v0.3 已按工单完成架构底座、Storyboard 1.1 自动 `page_type` 与普通页 3–6 格本地门禁、版式先行、结构化多角色映射、审批冻结和 Prompt Inspector，其他目标不得由本文推断为已交付。2026-08-29 已以授权《沙王》完成真实 NovelAI V5 Full 零 Anlas 12 页图像、重绘、排版与导出闭环；Storyboard 1.1 已完成本地 Mock/E2E 验收，但外部文本模型真实分类、付费 Anlas、多候选接受/PageApproval 和其余 v0.3 目标仍未验收。
 
 ## 1. 架构结论
 
@@ -1354,7 +1354,7 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 ## 22. 文档边界
 
 - 本文以技术设计为主，不应据此推断功能已经交付；当前实现边界以 README 和开发工单为准。
-- v0.3 的 PageLayoutDraft、Artifact Dependency Graph、durable job/outbox、PromptPlan/PromptPackage v2、结构化多角色 ProviderExecutionSpec、GenerationApproval 冻结和 Prompt Inspector 已按工单完成 Mock 验收；Storyboard 1.1 的自动 `page_type` 与普通页 3–6 格政策、Candidate/Quality/Review/PageApproval、迁移发布门禁和分层 Token Pipeline 仍是待实现目标。更新本文不表示这些能力已经交付，Mock 通过也不等于真实服务与发布门禁已满足。
+- v0.3 的 Storyboard 1.1 自动 `page_type` 与普通页 3–6 格政策、PageLayoutDraft、Artifact Dependency Graph、durable job/outbox、PromptPlan/PromptPackage v2、结构化多角色 ProviderExecutionSpec、GenerationApproval 冻结和 Prompt Inspector 已按工单完成 Mock 验收；Candidate/Quality/Review/PageApproval、迁移发布门禁和分层 Token Pipeline 仍是待实现目标。Mock 通过不等于外部文本模型真实分类、真实付费服务或发布门禁已经验收。
 - GitHub 社区项目仅作为公开设计参考，未被安装，也不构成 Manga Maker 的供应商支持承诺。
 - 本文不是法律意见。用户仍需确认小说、参考图、字体和生成内容的权利与发布条件。
 - 开发 NovelAI 适配器与每次真实验收前必须重新读取官方 Swagger、文档和条款，并记录新的核对日期。

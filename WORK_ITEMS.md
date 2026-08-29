@@ -683,10 +683,11 @@ reference base64；界面展示 mapping/model/hash、影响对象、候选数/�
 - 不包含：真实文本模型或额外 NovelAI 付费请求。
 
 完成证据（2026-08-29）：Storyboard 1.1、自动 `page_type`、普通页 3–6 格与特殊页
-1–6 格政策已接入模型结构修复、持久化、人工修改、审批、设定生成、页面草稿和 Layout
-门禁；1.0 保持可读但不能修改或进入下游。改编工作台只读展示模型页型与违规原因，
-版式模板按页型和格数过滤，不提供人工改页型入口。领域、API、consumer、前端和逐页 E2E
-回归均已落地；全量后端测试、48 项前端测试、Ruff、mypy 和生产构建通过。
+1–6 格政策已接入模型结构修复、持久化、人工修改、审批、设定生成、Prompt/Generation、
+页面草稿和 Layout 门禁；1.0 保持原文档形状可读但不能修改、重新审批或进入新生产。
+Mock E2E 生成并审批 1 格 `splash` 与 3 格 `standard`，逐页批准 PageLayoutDraft，并断言
+每个 Panel 恰好对应一个叶子 Frame。全量后端测试、48 项前端测试、Ruff、mypy 和 production
+build 通过。本票未调用真实文本模型或 NovelAI。
 
 ## v0.3 P0 / V03-P0-03 候选、质检、接受与发布
 

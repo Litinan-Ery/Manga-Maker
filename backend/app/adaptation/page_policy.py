@@ -11,7 +11,11 @@ SPECIAL_PAGE_TYPES: frozenset[PageType] = frozenset({"cover", "splash", "special
 
 @dataclass(frozen=True, slots=True)
 class StoryboardPagePolicyFinding:
-    code: Literal["STORYBOARD_PAGE_POLICY_INVALID", "STORYBOARD_UPGRADE_REQUIRED"]
+    code: Literal[
+        "STORYBOARD_PAGE_POLICY_INVALID",
+        "STORYBOARD_UPGRADE_REQUIRED",
+        "STORYBOARD_SEMANTICS_INVALID",
+    ]
     path: str
     message: str
     page_id: str | None

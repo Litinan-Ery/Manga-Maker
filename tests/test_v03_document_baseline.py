@@ -22,7 +22,7 @@ def test_v03_status_and_traceability_are_explicit() -> None:
     work_items = (ROOT / "WORK_ITEMS.md").read_text(encoding="utf-8")
     baseline = BASELINE.read_text(encoding="utf-8")
 
-    assert "v0.3 已完成 Wave 3，整体尚未完成" in readme
+    assert "v0.3 已完成 Wave 3 与 Storyboard 1.1 逐页政策，整体尚未完成" in readme
     for ticket in (
         "MM-035 PromptPlan v2 与固定 Tags 结构化编译",
         "MM-036 ProviderExecutionSpec 与 NovelAI 多角色映射",

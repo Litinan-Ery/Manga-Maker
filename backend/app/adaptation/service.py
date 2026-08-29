@@ -731,7 +731,7 @@ class AdaptationService:
     @staticmethod
     def _semantic_finding(problem: str) -> StoryboardPagePolicyFinding:
         return StoryboardPagePolicyFinding(
-            code="STORYBOARD_PAGE_POLICY_INVALID",
+            code="STORYBOARD_SEMANTICS_INVALID",
             path="$",
             message=problem,
             page_id=None,

@@ -4,7 +4,7 @@
 
 Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
 
-> 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、版式先行、PromptPlan/PromptPackage v2、NovelAI Diffusion V5 Full 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。2026-08-29 已使用授权《沙王》输入完成独立的真实 NovelAI V5 Full 零 Anlas 12 页验收与定向重绘；该证据不替代仍未完成的通用产品闭环。
+> 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3 与 Storyboard 1.1 逐页政策，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、自动页型与普通页 3–6 格门禁、版式先行、PromptPlan/PromptPackage v2、NovelAI Diffusion V5 Full 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。2026-08-29 已使用授权《沙王》输入完成独立的真实 NovelAI V5 Full 零 Anlas 12 页验收与定向重绘；Storyboard 页型尚未使用外部文本模型做真实分类验收，该证据也不替代仍未完成的通用产品闭环。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，v0.3 所有权与追踪基线见 [V03_IMPLEMENTATION_BASELINE.md](docs/architecture/V03_IMPLEMENTATION_BASELINE.md)，关键决策的兼容/回滚/删除条件见 [ADR-010-018.md](docs/adr/ADR-010-018.md)，v0.2 P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
@@ -17,7 +17,7 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | 应用本地加密凭证库 | 已实现 | Argon2id + XChaCha20-Poly1305；支持界面内创建、解锁、锁定和保存凭证 |
 | TXT 导入与章节修正 | 已实现 | UTF-8/BOM/GB18030/GBK 候选；支持改名、拆分、合并 |
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
-| 文本模型与结构化改编 | 已实现（Mock 验收） | 界面字段为备注名称（可选）、URL、Key/Password、Request Model；Key/Password 本地加密保存且更新其他字段时可留空保留，同一配置生成分镜、角色/风格设定、固定 Tags 和逐格 Prompt；未做真实调用 |
+| 文本模型与结构化改编 | 已实现（Mock 验收） | Storyboard 1.1 要求模型逐页生成 `page_type` 与非空分镜，普通页 3–6 格、特殊页 1–6 格；本地结构修复、审批和下游门禁重复校验，1.0 仅历史只读；配置与凭证边界保持不变，尚未做外部文本模型真实调用 |
 | Storyboard 1.1 逐页政策 | 已实现（Mock 与 E2E 验收） | 文本模型自动标注页型；普通页必须 3–6 格，封面/通页/特殊页允许 1–6 格；页型只读展示，违规会阻止修改、审批、设定、页面与 Layout；1.0 历史分镜保持只读 |
 | CharacterBible、StyleBible 与参考图 | 已实现（Mock 验收） | 从已审批分镜调用当前文本模型草拟；支持编辑、独立审批、影响面板记录，以及经授权确认和安全解码的 PNG/JPEG/WebP 参考图 |
 | CharacterTagSet、PromptPlan 与 ProviderExecutionSpec | v0.3 多角色链路已实现（Mock 验收） | 固定角色 Tags 独立版本化审批；PromptPlan v2 保留每角色正负区块、动作、顺序、版式坐标与关系动作；版本化 mapper 默认生成并冻结 NovelAI V5 Full 的 base/正负角色 captions、坐标、V5 hints 与 payload hash；API 保留的 `v4_prompt` 字段名只是 V5 线协议；旧 flat prompt 只读且不能创建新 Job |
@@ -108,7 +108,8 @@ pnpm --dir frontend build
 ### 小说改编与分镜
 
 - 文本模型输出场景、剧情节拍、页、格、角色、对白、旁白、音效和视觉提示词。
-- 输出必须通过 JSON Schema 校验；格式错误先修复，无法修复时停止并交给用户处理。
+- 文本模型为每一页自动输出 `standard / cover / splash / special`；普通页必须为 3–6 格，特殊页可为 1–6 格，用户无需填写例外理由。
+- 输出必须通过 JSON Schema 和本地逐页政策校验；缺失/未知页型、空页或格数违规最多修复两次，仍失败则停止且不能审批。
 - 每个分镜保留原文来源锚点，并标记为直接呈现、合并改编或明确省略。
 - 用户可以在出图前修改页数、分格、对白、镜头、节奏和提示词。
 
