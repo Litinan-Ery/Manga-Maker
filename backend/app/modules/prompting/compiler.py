@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...shared_kernel import canonical_sha256
 from ..layout.contracts import FrameSpec, NormalizedPoint
+from .composition import SHOT_TAGS, composition_prompt, without_camera_tags
 from .contracts import (
     LayoutConstraints,
     PromptBase,
@@ -67,6 +68,7 @@ class CharacterPromptDraft(CompilerContract):
 class PanelPromptDraft(CompilerContract):
     prompt_package_id: UUID
     panel_id: UUID
+    visual_description: str | None = Field(default=None, min_length=1, max_length=6000)
     base_positive_tags: tuple[str, ...] = Field(min_length=1, max_length=100)
     base_negative_tags: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
     relationship_action: str | None = Field(default=None, min_length=1, max_length=500)
@@ -141,7 +143,11 @@ def compile_prompt_package(source: PromptCompilationInput) -> PromptPackage:
         )
 
     base_positive = _required_tags(
-        (*draft.base_positive_tags, *UNIVERSAL_POSITIVE_TAGS),
+        (
+            *without_camera_tags(draft.base_positive_tags),
+            SHOT_TAGS[source.frame.shot_scale],
+            *UNIVERSAL_POSITIVE_TAGS,
+        ),
         "base positive tags",
     )
     base_negative = _tags((*draft.base_negative_tags, *UNIVERSAL_NEGATIVE_TAGS))
@@ -237,6 +243,10 @@ def compile_prompt_package(source: PromptCompilationInput) -> PromptPackage:
             positive_tags=list(base_positive),
             negative_tags=list(base_negative),
             relationship_action=draft.relationship_action,
+            visual_description=draft.visual_description,
+            composition_prompt=composition_prompt(
+                source.frame, [block.character_id for block in ordered]
+            ),
         ),
         characters=compiled_characters,
         style_tags=list(style_tags),

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from ..layout.contracts import NormalizedPoint, NormalizedRect
 
@@ -25,6 +32,18 @@ class PromptBase(PromptingContract):
     positive_tags: list[str] = Field(min_length=1, max_length=100)
     negative_tags: list[str] = Field(default_factory=list, max_length=100)
     relationship_action: str | None = Field(default=None, min_length=1, max_length=500)
+    visual_description: str | None = Field(default=None, min_length=1, max_length=6000)
+    composition_prompt: str | None = Field(default=None, min_length=1, max_length=8000)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_serialization(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        for name in ("visual_description", "composition_prompt"):
+            if payload.get(name) is None:
+                payload.pop(name, None)
+        return payload
 
     @model_validator(mode="after")
     def valid_tags(self) -> PromptBase:

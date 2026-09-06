@@ -21,6 +21,10 @@ class TableOwner:
 
 
 TABLE_OWNER_ENTRIES: tuple[TableOwner, ...] = (
+    TableOwner("workflow_context_runs", "book_workflow", introduced_in=34),
+    TableOwner("workflow_context_checkpoints", "book_workflow", introduced_in=34),
+    TableOwner("workflow_context_artifacts", "book_workflow", introduced_in=34),
+    TableOwner("workflow_context_events", "book_workflow", introduced_in=34),
     TableOwner("schema_migrations", "persistence"),
     TableOwner("projects", "project_source"),
     TableOwner("source_preflights", "project_source"),
@@ -88,6 +92,7 @@ TABLE_OWNER_ENTRIES: tuple[TableOwner, ...] = (
     TableOwner("layout_approvals", "layout", introduced_in=23),
     TableOwner("dimension_selections", "layout", introduced_in=23),
     TableOwner("layout_command_receipts", "layout", introduced_in=24),
+    TableOwner("full_page_generations", "production", introduced_in=33),
     TableOwner("layout_approval_dimension_selections", "layout", introduced_in=24),
 )
 

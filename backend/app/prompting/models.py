@@ -110,6 +110,7 @@ class PromptCharacterBlockDraft(ContractModel):
 class PanelPromptDraft(ContractModel):
     prompt_package_id: UUID
     panel_id: UUID
+    visual_description: str | None = Field(default=None, min_length=1, max_length=6000)
     base_visual_tags: list[str] = Field(min_length=1, max_length=80)
     character_blocks: list[PromptCharacterBlockDraft] = Field(default_factory=list, max_length=20)
     style_tags: list[str] = Field(default_factory=list, max_length=80)

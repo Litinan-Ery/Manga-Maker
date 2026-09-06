@@ -117,7 +117,7 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "雨夜侦探" } });
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
 
-    expect(await screen.findByText("导入 TXT 小说")).toBeInTheDocument();
+    expect(await screen.findByText("导入 TXT / Markdown 小说")).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
     const createCall = fetchMock.mock.calls.find(
       ([path, init]) => String(path) === "/api/v1/projects" && init?.method === "POST",
@@ -207,7 +207,7 @@ describe("App", () => {
     const notice = await screen.findByText(/v0.2 历史工程/);
     const appRoot = notice.closest("main");
     expect(appRoot).not.toBeNull();
-    expect(appRoot).not.toHaveTextContent("选择 TXT 文件");
+    expect(appRoot).not.toHaveTextContent("选择 TXT / Markdown 文件");
     expect(appRoot).not.toHaveTextContent("识别结果");
   });
 });

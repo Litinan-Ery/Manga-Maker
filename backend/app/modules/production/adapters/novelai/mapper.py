@@ -38,14 +38,14 @@ class NovelAICharacterCaption(NovelAIAdapterContract):
 class NovelAIExternalCaption(NovelAIAdapterContract):
     base_caption: str = Field(min_length=1, max_length=12_000)
     char_captions: tuple[NovelAICharacterCaption, ...] = Field(
-        min_length=1,
+        min_length=0,
         max_length=MAX_STRUCTURED_CHARACTERS,
     )
 
 
 class NovelAIStructuredCondition(NovelAIAdapterContract):
     caption: NovelAIExternalCaption
-    use_coords: Literal[True] = True
+    use_coords: bool = True
     use_order: Literal[True] = True
     legacy_uc: Literal[False] | None = None
 
@@ -79,8 +79,8 @@ class NovelAIGenerationParameters(NovelAIAdapterContract):
     n_samples: Literal[1] = 1
     negative_prompt: str = Field(min_length=1, max_length=12_000)
     prompt: str = Field(min_length=1, max_length=12_000)
-    qualityToggle: Literal[True] = True
-    ucPreset: Literal[3, 4]
+    qualityToggle: bool = True
+    ucPreset: Literal[3, 4] | None = None
     params_version: Literal[4] = 4
     cfg_rescale: Literal[0] = 0
     dynamic_thresholding: Literal[False] = False
@@ -94,8 +94,8 @@ class NovelAIGenerationParameters(NovelAIAdapterContract):
     v4_negative_prompt: NovelAIStructuredCondition
     straight_alpha: Literal[True] | None = None
     tag_hint_transparent_background: Literal[False] | None = None
-    tag_hint_qt: Literal[1] | None = None
-    tag_hint_uc_preset: Literal[4] | None = None
+    tag_hint_qt: Literal[0, 1] | None = None
+    tag_hint_uc_preset: Literal[0, 3, 4] | None = None
     director_reference_images: tuple[str, ...] | None = Field(
         default=None, min_length=1, max_length=1
     )
@@ -314,6 +314,15 @@ def map_prompt_plan_to_novelai(
             _fail("NOVELAI_EDIT_PROMPT_EMPTY", "局部重绘提示词不能为空。")
         base_prompt_parts.append(normalized_edit)
     base_prompt = _join_tags(tuple(base_prompt_parts))
+    base_prompt = "\n\n".join(
+        part
+        for part in (
+            base_prompt,
+            prompt_plan.base.visual_description,
+            prompt_plan.base.composition_prompt,
+        )
+        if part
+    )
     base_negative = _join_tags(base_negative_tags)
     parameters: dict[str, Any] = {
         "width": width,
@@ -360,9 +369,10 @@ def map_prompt_plan_to_novelai(
                 "straight_alpha": True,
                 "tag_hint_transparent_background": False,
                 "tag_hint_qt": 1,
-                "tag_hint_uc_preset": 4,
+                "tag_hint_uc_preset": 0,
             }
         )
+        parameters.pop("ucPreset", None)
     if reference is not None:
         if not model_profile.supports_precise_reference:
             _fail(
@@ -428,8 +438,7 @@ def map_prompt_plan_to_novelai(
     payload_sha256 = _payload_sha256(payload)
     spec_id = provider_execution_spec_id or uuid5(
         NAMESPACE_URL,
-        "manga-maker:provider-execution:"
-        f"{seed_material or generation_spec_id}:{mapping_version}",
+        f"manga-maker:provider-execution:{seed_material or generation_spec_id}:{mapping_version}",
     )
     execution_spec = ProviderExecutionSpec(
         provider_execution_spec_id=spec_id,
@@ -451,6 +460,12 @@ def map_prompt_plan_to_novelai(
         seed=seed,
         base_positive_tags=list(base_positive_tags),
         base_negative_tags=list(base_negative_tags),
+        base_narrative="\n\n".join(
+            part
+            for part in (prompt_plan.base.visual_description, prompt_plan.base.composition_prompt)
+            if part
+        )
+        or None,
         character_captions=captions,
         payload_sha256=payload_sha256,
     )
@@ -472,6 +487,19 @@ def require_frozen_novelai_payload(
         ) from exc
     if _payload_sha256(validated) != execution_spec.payload_sha256:
         _fail("NOVELAI_FROZEN_PAYLOAD_HASH_MISMATCH", "冻结的 NovelAI 载荷哈希不一致。")
+    if execution_spec.generation_scope == "full_page":
+        if (
+            validated.model != "nai-diffusion-5-full"
+            or validated.parameters.v4_prompt.use_coords
+            or validated.parameters.v4_negative_prompt.use_coords
+            or validated.parameters.qualityToggle
+            or validated.parameters.tag_hint_qt != 0
+            or validated.parameters.tag_hint_uc_preset != 0
+            or validated.parameters.ucPreset is not None
+        ):
+            _fail("FULL_PAGE_PAYLOAD_INVALID", "整页生成必须使用明确的 V5 文字与负向策略。")
+    elif not validated.parameters.v4_prompt.use_coords or not execution_spec.character_captions:
+        _fail("MULTI_CHARACTER_CONTRACT_INVALID", "逐格生成必须保留角色坐标。")
     if (
         validated.model != execution_spec.model_id
         or validated.action != execution_spec.action
@@ -509,6 +537,8 @@ def require_frozen_novelai_payload(
     ] != expected_negative:
         _fail("MULTI_CHARACTER_CONTRACT_INVALID", "冻结载荷角色 caption 与执行规格不一致。")
     expected_base = _join_tags(tuple(execution_spec.base_positive_tags))
+    if execution_spec.base_narrative:
+        expected_base += "\n\n" + execution_spec.base_narrative
     if execution_spec.action == "generate" and validated.input != expected_base:
         _fail("NOVELAI_FROZEN_PAYLOAD_SPEC_MISMATCH", "冻结载荷 base caption 不一致。")
     if validated.parameters.v4_negative_prompt.caption.base_caption != _join_tags(

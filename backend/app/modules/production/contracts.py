@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from ..layout.contracts import NormalizedPoint
 
@@ -42,6 +49,7 @@ class ProviderExecutionSpec(ProductionContract):
     generation_spec_id: UUID
     provider: Literal["novelai"] = "novelai"
     action: Literal["generate", "infill"] = "generate"
+    generation_scope: Literal["panel", "full_page"] = "panel"
     mapping_version: str = Field(min_length=1, max_length=100)
     contract_sha256: Sha256
     capability_snapshot_sha256: Sha256
@@ -57,11 +65,27 @@ class ProviderExecutionSpec(ProductionContract):
     seed: int = Field(ge=0, le=4_294_967_295)
     base_positive_tags: list[str] = Field(min_length=1, max_length=200)
     base_negative_tags: list[str] = Field(min_length=1, max_length=200)
-    character_captions: list[ProviderCharacterCaption] = Field(min_length=1, max_length=3)
+    base_narrative: str | None = Field(default=None, min_length=1, max_length=12_000)
+    character_captions: list[ProviderCharacterCaption] = Field(default_factory=list, max_length=3)
     payload_sha256: Sha256
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_serialization(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if payload.get("base_narrative") is None:
+            payload.pop("base_narrative", None)
+        if payload.get("generation_scope") == "panel":
+            payload.pop("generation_scope", None)
+        return payload
 
     @model_validator(mode="after")
     def valid_character_captions(self) -> ProviderExecutionSpec:
+        if self.generation_scope == "panel" and not self.character_captions:
+            raise ValueError("panel execution requires character captions")
+        if self.generation_scope == "full_page" and self.character_captions:
+            raise ValueError("full-page identities belong to the per-panel narrative")
         _validate_tags(self.base_positive_tags, "base positive tags")
         _validate_tags(self.base_negative_tags, "base negative tags")
         character_ids = [caption.character_id for caption in self.character_captions]

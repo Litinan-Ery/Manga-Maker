@@ -6,7 +6,11 @@ from typing import Annotated, Any, cast
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from ..prompting.models import CharacterTagBundleDocument, PromptDraftBundleDocument
+from ..prompting.models import (
+    CharacterTagBundleDocument,
+    CharacterTagDraftBundle,
+    PromptDraftBundleDocument,
+)
 from ..prompting.service import PromptingService
 from ..security import session_headers
 
@@ -21,6 +25,12 @@ class GenerateArtifactRequest(BaseModel):
 
 class ReviseCharacterTagsRequest(BaseModel):
     document: CharacterTagBundleDocument
+
+
+class ImportCharacterTagsRequest(BaseModel):
+    chapter_id: str = Field(min_length=1, max_length=64)
+    document: CharacterTagDraftBundle
+    source_note: str = Field(min_length=1, max_length=500)
 
 
 class RevisePromptBundleRequest(BaseModel):
@@ -73,9 +83,23 @@ async def generate_character_tags(
     )
 
 
-@router.post(
-    "/character-tags/{version_id}/revisions", status_code=status.HTTP_201_CREATED
-)
+@router.post("/character-tags/import", status_code=status.HTTP_201_CREATED)
+def import_character_tags(
+    project_id: str,
+    request: Request,
+    body: ImportCharacterTagsRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return prompting_service(request).import_character_tags(
+        project_id,
+        body.chapter_id,
+        body.document,
+        source_note=body.source_note,
+    )
+
+
+@router.post("/character-tags/{version_id}/revisions", status_code=status.HTTP_201_CREATED)
 def revise_character_tags(
     project_id: str,
     version_id: str,
@@ -84,9 +108,7 @@ def revise_character_tags(
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
-    return prompting_service(request).revise_character_tags(
-        project_id, version_id, body.document
-    )
+    return prompting_service(request).revise_character_tags(project_id, version_id, body.document)
 
 
 @router.post("/character-tags/{version_id}/approve")
@@ -124,9 +146,7 @@ def revise_prompt_bundle(
     headers: Headers,
 ) -> dict[str, Any]:
     verify_session(request, headers)
-    return prompting_service(request).revise_prompt_bundle(
-        project_id, version_id, body.document
-    )
+    return prompting_service(request).revise_prompt_bundle(project_id, version_id, body.document)
 
 
 @router.post("/prompt-bundles/{version_id}/approve")
@@ -145,9 +165,7 @@ def approve_prompt_bundle(
         version_id,
         snapshot_sha256=body.snapshot_sha256,
         idempotency_key=key,
-        request_sha256=hashlib.sha256(
-            f"{version_id}|{body.snapshot_sha256}".encode()
-        ).hexdigest(),
+        request_sha256=hashlib.sha256(f"{version_id}|{body.snapshot_sha256}".encode()).hexdigest(),
     )
 
 

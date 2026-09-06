@@ -16,7 +16,7 @@ DEFAULT_CJK_FONT_PATHS = (
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
     Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
 )
-RENDERER_VERSION = "pillow-page-renderer-2"
+RENDERER_VERSION = "pillow-page-renderer-3"
 
 
 class PageRenderError(ValueError):
@@ -46,7 +46,15 @@ class PageRenderer:
             color=document.background_color,
         )
         draw = ImageDraw.Draw(canvas)
-        for placement in document.panels:
+        if document.page_image is not None:
+            path = asset_paths.get(document.page_image.generation_id)
+            if path is None:
+                raise PageRenderError("page references an unavailable full-page image")
+            full_page = safe_open_rgb(path).resize(canvas.size, Image.Resampling.LANCZOS)
+            if document.color_mode == "grayscale":
+                full_page = full_page.convert("L").convert("RGB")
+            canvas.paste(full_page, (0, 0))
+        for placement in document.panels if document.page_image is None else []:
             path = asset_paths.get(placement.asset_version_id)
             if path is None:
                 raise PageRenderError("page references an unavailable asset version")
@@ -196,8 +204,19 @@ def wrap_text(
             candidate = current + character
             box = draw.textbbox((0, 0), candidate, font=font, stroke_width=1)
             if current and box[2] - box[0] > maximum_width:
-                lines.append(current)
-                current = character
+                # Move the preceding character with closing punctuation, and opening
+                # punctuation with what follows it. Never drop or rewrite source text.
+                split = len(current)
+                while split > 0 and (
+                    candidate[split] in "。，、；：！？）》」』】〕〉”’…"  # noqa: RUF001
+                    or candidate[split - 1] in "（《「『【〔〈“‘"  # noqa: RUF001
+                ):
+                    split -= 1
+                # A box narrower than an indivisible punctuation group still uses
+                # the ordinary bounded break; callers can enlarge that text box.
+                split = split or len(current)
+                lines.append(candidate[:split])
+                current = candidate[split:]
             else:
                 current = candidate
         lines.append(current or " ")

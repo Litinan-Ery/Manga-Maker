@@ -17,6 +17,7 @@ from ..api.continuity import router as continuity_router
 from ..api.durable_recovery import router as durable_recovery_router
 from ..api.events import router as events_router
 from ..api.exports import router as exports_router
+from ..api.fullpages import router as fullpages_router
 from ..api.generation import router as generation_router
 from ..api.health import router as health_router
 from ..api.layouts import router as layouts_router
@@ -27,6 +28,7 @@ from ..api.projects import router as projects_router
 from ..api.prompting import router as prompting_router
 from ..api.recovery import router as recovery_router
 from ..api.vault import router as vault_router
+from ..api.workflow_context import router as workflow_context_router
 from ..config import Settings, get_settings
 from ..errors import ApplicationError, install_error_handlers
 from .composition_root import build_app_container
@@ -49,9 +51,7 @@ def create_application(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title=container.settings.app_name,
         version=container.settings.app_version,
-        docs_url=(
-            "/api/docs" if container.settings.environment == "development" else None
-        ),
+        docs_url=("/api/docs" if container.settings.environment == "development" else None),
         redoc_url=None,
         lifespan=lifespan,
     )
@@ -113,6 +113,7 @@ def install_http_entrypoints(app: FastAPI, container: AppContainer) -> None:
         health_router,
         events_router,
         durable_recovery_router,
+        workflow_context_router,
         vault_router,
         projects_router,
         layouts_router,
@@ -123,6 +124,7 @@ def install_http_entrypoints(app: FastAPI, container: AppContainer) -> None:
         continuity_router,
         novelai_router,
         generation_router,
+        fullpages_router,
         pages_router,
         library_router,
         exports_router,

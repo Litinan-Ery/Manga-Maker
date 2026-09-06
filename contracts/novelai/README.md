@@ -9,9 +9,14 @@
 - 大小：113,758 bytes
 - SHA-256：`2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684`
 - Swagger / 标题 / 版本：`2.0` / `Omegalaser API` / `1.0`
-- Manga Maker 映射版本：`novelai-image-2026-08-29.4-v5-full-1`（默认模型切换为
+- Manga Maker 映射版本：`novelai-image-2026-09-06.5-explicit-uc-1`（默认模型为
   `nai-diffusion-5-full`，固定 V5 的 23 steps、CFG 7、Karras、Euler Ancestral 与
-  `params_version=4`，并保留已审计的 `infill` 组合）
+  `params_version=4`，并保留已审计的 `infill` 组合；V5 使用显式负面提示，
+  `tag_hint_uc_preset=0`，省略旧 `ucPreset`，避免 Human Focus 预设抑制网点与多视图）
+
+整页多格另有 `novelai-v5-full-page-2026-09-06.1` 映射：关闭质量预设，
+使用 base caption 描述整页和各格，角色框不作为分格坐标。已有配置需重新保存、
+重新预览和批准；旧冻结请求的哈希不会被自动改写。
 
 `https://image.novelai.net/openapi.json` 当前是标题为 `Observability API` 的另一份
 OpenAPI 3.1 契约，只含错误追踪能力，不能作为图像接口生成或验收依据。实现只允许显式列入

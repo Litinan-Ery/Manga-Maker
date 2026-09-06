@@ -46,6 +46,13 @@ class ReviseStoryboardRequest(BaseModel):
     document: StoryboardDocument
 
 
+class ImportStoryboardRequest(ReviseStoryboardRequest):
+    chapter_id: str = Field(min_length=1, max_length=64)
+    page_budget: int = Field(ge=1, le=64)
+    expected_source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_note: str = Field(min_length=1, max_length=500)
+
+
 def verify_session(request: Request, headers: Headers) -> None:
     request.app.state.local_session.verify(*headers)
 
@@ -72,9 +79,7 @@ def save_text_model_configuration(
         remark_name=body.remark_name,
         base_url=body.url,
         model=body.request_model,
-        api_key=(
-            body.key_password.get_secret_value() if body.key_password is not None else None
-        ),
+        api_key=(body.key_password.get_secret_value() if body.key_password is not None else None),
         credential_profile_id=body.credential_profile_id,
         timeout_seconds=body.timeout_seconds,
         temperature=body.temperature,
@@ -102,6 +107,34 @@ async def generate_storyboard(
         body.chapter_id,
         page_budget=body.page_budget,
         adaptation_preferences=body.adaptation_preferences,
+    )
+
+
+@router.get("/storyboards/source")
+def get_local_storyboard_source(
+    project_id: str,
+    request: Request,
+    chapter_id: Annotated[str, Query(min_length=1, max_length=64)],
+    page_budget: Annotated[int, Query(ge=1, le=64)],
+) -> dict[str, Any]:
+    return adaptation_service(request).local_source(project_id, chapter_id, page_budget=page_budget)
+
+
+@router.post("/storyboards/import", status_code=status.HTTP_201_CREATED)
+def import_storyboard(
+    project_id: str,
+    request: Request,
+    body: ImportStoryboardRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return adaptation_service(request).import_storyboard(
+        project_id,
+        body.chapter_id,
+        body.document,
+        page_budget=body.page_budget,
+        expected_source_fingerprint=body.expected_source_fingerprint,
+        source_note=body.source_note,
     )
 
 

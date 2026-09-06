@@ -12,7 +12,7 @@
   },
   "contract_bytes": 113758,
   "fetched_on": "2026-08-29",
-  "mapping_version": "novelai-image-2026-08-29.4-v5-full-1",
+  "mapping_version": "novelai-image-2026-09-06.5-explicit-uc-1",
   "observed_contract": {
     "generation_request_fields": ["action", "input", "model", "parameters", "url"],
     "inpaint_parameter_fields": ["add_original_image", "color_correct", "image", "img2img", "mask", "noise", "strength"],

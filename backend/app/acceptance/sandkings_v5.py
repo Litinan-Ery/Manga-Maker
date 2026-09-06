@@ -92,6 +92,149 @@ class SandkingsPageBeat:
     relationship_action: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SandkingsStylePreset:
+    key: str
+    storyboard_prompt: str
+    storyboard_negative_prompt: str
+    summary: str
+    line_art: str
+    screentone: str
+    lighting: str
+    background_density: str
+    whitespace: str
+    camera_language: str
+    positive_prompt_fragment: str
+    negative_prompt_fragment: str
+    prohibited_elements: tuple[str, ...]
+    base_visual_tags: tuple[str, ...]
+    style_tags: tuple[str, ...]
+    negative_tags: tuple[str, ...]
+    color_mode: str
+
+
+LIMITED_COLOR_STYLE = SandkingsStylePreset(
+    key="limited-color",
+    storyboard_prompt=(
+        "mature retrofuturist science fiction horror manga, "
+        "black bone-white and burnt-orange limited palette"
+    ),
+    storyboard_negative_prompt="photorealistic, 3d render, cheerful comedy",
+    summary="成熟复古未来主义科幻恐怖漫画，骨白与炭黑为主，焦橙色作为沙王威胁色",
+    line_art="bold expressive ink line art with precise science fiction machinery",
+    screentone="bone-white charcoal-black and burnt-orange limited color halftone",
+    lighting="hard cinematic rim light with oppressive cellar darkness",
+    background_density="detailed alien architecture with a single readable focal event",
+    whitespace="strong silhouettes and clear caption-safe negative space",
+    camera_language="one decisive cinematic graphic-novel image per page",
+    positive_prompt_fragment=(
+        "very aesthetic, masterpiece, mature science fiction horror manga, "
+        "retrofuturism, bold ink line art, limited color palette, "
+        "bone white, charcoal black, burnt orange accent"
+    ),
+    negative_prompt_fragment=(
+        "worst quality, low quality, photorealistic, 3d render, cheerful comedy, "
+        "text, watermark, logo, speech bubble, panel border, bad anatomy"
+    ),
+    prohibited_elements=("照片感", "三维渲染", "喜剧气氛", "水印", "画面内文字", "对白气泡"),
+    base_visual_tags=("mature science fiction horror manga",),
+    style_tags=(
+        "retrofuturism",
+        "bold expressive ink line art",
+        "bone-white charcoal-black and burnt-orange limited palette",
+        "cinematic hard rim lighting",
+        "detailed alien architecture",
+    ),
+    negative_tags=("photorealistic", "3d render", "cheerful comedy"),
+    color_mode="color",
+)
+
+
+MONOCHROME_90S_AMERICAN_STYLE = SandkingsStylePreset(
+    key="monochrome-90s-american",
+    storyboard_prompt=(
+        "1990s DC Comics-style American superhero horror comic, strict monochrome "
+        "black and white, heavy black ink masses, dense cross-hatching, halftone "
+        "screentones, gritty gothic science fiction, exaggerated perspective and "
+        "dynamic foreshortening"
+    ),
+    storyboard_negative_prompt=(
+        "color, colored art, chromatic lighting, watercolor, pastel, anime, manga, "
+        "photorealistic, 3d render, cheerful comedy"
+    ),
+    summary="纯黑白的90年代DC式美式科幻恐怖漫画，重墨块、交叉排线、网点与夸张透视",
+    line_art=(
+        "aggressive 1990s American comic-book inks, thick contour variation, "
+        "dense cross-hatching and carved angular faces"
+    ),
+    screentone=(
+        "strict monochrome black white and gray halftone dots, no chromatic color, "
+        "newspaper-print texture"
+    ),
+    lighting="high-contrast chiaroscuro, hard white rim light, deep solid-black shadows",
+    background_density=(
+        "dense gothic retrofuturist machinery and alien architecture with one clear action"
+    ),
+    whitespace="bold silhouettes with clean white caption-safe negative space",
+    camera_language=(
+        "dramatic 1990s American superhero-comic staging, low angles, dutch tilts, "
+        "exaggerated perspective and forceful foreshortening"
+    ),
+    positive_prompt_fragment=(
+        "very aesthetic, masterpiece, 1990s DC Comics-style American superhero horror "
+        "comic, strict monochrome black and white, heavy black ink shadows, dense "
+        "cross-hatching, halftone screentones, gritty gothic retrofuturist science fiction, "
+        "dynamic foreshortening"
+    ),
+    negative_prompt_fragment=(
+        "worst quality, low quality, color, colored art, chromatic, watercolor, pastel, "
+        "anime, manga, photorealistic, 3d render, cheerful comedy, text, watermark, "
+        "logo, speech bubble, panel border, bad anatomy"
+    ),
+    prohibited_elements=(
+        "彩色",
+        "日漫风",
+        "照片感",
+        "三维渲染",
+        "喜剧气氛",
+        "水印",
+        "画面内文字",
+        "对白气泡",
+    ),
+    base_visual_tags=(
+        "1990s American superhero horror comic",
+        "strict monochrome black and white",
+    ),
+    style_tags=(
+        "1990s DC Comics aesthetic",
+        "heavy black ink shadow masses",
+        "dense cross-hatching",
+        "black white gray halftone screentones",
+        "gritty gothic retrofuturism",
+        "dynamic foreshortening and exaggerated perspective",
+        "detailed alien architecture",
+    ),
+    negative_tags=(
+        "color",
+        "colored art",
+        "chromatic lighting",
+        "watercolor",
+        "pastel",
+        "anime",
+        "manga",
+        "photorealistic",
+        "3d render",
+        "cheerful comedy",
+    ),
+    color_mode="grayscale",
+)
+
+
+STYLE_PRESETS: dict[str, SandkingsStylePreset] = {
+    preset.key: preset for preset in (LIMITED_COLOR_STYLE, MONOCHROME_90S_AMERICAN_STYLE)
+}
+
+
 CHARACTER_DESIGNS: tuple[CharacterDesign, ...] = (
     CharacterDesign(
         name="西蒙·克雷斯",
@@ -390,8 +533,7 @@ PAGE_BEATS: tuple[SandkingsPageBeat, ...] = (
         purpose="给出真相并把终局引向错误方向",
         shot="split-depth hologram shot",
         narration=(
-            "沃终于说出真相: 沙王不是宠物，它们只是在长大。"
-            "克雷斯向东逃去，却早已分不清方向。"
+            "沃终于说出真相: 沙王不是宠物，它们只是在长大。克雷斯向东逃去，却早已分不清方向。"
         ),
         sfx="滋滋",
         visual_tags=(
@@ -447,11 +589,7 @@ def extract_sandkings_source(source_path: Path) -> ExtractedSandkingsSource:
 
     third_start = matches[2][0]
     next_h2 = next(
-        (
-            index
-            for index in range(third_start + 1, len(lines))
-            if _H2_PATTERN.match(lines[index])
-        ),
+        (index for index in range(third_start + 1, len(lines)) if _H2_PATTERN.match(lines[index])),
         len(lines),
     )
     extracted_parts: list[str] = []
@@ -477,9 +615,17 @@ class SandkingsV5AcceptanceTextModel:
         self,
         configuration: TextModelConfiguration,
         secret_reader: SecretReader,
+        *,
+        page_beats: tuple[SandkingsPageBeat, ...] | None = None,
+        style_preset: str = LIMITED_COLOR_STYLE.key,
     ) -> None:
+        if style_preset not in STYLE_PRESETS:
+            raise ValueError(f"unknown Sandkings style preset: {style_preset}")
         self.configuration = configuration
         self.secret_reader = secret_reader
+        self.page_beats = page_beats or PAGE_BEATS
+        self.page_count = len(self.page_beats)
+        self.style = STYLE_PRESETS[style_preset]
 
     async def validate_configuration(self) -> bool:
         self._require_profile()
@@ -491,16 +637,19 @@ class SandkingsV5AcceptanceTextModel:
     ) -> ModelCandidate[StoryboardDocument]:
         self._require_profile()
         _require_sandkings_story(request.chapter_text)
-        if request.page_budget < PAGE_COUNT:
-            raise ValueError(f"Sandkings acceptance requires at least {PAGE_COUNT} pages")
+        if request.page_budget < self.page_count:
+            raise ValueError(f"Sandkings acceptance requires at least {self.page_count} pages")
         scene_id = uuid4()
         page_by_beat: dict[str, int] = {}
         anchors_by_page: dict[int, list[str]] = {
-            page_number: [] for page_number in range(1, PAGE_COUNT + 1)
+            page_number: [] for page_number in range(1, self.page_count + 1)
         }
         total_beats = len(request.story_beats)
         for index, source_beat in enumerate(request.story_beats):
-            page_number = min(PAGE_COUNT, (index * PAGE_COUNT) // total_beats + 1)
+            page_number = min(
+                self.page_count,
+                (index * self.page_count) // total_beats + 1,
+            )
             page_by_beat[source_beat.beat_id] = page_number
             anchors_by_page[page_number].append(source_beat.anchor_id)
         fallback_anchor = request.story_beats[0].anchor_id
@@ -545,24 +694,24 @@ class SandkingsV5AcceptanceTextModel:
                             narration=[beat.narration],
                             sfx=[beat.sfx],
                             visual_prompt=(
-                                "mature retrofuturist science fiction horror manga, "
-                                "black bone-white and burnt-orange limited palette, "
+                                f"{self.style.storyboard_prompt}, "
                                 f"{', '.join(beat.visual_tags)}, no text"
                             ),
                             negative_prompt=(
-                                "photorealistic, 3d render, cheerful comedy, text, watermark, "
+                                f"{self.style.storyboard_negative_prompt}, text, watermark, "
                                 "logo, speech bubble, panel border, low quality"
                             ),
-                            source_anchor_ids=(
-                                anchors_by_page[page_number] or [fallback_anchor]
-                            ),
+                            source_anchor_ids=(anchors_by_page[page_number] or [fallback_anchor]),
                         )
                     ],
                 )
-                for page_number, beat in enumerate(PAGE_BEATS, start=1)
+                for page_number, beat in enumerate(self.page_beats, start=1)
             ],
         )
-        return self._candidate(document, "sandkings-storyboard-12-pages-1.0")
+        return self._candidate(
+            document,
+            f"sandkings-storyboard-{self.page_count}-pages-{self.style.key}-1.0",
+        )
 
     async def generate_bible_bundle(
         self,
@@ -601,33 +750,19 @@ class SandkingsV5AcceptanceTextModel:
                 schema_version="1.0",
                 style_bible_id=request.style_bible_id,
                 storyboard_version_id=request.storyboard_version_id,
-                summary="成熟复古未来主义科幻恐怖漫画，骨白与炭黑为主，焦橙色作为沙王威胁色",
-                line_art="bold expressive ink line art with precise science fiction machinery",
-                screentone="bone-white charcoal-black and burnt-orange limited color halftone",
-                lighting="hard cinematic rim light with oppressive cellar darkness",
-                background_density="detailed alien architecture with a single readable focal event",
-                whitespace="strong silhouettes and clear caption-safe negative space",
-                camera_language="one decisive cinematic graphic-novel image per page",
-                positive_prompt_fragment=(
-                    "very aesthetic, masterpiece, mature science fiction horror manga, "
-                    "retrofuturism, bold ink line art, limited color palette, "
-                    "bone white, charcoal black, burnt orange accent"
-                ),
-                negative_prompt_fragment=(
-                    "worst quality, low quality, photorealistic, 3d render, cheerful comedy, "
-                    "text, watermark, logo, speech bubble, panel border, bad anatomy"
-                ),
-                prohibited_elements=[
-                    "照片感",
-                    "三维渲染",
-                    "喜剧气氛",
-                    "水印",
-                    "画面内文字",
-                    "对白气泡",
-                ],
+                summary=self.style.summary,
+                line_art=self.style.line_art,
+                screentone=self.style.screentone,
+                lighting=self.style.lighting,
+                background_density=self.style.background_density,
+                whitespace=self.style.whitespace,
+                camera_language=self.style.camera_language,
+                positive_prompt_fragment=self.style.positive_prompt_fragment,
+                negative_prompt_fragment=self.style.negative_prompt_fragment,
+                prohibited_elements=list(self.style.prohibited_elements),
             ),
         )
-        return self._candidate(document, "sandkings-bibles-1.0")
+        return self._candidate(document, f"sandkings-bibles-{self.style.key}-1.0")
 
     async def generate_character_tags(
         self,
@@ -675,7 +810,7 @@ class SandkingsV5AcceptanceTextModel:
         }
         packages: list[PanelPromptDraft] = []
         for page in request.storyboard.pages:
-            beat = PAGE_BEATS[page.page_number - 1]
+            beat = self.page_beats[page.page_number - 1]
             for panel in page.panels:
                 frame = frame_by_panel[str(panel.panel_id)]
                 positions = cast(list[dict[str, Any]], frame["character_positions"])
@@ -705,7 +840,7 @@ class SandkingsV5AcceptanceTextModel:
                         base_visual_tags=[
                             "very aesthetic",
                             "masterpiece",
-                            "mature science fiction horror manga",
+                            *self.style.base_visual_tags,
                             "single full-page comic illustration",
                             *_human_count_tags(beat.characters),
                             beat.shot,
@@ -713,19 +848,11 @@ class SandkingsV5AcceptanceTextModel:
                         ],
                         character_blocks=character_blocks,
                         relationship_action=beat.relationship_action,
-                        style_tags=[
-                            "retrofuturism",
-                            "bold expressive ink line art",
-                            "bone-white charcoal-black and burnt-orange limited palette",
-                            "cinematic hard rim lighting",
-                            "detailed alien architecture",
-                        ],
+                        style_tags=list(self.style.style_tags),
                         negative_tags=[
                             "worst quality",
                             "low quality",
-                            "photorealistic",
-                            "3d render",
-                            "cheerful comedy",
+                            *self.style.negative_tags,
                             "text",
                             "watermark",
                             "logo",
@@ -747,7 +874,10 @@ class SandkingsV5AcceptanceTextModel:
             character_tag_bundle_version_id=request.character_tag_bundle_version_id,
             packages=packages,
         )
-        return self._candidate(document, "sandkings-panel-plan-v5-1.0")
+        return self._candidate(
+            document,
+            f"sandkings-panel-plan-v5-{self.page_count}p-{self.style.key}-1.0",
+        )
 
     def _require_profile(self) -> None:
         self.secret_reader(self.configuration.credential_profile_id)

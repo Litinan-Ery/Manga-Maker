@@ -62,6 +62,73 @@ class BibleService:
         self.projects = projects
         self.adaptation = adaptation
 
+    def import_bundle(
+        self,
+        project_id: str,
+        storyboard_version_id: str,
+        character_document: CharacterBibleDocument,
+        style_document: StyleBibleDocument,
+        *,
+        source_note: str,
+    ) -> dict[str, Any]:
+        row, storyboard = self._require_storyboard_ready(project_id, storyboard_version_id)
+        chapter_id = str(row["chapter_id"])
+        self._validate_reference_ids(project_id, "character", character_document)
+        self._validate_reference_ids(project_id, "style", style_document)
+        expected = sorted(
+            {
+                name
+                for page in storyboard.pages
+                for panel in page.panels
+                for name in panel.characters
+            }
+        )
+        with self.database.writer() as connection:
+            character_id = self._stable_bible_id(connection, "character", project_id, chapter_id)
+            style_id = self._stable_bible_id(connection, "style", project_id, chapter_id)
+            characters = character_document.model_copy(
+                update={"character_bible_id": UUID(character_id)}
+            )
+            style = style_document.model_copy(update={"style_bible_id": UUID(style_id)})
+            self._validate_model_bundle(
+                storyboard_version_id,
+                character_id,
+                style_id,
+                characters,
+                style,
+                expected_character_names=expected,
+            )
+            provenance = {
+                "change_type": "local_import",
+                "source_note": source_note,
+                "external_requests_started": 0,
+                "document_sha256": hashlib.sha256(
+                    canonical_json(
+                        {
+                            "characters": characters.model_dump(mode="json"),
+                            "style": style.model_dump(mode="json"),
+                        }
+                    ).encode()
+                ).hexdigest(),
+            }
+            character_version = self._insert_character_version(
+                connection, character_id, storyboard_version_id, characters, provenance
+            )
+            style_version = self._insert_style_version(
+                connection, style_id, storyboard_version_id, style, provenance
+            )
+            self._audit(
+                connection,
+                project_id,
+                "bibles.bundle_imported",
+                {
+                    "character_bible_version_id": character_version,
+                    "style_bible_version_id": style_version,
+                    "external_model_called": False,
+                },
+            )
+        return self.get_bundle(project_id, chapter_id)
+
     async def generate_bundle(
         self,
         project_id: str,
@@ -1092,14 +1159,10 @@ def storyboard_policy_error(
     )
     return ApplicationError(
         code=(
-            "STORYBOARD_UPGRADE_REQUIRED"
-            if upgrade_required
-            else "STORYBOARD_PAGE_POLICY_INVALID"
+            "STORYBOARD_UPGRADE_REQUIRED" if upgrade_required else "STORYBOARD_PAGE_POLICY_INVALID"
         ),
         message=(
-            "Storyboard 1.0 仅供历史只读，请重新生成 1.1 分镜。"
-            if upgrade_required
-            else message
+            "Storyboard 1.0 仅供历史只读，请重新生成 1.1 分镜。" if upgrade_required else message
         ),
         status_code=409 if upgrade_required else 422,
         details={

@@ -464,9 +464,10 @@ def image_request_payload(request: NovelAIImageRequest) -> dict[str, Any]:
                 "straight_alpha": True,
                 "tag_hint_transparent_background": False,
                 "tag_hint_qt": 1,
-                "tag_hint_uc_preset": 4,
+                "tag_hint_uc_preset": 0,
             }
         )
+        parameters.pop("ucPreset", None)
     reference = request.precise_reference
     if reference is not None:
         profile = require_model_profile(request.provider_model_id)

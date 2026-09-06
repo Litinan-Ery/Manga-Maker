@@ -18,11 +18,14 @@ import {
   preflightSource,
 } from "./api";
 import { LayoutWorkbench, createLayoutHttpClient } from "./features/layout";
+import { WorkflowContextPanel, createContextClient } from "./features/workflowContext";
+import { LocalDraftImport } from "./LocalDraftImport";
 import { ChapterEditor } from "./ChapterEditor";
 import { BibleWorkbench } from "./BibleWorkbench";
 import { CredentialPanel } from "./CredentialPanel";
 import { ContinuityWorkbench } from "./ContinuityWorkbench";
 import { GenerationConsole } from "./GenerationConsole";
+import { FullPageWorkbench } from "./FullPageWorkbench";
 import { ExportCenter } from "./ExportCenter";
 import { NovelAISettings } from "./NovelAISettings";
 import { PageComposer } from "./PageComposer";
@@ -54,6 +57,8 @@ export function App() {
   const [textModelRefreshKey, setTextModelRefreshKey] = useState(0);
   const [bibleRefreshKey, setBibleRefreshKey] = useState(0);
   const [promptRefreshKey, setPromptRefreshKey] = useState(0);
+  const [generationMode, setGenerationMode] = useState<"panel" | "full_page">("panel");
+  const [pageRefreshKey, setPageRefreshKey] = useState(0);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
@@ -64,6 +69,11 @@ export function App() {
     if (!hasSession) return null;
     const credentials = getLocalSessionCredentials();
     return credentials ? createLayoutHttpClient(credentials) : null;
+  }, [hasSession]);
+  const contextClient = useMemo(() => {
+    if (!hasSession) return null;
+    const credentials = getLocalSessionCredentials();
+    return credentials ? createContextClient(credentials) : null;
   }, [hasSession]);
 
   const refreshProjects = useCallback(
@@ -278,7 +288,7 @@ export function App() {
               <div className="workspace-heading compact">
                 <div>
                   <p className="section-kicker">第二步</p>
-                  <h2>导入 TXT 小说</h2>
+                  <h2>导入 TXT / Markdown 小说</h2>
                 </div>
                 <span>{selectedProject.title}</span>
               </div>
@@ -289,11 +299,11 @@ export function App() {
                 </p>
               ) : (
                 <label className="file-drop">
-                  <strong>{busy ? "正在处理…" : "选择 TXT 文件"}</strong>
+                  <strong>{busy ? "正在处理…" : "选择 TXT / Markdown 文件"}</strong>
                   <span>最大 10 MB；原文件与规范化文本均保存在本机项目中</span>
                   <input
                     type="file"
-                    accept=".txt,text/plain"
+                    accept=".txt,.md,.markdown,text/plain,text/markdown"
                     disabled={busy}
                     onChange={(event) => void handleFile(event.target.files?.[0])}
                   />
@@ -364,6 +374,17 @@ export function App() {
                 textModelRefreshKey={textModelRefreshKey}
                 onChanged={() => setBibleRefreshKey((current) => current + 1)}
               />
+              <LocalDraftImport
+                key={`${selectedProjectId}-${chapterSet.chapter_set_version}`}
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                onError={setActionError}
+                onChanged={() => {
+                  setAdaptationRefreshKey(current => current + 1);
+                  setBibleRefreshKey(current => current + 1);
+                  setPromptRefreshKey(current => current + 1);
+                }}
+              />
               {layoutClient && (
                 <LayoutWorkbench
                   projectId={selectedProjectId}
@@ -395,7 +416,14 @@ export function App() {
                 refreshKey={promptRefreshKey}
                 onError={setActionError}
               />
-              <WholeBookPlanner
+              <label className="generation-mode-selector">
+                <span>图像生成方式</span>
+                <select value={generationMode} onChange={(event) => setGenerationMode(event.target.value as "panel" | "full_page")}>
+                  <option value="panel">逐格生成 · 本地排版</option>
+                  <option value="full_page">V5 整页多格 · 检查成图后采用</option>
+                </select>
+              </label>
+              {generationMode === "panel" ? <><WholeBookPlanner
                 projectId={selectedProjectId}
                 onError={setActionError}
               />
@@ -403,11 +431,19 @@ export function App() {
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}
                 onError={setActionError}
-              />
+              /></> : <FullPageWorkbench
+                key={selectedProjectId}
+                projectId={selectedProjectId}
+                chapterSet={chapterSet}
+                onError={setActionError}
+                onAdopted={() => setPageRefreshKey((current) => current + 1)}
+              />}
+              {contextClient && <WorkflowContextPanel key={selectedProjectId} projectId={selectedProjectId} client={contextClient} />}
               <PageComposer
                 projectId={selectedProjectId}
                 chapterSet={chapterSet}
                 onError={setActionError}
+                refreshKey={pageRefreshKey}
               />
               <ExportCenter
                 projectId={selectedProjectId}

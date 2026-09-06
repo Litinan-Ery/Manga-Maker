@@ -11,6 +11,7 @@ from ..modules.lineage.public import LineageFacade
 from ..platform.durable_work.outbox import SQLiteOutboxStore
 from ..platform.recovery.coordinator import RecoveryCoordinator
 from ..security import session_headers
+from ..workflows.book_production.public import WorkflowContextService
 from .container import AppContainer
 
 SessionHeaders = Annotated[tuple[str | None, str | None], Depends(session_headers)]
@@ -61,3 +62,9 @@ def get_recovery_coordinator(
     container: Annotated[AppContainer, Depends(get_app_container)],
 ) -> RecoveryCoordinator:
     return container.recovery_coordinator
+
+
+def get_workflow_context_service(
+    container: Annotated[AppContainer, Depends(get_app_container)],
+) -> WorkflowContextService:
+    return container.workflow_context

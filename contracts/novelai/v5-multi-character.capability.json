@@ -2,7 +2,7 @@
   "schema_version": "2.0",
   "source_url": "https://image.novelai.net/docs/doc.json",
   "contract_sha256": "2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684",
-  "mapping_version": "novelai-image-2026-08-29.4-v5-full-1",
+  "mapping_version": "novelai-image-2026-09-06.5-explicit-uc-1",
   "default_model_id": "nai-diffusion-5-full",
   "official_documented_character_limit": 22,
   "manga_maker_character_limit": 3,

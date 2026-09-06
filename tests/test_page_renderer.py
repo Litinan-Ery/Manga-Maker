@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from backend.app.pages.models import PageDocument, PanelPlacement, PixelRect, TextLayer
 from backend.app.pages.renderer import PageRenderer
@@ -22,6 +22,41 @@ def test_one_to_six_panel_templates_are_bounded_and_non_overlapping() -> None:
         for index, first in enumerate(page_template.frames):
             for second in page_template.frames[index + 1 :]:
                 assert not rectangles_overlap(first, second)
+
+
+def test_uc04_full_page_image_is_drawn_once_without_repeated_panels(tmp_path: Path) -> None:
+    source = Image.new("RGB", (512, 768), "white")
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((0, 0, 255, 383), fill="red")
+    draw.rectangle((256, 0, 511, 383), fill="green")
+    draw.rectangle((0, 384, 511, 767), fill="blue")
+    asset = tmp_path / "page.png"
+    source.save(asset)
+    frames = [(280, 20, 200, 300), (20, 20, 220, 300), (20, 400, 460, 330)]
+    document = PageDocument(
+        schema_version="2.0",
+        page_id="p",
+        page_number=1,
+        width=512,
+        height=768,
+        color_mode="color",
+        reading_direction="right_to_left",
+        template_id="approved-layout",
+        storyboard_version_id="storyboard",
+        page_image={"generation_id": "full-image", "text_policy": "model"},
+        panels=[
+            PanelPlacement(
+                panel_id=f"panel-{index}",
+                asset_version_id="full-image",
+                frame=PixelRect(x=x, y=y, width=width, height=height),
+            )
+            for index, (x, y, width, height) in enumerate(frames)
+        ],
+        show_page_number=False,
+    )
+    rendered = PageRenderer().render(document, {"full-image": asset})
+    with Image.open(BytesIO(rendered.png_bytes)) as actual:
+        assert actual.convert("RGB").tobytes() == source.tobytes()
 
 
 def test_canonical_page_render_is_deterministic_and_contains_chinese_text(
@@ -126,11 +161,7 @@ def test_color_vertical_strip_and_rtl_profiles_render_without_forced_grayscale(
             "height": 3072,
             "reading_direction": "right_to_left",
             "template_id": "grid-1",
-            "panels": [
-                document.panels[0].model_copy(
-                    update={"frame": templates()[0].frames[0]}
-                )
-            ],
+            "panels": [document.panels[0].model_copy(update={"frame": templates()[0].frames[0]})],
         }
     )
     assert PageDocument.model_validate(rtl.model_dump()).reading_direction == "right_to_left"

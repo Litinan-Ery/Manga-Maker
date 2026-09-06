@@ -189,6 +189,7 @@ PROJECT_TABLE_QUERIES: tuple[tuple[str, str], ...] = (
            WHERE j.project_id = ?""",
     ),
     ("asset_versions", "SELECT * FROM asset_versions WHERE project_id = ?"),
+    ("full_page_generations", "SELECT * FROM full_page_generations WHERE project_id = ?"),
     ("asset_library_items", "SELECT * FROM asset_library_items WHERE project_id = ?"),
     ("comic_pages", "SELECT * FROM comic_pages WHERE project_id = ?"),
     (
@@ -269,6 +270,106 @@ class ExportService:
             "external_requests_started": 0,
         }
 
+    def preflight_book_export(
+        self,
+        project_id: str,
+        chapter_ids: list[str],
+        page_version_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Freeze every chapter of one current source edition in reading order."""
+        self.projects.get(project_id)
+        if not chapter_ids or len(chapter_ids) > 256 or len(set(chapter_ids)) != len(chapter_ids):
+            raise ApplicationError("INVALID_BOOK_CHAPTERS", "请选择完整且不重复的全书章节。", 422)
+        with self.database.reader() as connection:
+            chapters = connection.execute(
+                """SELECT sc.* FROM source_chapters sc
+                   JOIN source_chapter_sets cs ON cs.chapter_set_id = sc.chapter_set_id
+                   JOIN source_files sf ON sf.source_file_id = cs.source_file_id
+                   WHERE sf.project_id = ? AND cs.is_current = 1
+                     AND cs.chapter_set_id = (
+                         SELECT chapter_set_id FROM source_chapters WHERE chapter_id = ?)
+                   ORDER BY sc.ordinal""",
+                (project_id, chapter_ids[0]),
+            ).fetchall()
+        if [str(row["chapter_id"]) for row in chapters] != chapter_ids:
+            raise ApplicationError(
+                "INVALID_BOOK_CHAPTERS", "全书必须包含当前来源的所有章节，且顺序一致。", 422
+            )
+        if page_version_ids is not None and (
+            not page_version_ids
+            or len(page_version_ids) > 4096
+            or len(set(page_version_ids)) != len(page_version_ids)
+        ):
+            raise ApplicationError(
+                "INVALID_EXPORT_SELECTION", "请选择1-4096个不重复页面版本。", 422
+            )
+        selected: list[dict[str, Any]] = []
+        for chapter in chapters:
+            chapter_id = str(chapter["chapter_id"])
+            with self.database.reader() as connection:
+                storyboard = connection.execute(
+                    """SELECT v.* FROM storyboard_versions v
+                       JOIN storyboards s ON s.storyboard_id = v.storyboard_id
+                       JOIN storyboard_approvals a
+                         ON a.storyboard_version_id = v.storyboard_version_id
+                       WHERE s.project_id = ? AND s.chapter_id = ? AND v.is_current = 1""",
+                    (project_id, chapter_id),
+                ).fetchone()
+                available = {
+                    str(row[0])
+                    for row in connection.execute(
+                        """SELECT v.page_version_id FROM page_versions v
+                           JOIN comic_pages p ON p.page_id = v.page_id
+                           WHERE p.project_id = ? AND p.chapter_id = ?""",
+                        (project_id, chapter_id),
+                    )
+                }
+            pinned = (
+                [item for item in page_version_ids if item in available]
+                if page_version_ids is not None
+                else None
+            )
+            rows, _, _ = self._selected_pages(project_id, chapter_id, pinned)
+            if storyboard is None or [str(row["page_id"]) for row in rows] != [
+                str(page["page_id"])
+                for page in json.loads(str(storyboard["document_json"]))["pages"]
+            ]:
+                raise ApplicationError(
+                    "BOOK_STORYBOARD_INCOMPLETE", "每章必须完成已批准分镜中的所有页面。", 409
+                )
+            for row in rows:
+                selected.append(
+                    {
+                        **self._selection_entry(row, len(selected) + 1),
+                        "chapter_id": chapter_id,
+                        "chapter_ordinal": int(chapter["ordinal"]),
+                        "export_scope": "book",
+                    }
+                )
+        if len(selected) > 4096 or (
+            page_version_ids is not None
+            and page_version_ids != [item["page_version_id"] for item in selected]
+        ):
+            raise ApplicationError(
+                "EXPORT_PAGE_ORDER_INVALID", "全书页面必须完整并按章节及页码排序。", 422
+            )
+        return {
+            "project_id": project_id,
+            "project_title": self.projects.get(project_id).title,
+            "chapter_id": chapter_ids[0],
+            "chapter_ids": chapter_ids,
+            "chapter_title": "全书",
+            "scope": "book",
+            "schema_version": EXPORT_SCHEMA_VERSION,
+            "page_count": len(selected),
+            "pages": selected,
+            "blockers": [],
+            "warnings": [],
+            "plan_fingerprint": self._selection_fingerprint(project_id, "book", selected),
+            "formats": ["engineering_package", "png", "pdf", "cbz"],
+            "external_requests_started": 0,
+        }
+
     def create_export(
         self,
         project_id: str,
@@ -277,12 +378,19 @@ class ExportService:
         plan_fingerprint: str,
         *,
         confirmed: bool,
+        book_chapter_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         if not confirmed:
             raise ApplicationError(
                 "EXPORT_CONFIRMATION_REQUIRED", "导出前必须确认固定页面版本和顺序。", 422
             )
-        plan = self.preflight_export(project_id, chapter_id, page_version_ids)
+        plan = (
+            self.preflight_book_export(project_id, book_chapter_ids, page_version_ids)
+            if book_chapter_ids is not None
+            else self.preflight_export(project_id, chapter_id, page_version_ids)
+        )
+        if chapter_id != plan["chapter_id"]:
+            raise ApplicationError("INVALID_BOOK_CHAPTERS", "全书起始章节不一致。", 422)
         if plan["plan_fingerprint"] != plan_fingerprint:
             raise ApplicationError(
                 "EXPORT_PLAN_STALE", "页面版本已经变化，请重新预检后再导出。", 409
@@ -413,14 +521,20 @@ class ExportService:
             ).fetchall()
         if row is None:
             raise ApplicationError("EXPORT_NOT_FOUND", "没有找到该导出版本。", 404)
+        selection = json.loads(str(row["page_selection_json"]))
+        is_book = bool(selection) and all(p.get("export_scope") == "book" for p in selection)
         return {
             "export_revision_id": str(row["export_revision_id"]),
             "project_id": str(row["project_id"]),
             "chapter_id": str(row["chapter_id"]),
-            "chapter_title": str(row["chapter_title"]),
+            "chapter_title": "全书" if is_book else str(row["chapter_title"]),
+            "scope": "book" if is_book else "chapter",
+            "chapter_ids": list(dict.fromkeys(p["chapter_id"] for p in selection))
+            if is_book
+            else [str(row["chapter_id"])],
             "status": str(row["status"]),
             "schema_version": str(row["schema_version"]),
-            "pages": json.loads(str(row["page_selection_json"])),
+            "pages": selection,
             "selection_sha256": str(row["selection_sha256"]),
             "failure_code": row["failure_code"],
             "secret_scan": (
@@ -1080,10 +1194,9 @@ class ExportService:
 
     @staticmethod
     def _validate_package_documents(manifest: Any, records: Any) -> None:
-        if (
-            not isinstance(manifest, dict)
-            or manifest.get("schema_version")
-            not in (LEGACY_PACKAGE_SCHEMA_VERSION, PACKAGE_SCHEMA_VERSION)
+        if not isinstance(manifest, dict) or manifest.get("schema_version") not in (
+            LEGACY_PACKAGE_SCHEMA_VERSION,
+            PACKAGE_SCHEMA_VERSION,
         ):
             raise ApplicationError(
                 "PROJECT_PACKAGE_SCHEMA_UNSUPPORTED", "工程包版本不受支持。", 422
@@ -1100,9 +1213,8 @@ class ExportService:
             or manifest.get("credentials_included") is not False
         ):
             raise ApplicationError("PROJECT_PACKAGE_MANIFEST_INVALID", "工程包清单字段无效。", 422)
-        if (
-            not isinstance(records, dict)
-            or records.get("schema_version") != manifest.get("schema_version")
+        if not isinstance(records, dict) or records.get("schema_version") != manifest.get(
+            "schema_version"
         ):
             raise ApplicationError(
                 "PROJECT_PACKAGE_SCHEMA_UNSUPPORTED", "工程记录版本不受支持。", 422
@@ -1112,14 +1224,16 @@ class ExportService:
         if not isinstance(tables, dict):
             raise ApplicationError("PROJECT_PACKAGE_RECORDS_INVALID", "工程记录表清单无效。", 422)
         if manifest["schema_version"] == PACKAGE_SCHEMA_VERSION:
-            if set(tables) != set(expected_tables):
+            # Additive optional records: pre-full-page 1.5 packages remain readable.
+            optional_tables = {"full_page_generations"}
+            if (set(tables) - set(expected_tables)) or (
+                set(expected_tables) - set(tables) - optional_tables
+            ):
                 raise ApplicationError(
                     "PROJECT_PACKAGE_RECORDS_INVALID", "工程记录表清单无效。", 422
                 )
         elif not set(tables).issubset(expected_tables):
-            raise ApplicationError(
-                "PROJECT_PACKAGE_RECORDS_INVALID", "旧工程记录包含未知表。", 422
-            )
+            raise ApplicationError("PROJECT_PACKAGE_RECORDS_INVALID", "旧工程记录包含未知表。", 422)
         expected_tables = list(tables)
         if len(tables["projects"]) != 1:
             raise ApplicationError(
@@ -1226,11 +1340,7 @@ class ExportService:
                     for row in rows:
                         for column in PORTABLE_LOGICAL_ID_COLUMNS:
                             value = row.get(column)
-                            if (
-                                isinstance(value, str)
-                                and value
-                                and value not in value_mapping
-                            ):
+                            if isinstance(value, str) and value and value not in value_mapping:
                                 value_mapping[value] = str(uuid7())
                 for row in tables.get("artifact_versions", []):
                     artifact_id = row.get("artifact_id")
@@ -1266,9 +1376,7 @@ class ExportService:
                         row["workspace_path"] = str(new_workspace)
                         row["title"] = local_title
                         row["source_project_id"] = source_project_id
-                    if table == "prompt_bundle_approvals" and row.get(
-                        "idempotency_key"
-                    ):
+                    if table == "prompt_bundle_approvals" and row.get("idempotency_key"):
                         # An idempotency key identifies the original local write, not the
                         # portable approval artifact. Give a restored copy its own local
                         # identity so importing alongside the source cannot collide.

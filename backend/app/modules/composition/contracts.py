@@ -36,6 +36,16 @@ class TextLayerV1(CompositionContract):
     align: Literal["left", "center", "right"] = "center"
 
 
+class PageLayoutSourceV1(CompositionContract):
+    version_id: str = Field(min_length=1, max_length=64)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PageImageSourceV1(CompositionContract):
+    generation_id: str = Field(min_length=1, max_length=64)
+    text_policy: Literal["local", "model"]
+
+
 class PageDocumentSnapshotV1(CompositionContract):
     schema_version: Literal["1.0", "2.0"]
     page_id: str = Field(min_length=1, max_length=64)
@@ -48,6 +58,8 @@ class PageDocumentSnapshotV1(CompositionContract):
     language: Literal["zh-Hans"]
     template_id: str = Field(min_length=1, max_length=64)
     storyboard_version_id: str = Field(min_length=1, max_length=64)
+    layout_source: PageLayoutSourceV1 | None = None
+    page_image: PageImageSourceV1 | None = None
     panels: tuple[PanelPlacementV1, ...] = Field(min_length=1, max_length=6)
     text_layers: tuple[TextLayerV1, ...] = Field(default=(), max_length=200)
     show_page_number: bool

@@ -69,9 +69,9 @@ def test_single_double_triple_mapping_is_aligned_and_deterministic(
     assert first.execution_spec.mapping_version == NOVELAI_MAPPING_VERSION
     assert first.execution_spec.payload_sha256 == second.execution_spec.payload_sha256
     assert first.payload.parameters.params_version == 4
-    assert first.payload.parameters.ucPreset == 4
+    assert first.payload.parameters.ucPreset is None
     assert first.payload.parameters.tag_hint_qt == 1
-    assert first.payload.parameters.tag_hint_uc_preset == 4
+    assert first.payload.parameters.tag_hint_uc_preset == 0
     positive = first.payload.parameters.v4_prompt.caption.char_captions
     negative = first.payload.parameters.v4_negative_prompt.caption.char_captions
     assert len(positive) == len(negative) == character_count

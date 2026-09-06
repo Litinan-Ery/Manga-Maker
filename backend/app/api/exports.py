@@ -36,6 +36,18 @@ class RestorePackageRequest(BaseModel):
     confirmed: bool
 
 
+class BookExportPreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    chapter_ids: list[str] = Field(min_length=1, max_length=256)
+    page_version_ids: list[str] | None = Field(default=None, min_length=1, max_length=4096)
+
+
+class CreateBookExportRequest(BookExportPreflightRequest):
+    page_version_ids: list[str] = Field(min_length=1, max_length=4096)
+    plan_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmed: bool
+
+
 def service(request: Request) -> ExportService:
     return cast(ExportService, request.app.state.exports)
 
@@ -75,6 +87,31 @@ def create_export(
 @router.get("/api/v1/projects/{project_id}/exports")
 def list_exports(project_id: str, request: Request) -> list[dict[str, Any]]:
     return service(request).list_exports(project_id)
+
+
+@router.post("/api/v1/projects/{project_id}/exports/book/preflight")
+def preflight_book_export(
+    project_id: str, request: Request, body: BookExportPreflightRequest, headers: Headers
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return service(request).preflight_book_export(
+        project_id, body.chapter_ids, body.page_version_ids
+    )
+
+
+@router.post("/api/v1/projects/{project_id}/exports/book", status_code=status.HTTP_201_CREATED)
+def create_book_export(
+    project_id: str, request: Request, body: CreateBookExportRequest, headers: Headers
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return service(request).create_export(
+        project_id,
+        body.chapter_ids[0],
+        body.page_version_ids,
+        body.plan_fingerprint,
+        confirmed=body.confirmed,
+        book_chapter_ids=body.chapter_ids,
+    )
 
 
 @router.get("/api/v1/projects/{project_id}/exports/{export_revision_id}")

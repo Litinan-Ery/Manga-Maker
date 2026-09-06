@@ -814,7 +814,10 @@ class GenerationQueueService:
             active = connection.execute(
                 "SELECT 1 FROM generation_attempts WHERE status = 'running'"
             ).fetchone()
-            if active is not None:
+            full_page_active = connection.execute(
+                "SELECT 1 FROM full_page_generations WHERE status = 'running'"
+            ).fetchone()
+            if active is not None or full_page_active is not None:
                 return None
             item = connection.execute(
                 """

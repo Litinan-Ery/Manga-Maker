@@ -4,7 +4,24 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.acceptance.sandkings_v5 import extract_sandkings_source
+from backend.app.acceptance.sandkings_24 import PAGE_BEATS_24
+from backend.app.acceptance.sandkings_v5 import (
+    MONOCHROME_90S_AMERICAN_STYLE,
+    extract_sandkings_source,
+)
+
+
+def test_expanded_story_plan_and_monochrome_style_are_frozen() -> None:
+    assert len(PAGE_BEATS_24) == 24
+    assert all(
+        len(beat.characters) == len(beat.actions) == len(beat.expressions)
+        for beat in PAGE_BEATS_24
+    )
+    assert PAGE_BEATS_24[-1].turning_point == "长着克雷斯面孔的橙色四臂幼体抓住并抬走他"
+    assert MONOCHROME_90S_AMERICAN_STYLE.color_mode == "grayscale"
+    assert "strict monochrome black and white" in (
+        MONOCHROME_90S_AMERICAN_STYLE.positive_prompt_fragment
+    )
 
 
 def test_extractor_selects_only_three_story_sections_and_ignores_outside_instructions(
