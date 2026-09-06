@@ -7,7 +7,7 @@ def test_health_reports_local_components(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "environment": "test",
         "database": "ok",
         "schema_version": 34,

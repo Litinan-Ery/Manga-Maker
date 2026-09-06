@@ -1,14 +1,18 @@
 # Manga Maker
 
-**还不能用，以下是需求**
+**v0.3 开发中；可用功能和未完成验收见下表。**
 
-Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 适配器逐格生成画面，再由本地排版引擎组合为可编辑、可回退、可导出的完整漫画页面。
+Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 逐格出图并本地拼页，或使用 V5 Full 整页多格生成，再审阅、编辑与导出。
 
 > 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3 与 Storyboard 1.1 逐页政策，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、自动页型与普通页 3–6 格门禁、版式先行、PromptPlan/PromptPackage v2、NovelAI Diffusion V5 Full 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。2026-08-29 已使用授权《沙王》输入完成独立的真实 NovelAI V5 Full 零 Anlas 12 页验收与定向重绘；Storyboard 页型尚未使用外部文本模型做真实分类验收，该证据也不替代仍未完成的通用产品闭环。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，v0.3 所有权与追踪基线见 [V03_IMPLEMENTATION_BASELINE.md](docs/architecture/V03_IMPLEMENTATION_BASELINE.md)，关键决策的兼容/回滚/删除条件见 [ADR-010-018.md](docs/adr/ADR-010-018.md)，v0.2 P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
 ## 当前可用范围
+
+2026-09-06 已完成《莱博维茨的赞歌》真实100页中文漫画：三部35/35/30页、300个可编辑中文层、PNG/PDF/CBZ/工程包，以及独立恢复后的编辑验证。新增特写出镜角色选择、中文排字修复和跨章节全书导出；见[100页验收报告](docs/canticle-100-acceptance.md)与[成品入口](.manga-maker/canticle-100/delivery/交付说明.md)。这份整书证据不替代上述仍未完成的通用v0.3发布门禁。
+
+2026-09-06 分镜修复按四个用户用例顺序验收，见 [验收记录](docs/storyboard-repair-cases.md) 和 [日式漫画 Prompt 写法](docs/novelai-manga-prompts.md)。批准版式现在直接用于拼页；景别、焦点和留白进入实际请求；整页模式一页一图，支持本地文字与模型文字。已有《沙王》一页一幅图的证据属于通页插画，不代表普通多格页效果。
 
 | 能力 | 状态 | 当前边界 |
 |---|---|---|
@@ -25,7 +29,8 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | NovelAI 契约、配置与连接测试 | 已实现（真实 V5 验收） | 固定官方 Swagger 哈希与模型能力；Token 在应用本地加密保存；连接测试须点击触发且只查标签与订阅、不出图；《沙王》验收已真实确认 V5 Full 与零 Anlas 资格 |
 | 有界串行生成队列 | v0.3 冻结已实现（Mock 验收） | GenerationApproval 原子冻结 PromptPlan、ProviderExecutionSpec/payload、Layout、CharacterTagSet、模型/mapping/rule、seed、参考图来源和每格候选数；全局单在途、暂停/取消和重启转人工审阅 |
 | NovelAI 逐格执行与素材版本 | 已实现（真实 V5 零 Anlas 验收） | 二次明确确认后才执行；执行前先复验全部冻结哈希、再读取凭证，只发送审批时冻结的 payload；固定 host、严格 200/201 JSON 或安全 ZIP/PNG 校验、有界重试、不可变 `original.png`/规格/provenance；《沙王》已完成 12 张真实 V5 Full 初版及失败页重绘，未验证付费 Anlas 路径 |
-| 本地页面排版与不可变 PageVersion | 已实现 | 16 种分页/条漫模板、黑白或彩色、LTR/RTL/竖向阅读、裁切焦点/缩放、气泡/旁白/音效/页码；后端按页面尺寸规范输出 PNG；修改不访问图像 API |
+| 本地页面排版与不可变 PageVersion | 已实现 | 新拼页使用批准版式的画布、格框、顺序、焦点和文字区；批准新布局可用已有素材派生新版；兼容历史模板、黑白/彩色和各阅读方向；本地修改不访问图像 API |
+| V5 Full 整页多格模式 | 已实现（真实三格/四格 + 本地文字验收） | 按页预览/确认/冻结/一次生成/审阅采用；行列布局、固定外观与具体服装进入 Prompt；推荐本地准确排字；模型文字仍会串格，标为实验能力；不承诺像素级版式 |
 | 项目可复用素材库 | 已实现 | 收藏已有不可变面板素材，维护角色/道具/场景/面板标签，跨页引用；归档可恢复，不复制图片、不调用图像 API |
 | reroll、inpaint 与历史恢复 | 已实现（reroll 已真实 V5 验收） | 单格/整页 reroll 可选择 V5 Opus 零 Anlas 模式并在每张图前重验使用额度；《沙王》第 8、12 页已按视觉问题真实定向重绘并保留父版本；PNG 蒙版局部重绘仍必须显式设置付费上限，恢复不调用外部服务 |
 | 工程包、PNG、PDF、CBZ 导出 | 已实现 | v1.5 工程包包含 v0.3 版式、审批、lineage、ProviderExecutionSpec 与 GenerationApproval；导出在 staging 完整校验后登记，失败不改旧导出 |
@@ -34,6 +39,22 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | 导出凭证零泄露扫描 | 已实现 | 解锁后以内存中的真实凭证字节扫描普通文件与 ZIP 条目；命中即失败关闭，旧成功导出不受影响 |
 | 跨章节连续性账本 | 已实现 | 按章汇总角色、服装、道具、场景和剧情状态；手工修改追加新版本，并定位未来已审批章节中受影响的分格 |
 | 整本预算与逐章生产计划 | 已实现 | 冻结全书页数、分格、调用/成本边界并逐章审批；章节重试累计全部历史任务且只分配生命周期剩余额度；每次人工推进最多创建一个本地章节任务，执行仍需独立二次确认；重启不自动续跑 |
+
+## 长任务检查点与交接
+
+项目工作台的“检查点与交接”区可记录当前已冻结整页范围，分别查看生成、排版和有效审查记录，下载交接包并核对本地任务是否可继续。真实宿主未提供可靠用量时显示未知；这些操作不发起图像生成。完整生产清单可在仓库根目录登记：
+
+```bash
+.venv/bin/python -m scripts.workflow_context /path/to/production.json register \
+  --objective '完成完整 100 页漫画，保留全部章节并逐页验收' \
+  --session-file /path/to/current-local-session.json
+.venv/bin/python -m scripts.workflow_context /path/to/production.json summary \
+  --session-file /path/to/current-local-session.json
+.venv/bin/python -m scripts.workflow_context /path/to/production.json handoff \
+  --session-file /path/to/current-local-session.json
+```
+
+生产脚本每批最多 5 页并持有清单文件锁。登记工作流后，脚本逐页同步应用检查点并检查暂停/交接状态；已有生成结果只查询和下载，未知结果停止处理。交接文件不会替换 Codex 历史，也不授予生成或导出审批。运行中的旧脚本须先结束当前工作，不能热切换执行者。实现、测试与尚未验收的真实宿主路径见[验收报告](docs/context-recovery-acceptance.md)。
 
 ## 本地启动
 
@@ -54,6 +75,7 @@ uv run python -m backend.app.launcher
 uv run ruff check backend tests
 uv run mypy backend
 uv run pytest
+uv run python -m scripts.run_storyboard_manga_acceptance
 pnpm --dir frontend test
 pnpm --dir frontend build
 ```
@@ -67,8 +89,8 @@ pnpm --dir frontend build
 | 输入 | TXT 小说；P0 每次选择一个章节进入改编闭环 |
 | 文本改编 | 可配置、支持结构化输出的 LLM |
 | 图像生成 | NovelAI Image Generation API |
-| 漫画形态 | 黑白分页漫画，左到右、从上到下阅读，简体中文横排 |
-| 生产方式 | NovelAI 逐格出图，本地确定格框、对白、旁白、音效和页码 |
+| 漫画形态 | 默认黑白分页、简体中文横排；批准版式支持右到左日漫顺序 |
+| 生产方式 | 默认逐格出图与本地拼页；可选 V5 Full 整页多格，成图审阅后采用 |
 | 修改能力 | 修改任意页的脚本、布局、对白与提示词；整页、单格 reroll；蒙版局部重绘 |
 | 版本原则 | 新生成不覆盖旧版本，历史版本可比较、恢复和重新设为当前版本 |
 | 导出 | 可编辑工程包、逐页 PNG、PDF、CBZ |
@@ -164,7 +186,7 @@ pnpm --dir frontend build
 - 彩色漫画、竖向条漫或从右到左阅读。
 - 多人协作、云同步、公开 SaaS、远程账户或团队权限。
 - 自动发布到漫画平台、版权授权或商业发行管理。
-- 依赖 NovelAI 直接生成包含可读中文对白的完整漫画页。
+- 无需审阅即可保证整页格数、人物与全部中文对白正确的成品。
 - EPUB、PDF、DOCX、扫描件或网页小说导入。
 - 无限并发、无限自动重试或绕过 NovelAI 服务限制。
 - 手机端原生应用。
