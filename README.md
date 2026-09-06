@@ -1,25 +1,30 @@
 # Manga Maker
 
-**v0.3 开发中；可用功能和未完成验收见下表。**
+**代码版本 v0.2.2；v0.3 开发中，可用功能和未完成验收见下表。**
 
-Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 小说中的一个章节改编为结构化漫画分镜，通过 NovelAI 逐格出图并本地拼页，或使用 V5 Full 整页多格生成，再审阅、编辑与导出。
+Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT / Markdown 小说中的章节改编为结构化漫画分镜，通过 NovelAI 逐格出图并本地拼页，或使用 V5 Full 整页多格生成，再审阅、编辑与导出。
 
 > 当前状态：**v0.2 离线 Mock 闭环已完成；v0.3 已完成 Wave 3 与 Storyboard 1.1 逐页政策，整体尚未完成。** v0.3 的架构护栏、durable work/outbox/lineage、自动页型与普通页 3–6 格门禁、版式先行、PromptPlan/PromptPackage v2、NovelAI Diffusion V5 Full 多角色映射、Prompt/GenerationApproval 冻结和 Prompt Inspector 已完成 Mock 验收；候选质检/接受/PageApproval、迁移发布门禁与 Token 感知流水线仍待交付。2026-08-29 已使用授权《沙王》输入完成独立的真实 NovelAI V5 Full 零 Anlas 12 页验收与定向重绘；Storyboard 页型尚未使用外部文本模型做真实分类验收，该证据也不替代仍未完成的通用产品闭环。
 
 完整产品需求、数据契约和验收标准见 [PRD.md](PRD.md)，系统边界、NovelAI 接口决策与实施架构见 [TECHNICAL_ARCHITECTURE.md](TECHNICAL_ARCHITECTURE.md)，优先级和实时进度见 [WORK_ITEMS.md](WORK_ITEMS.md)，v0.3 所有权与追踪基线见 [V03_IMPLEMENTATION_BASELINE.md](docs/architecture/V03_IMPLEMENTATION_BASELINE.md)，关键决策的兼容/回滚/删除条件见 [ADR-010-018.md](docs/adr/ADR-010-018.md)，v0.2 P0 的分层证据与未完成真实门禁见 [P0_ACCEPTANCE_REPORT.md](P0_ACCEPTANCE_REPORT.md)。
 
+开发参考：[版本记录](CHANGELOG.md)、[NovelAI 契约](contracts/novelai/README.md)、[跨端 Schema](contracts/schemas/v0.3/README.md)、[前端 feature 边界](frontend/src/features/README.md)。历史证据：[v0.2 重构基线](docs/acceptance/V02_BASELINE_REPORT.md)、[《沙王》12 页验收](docs/sandkings-v5-acceptance.md)。
+
 ## 当前可用范围
 
-2026-09-06 已完成《莱博维茨的赞歌》真实100页中文漫画：三部35/35/30页、300个可编辑中文层、PNG/PDF/CBZ/工程包，以及独立恢复后的编辑验证。新增特写出镜角色选择、中文排字修复和跨章节全书导出；见[100页验收报告](docs/canticle-100-acceptance.md)与[成品入口](.manga-maker/canticle-100/delivery/交付说明.md)。这份整书证据不替代上述仍未完成的通用v0.3发布门禁。
+2026-09-06 已完成《莱博维茨的赞歌》真实100页中文漫画：三部35/35/30页、300个可编辑中文层、PNG/PDF/CBZ/工程包，以及独立恢复后的编辑验证。新增特写出镜角色选择、中文排字修复和跨章节全书导出；见[100页验收报告](docs/canticle-100-acceptance.md)与[本机成品入口](.manga-maker/canticle-100/delivery/交付说明.md)。`.manga-maker/` 内的验收素材和成品不随 Git 仓库分发。这份整书证据不替代上述仍未完成的通用v0.3发布门禁。
 
 2026-09-06 分镜修复按四个用户用例顺序验收，见 [验收记录](docs/storyboard-repair-cases.md) 和 [日式漫画 Prompt 写法](docs/novelai-manga-prompts.md)。批准版式现在直接用于拼页；景别、焦点和留白进入实际请求；整页模式一页一图，支持本地文字与模型文字。已有《沙王》一页一幅图的证据属于通页插画，不代表普通多格页效果。
+
+导入来源时可选择 `.txt`、`.md` 或 `.markdown`，先核对章节建议和连续正文范围。已有本地脚本可展开“导入自编分镜与设定（JSON）”，读取来源快照后依次导入、核对并审批分镜、角色/画风和固定 Tags；保存草稿不调用模型。全书导出时在导出中心选择“全书”，重新预检并确认全部章节。
 
 | 能力 | 状态 | 当前边界 |
 |---|---|---|
 | 本地 FastAPI + React 应用 | 已实现 | 只监听 loopback；启动器打开一次性本地会话 |
 | SQLite 与本机项目工作区 | 已实现 | 迁移、单写者、UUIDv7、安全路径和不可变来源版本 |
 | 应用本地加密凭证库 | 已实现 | Argon2id + XChaCha20-Poly1305；支持界面内创建、解锁、锁定和保存凭证 |
-| TXT 导入与章节修正 | 已实现 | UTF-8/BOM/GB18030/GBK 候选；支持改名、拆分、合并 |
+| TXT / Markdown 导入与章节修正 | 已实现 | 保留原始字节、扩展名与哈希；Markdown 标题提供章节建议并忽略围栏代码块内标题；支持 UTF-8/BOM/GB18030/GBK 候选及改名、拆分、合并 |
+| 本地创作资料导入 | 已实现 | 分镜、角色/画风、固定 Tags 与逐格 Prompt 可导入本地草稿，核对来源/版本后沿用原审批；不触发文本或图像请求 |
 | SourceAnchor 与 StoryBeat | 已实现 | 本地确定性提取，不调用模型；初始状态为 `unresolved` |
 | 文本模型与结构化改编 | 已实现（Mock 验收） | Storyboard 1.1 要求模型逐页生成 `page_type` 与非空分镜，普通页 3–6 格、特殊页 1–6 格；本地结构修复、审批和下游门禁重复校验，1.0 仅历史只读；配置与凭证边界保持不变，尚未做外部文本模型真实调用 |
 | Storyboard 1.1 逐页政策 | 已实现（Mock 与 E2E 验收） | 文本模型自动标注页型；普通页必须 3–6 格，封面/通页/特殊页允许 1–6 格；页型只读展示，违规会阻止修改、审批、设定、页面与 Layout；1.0 历史分镜保持只读 |
@@ -39,6 +44,8 @@ Manga Maker 是一个面向本机单用户的小说漫画化工具。它把 TXT 
 | 导出凭证零泄露扫描 | 已实现 | 解锁后以内存中的真实凭证字节扫描普通文件与 ZIP 条目；命中即失败关闭，旧成功导出不受影响 |
 | 跨章节连续性账本 | 已实现 | 按章汇总角色、服装、道具、场景和剧情状态；手工修改追加新版本，并定位未来已审批章节中受影响的分格 |
 | 整本预算与逐章生产计划 | 已实现 | 冻结全书页数、分格、调用/成本边界并逐章审批；章节重试累计全部历史任务且只分配生命周期剩余额度；每次人工推进最多创建一个本地章节任务，执行仍需独立二次确认；重启不自动续跑 |
+| 必备封面 | 需求已定义，待实现 | 独立封面默认不占正文页数，正式导出首位与单独审阅尚未接入；已有 `cover` 页型不代表此功能完成 |
+| 启动前画家风格询问 | 需求已定义，待实现 | 生产前询问并确认主要参考画家、传到封面与正文的门禁尚未接入；与封面一并见 [MM-079～084](WORK_ITEMS.md#cover-and-artist-style-tickets) |
 
 ## 长任务检查点与交接
 
@@ -72,7 +79,7 @@ uv run python -m backend.app.launcher
 开发验收命令：
 
 ```bash
-uv run ruff check backend tests
+uv run ruff check backend tests scripts/produce_authored_manga.py scripts/production_context.py scripts/workflow_context.py
 uv run mypy backend
 uv run pytest
 uv run python -m scripts.run_storyboard_manga_acceptance
@@ -86,7 +93,7 @@ pnpm --dir frontend build
 |---|---|
 | 产品形态 | 仅绑定本机的本地 Web 应用 |
 | 用户范围 | 本机单用户，不提供公网访问或多人账户 |
-| 输入 | TXT 小说；P0 每次选择一个章节进入改编闭环 |
+| 输入 | TXT / Markdown 小说；P0 每次选择一个章节进入改编闭环 |
 | 文本改编 | 可配置、支持结构化输出的 LLM |
 | 图像生成 | NovelAI Image Generation API |
 | 漫画形态 | 默认黑白分页、简体中文横排；批准版式支持右到左日漫顺序 |
@@ -99,7 +106,7 @@ pnpm --dir frontend build
 ## P0 完整目标流程
 
 ```text
-导入 TXT
+导入 TXT / Markdown
   → 检测编码、章节与正文范围
   → 选择一个章节并确认改编页数预算
   → LLM 生成剧情节拍、场景和分页分格脚本
@@ -120,10 +127,11 @@ pnpm --dir frontend build
 
 ## P0 目标能力
 
-### TXT 导入与章节选择
+### TXT / Markdown 导入与章节选择
 
 - 识别 UTF-8、UTF-8 BOM 和常见中文编码；无法可靠判断时要求用户确认。
 - 自动识别常见中文章节标题，并允许手工拆分、合并或调整章节边界。
+- Markdown 标题仅作为章节候选；围栏代码块内标题不参与分章，保存前仍需核对全文范围。
 - 保存源文件哈希、字符偏移和章节版本，使每个剧情节拍都能回到原文核验。
 - P0 只把用户明确选择的一个章节发送给文本模型，不上传整本小说。
 
@@ -183,7 +191,7 @@ pnpm --dir frontend build
 ## P0 非目标
 
 - 整本长篇小说的一键无人值守生成。
-- 彩色漫画、竖向条漫或从右到左阅读。
+- 印刷级色彩管理与竖排文字出版；已实现的彩色、条漫与右到左阅读见当前可用范围。
 - 多人协作、云同步、公开 SaaS、远程账户或团队权限。
 - 自动发布到漫画平台、版权授权或商业发行管理。
 - 无需审阅即可保证整页格数、人物与全部中文对白正确的成品。
@@ -224,7 +232,8 @@ Manga Maker/
 │   ├── continuity/          # 跨章节状态账本、版本审批与影响分析
 │   ├── book/                # 整本预算、逐章审批、串行推进与恢复
 │   ├── generation/          # 固定计划、串行执行、参考图预处理与不可变素材
-│   ├── ingestion/           # TXT、章节、锚点和剧情节拍
+│   ├── ingestion/           # TXT/Markdown、章节、锚点和剧情节拍
+│   ├── fullpages/           # V5 整页预览、冻结生成、采用和本地文字
 │   ├── pages/               # 16 种分页/条漫模板、PageVersion 与确定性 PNG 渲染
 │   ├── library/             # 项目可复用素材引用、元数据与归档恢复
 │   ├── exports/             # ExportRevision、四格式输出、工程包校验与恢复
@@ -246,7 +255,7 @@ Manga Maker/
 
 ### P0：单章闭环
 
-- TXT 导入与章节校正。
+- TXT / Markdown 导入与章节校正。
 - 可配置 LLM 的结构化改编与来源覆盖审阅。
 - 角色设定、风格板和用户确认门禁。
 - NovelAI 逐格生成、有界队列和成本确认。

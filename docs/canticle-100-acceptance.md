@@ -1,10 +1,12 @@
 # 《莱博维茨的赞歌》100页真实生产验收
 
-日期：2026-09-06。项目：`01a07461-f8ae-7a1f-bd2c-b7a6b6b1a194`。结果：100页中文漫画、四格式导出及工程包恢复编辑完成。代码尚未提交、推送或发布。
+日期：2026-09-06。项目：`01a07461-f8ae-7a1f-bd2c-b7a6b6b1a194`。结果：100页中文漫画、四格式导出及工程包恢复编辑完成。本报告保留成品验收时的快照：当时代码尚未提交、推送或发布；相关实现现已纳入 v0.2.2 代码提交，合并前回归见文末。
 
 ## 交付
 
 [交付说明](../.manga-maker/canticle-100/delivery/交付说明.md) · [完整PDF](../.manga-maker/canticle-100/delivery/莱博维茨的赞歌-100页.pdf) · [逐页目录](../.manga-maker/canticle-100/delivery/阅读目录.md)
+
+本文 `.manga-maker/` 链接指向本机验收素材和成品，不随 Git 仓库分发。
 
 | 部分 | 来源字符范围 | 来源片段/已处理 | 页码 |
 |---|---|---|---|
@@ -60,4 +62,6 @@
 
 ## 自动化检查
 
-最新交付回归日志位于`.manga-maker/canticle-100/`：`backend-delivery-final.log`、`frontend-delivery-final.log`、`frontend-build-delivery-final.log`、`ruff-delivery-final.log`、`mypy-delivery-final.log`。最终全量结果：后端408项通过，前端24个文件54项通过；ruff、mypy（213个源文件）、前端构建和git diff --check通过。后端有一条既有Starlette/httpx弃用提醒，无测试失败。交付前重新核验103个导出文件哈希，期间无新增图像请求。
+成品交付时的回归日志位于`.manga-maker/canticle-100/`：`backend-delivery-final.log`、`frontend-delivery-final.log`、`frontend-build-delivery-final.log`、`ruff-delivery-final.log`、`mypy-delivery-final.log`。该时点全量结果：后端408项通过，前端24个文件54项通过；ruff、mypy（213个源文件）、前端构建和git diff --check通过。后端有一条既有Starlette/httpx弃用提醒，无测试失败。交付前重新核验103个导出文件哈希，期间无新增图像请求。
+
+2026-09-06 v0.2.2 合并前另行完成后端 **411 项通过**、前端 **57 项 / 24 文件通过**，Ruff、mypy、构建、锁文件与离线 CLI 复验通过，见[发布回归记录](context-recovery-acceptance.md#v022-release-validation)。此次代码回归没有新增真实模型请求，不改写上述真实生产调用数或成品验收记录。

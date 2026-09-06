@@ -47,7 +47,7 @@
 | 代码面 | v0.2 当前状态 | v0.3 差距 |
 |---|---|---|
 | 应用组装 | typed `AppContainer`、module installer 与 compatibility seam 已建立 | 旧 v0.2 service 仍需按后续工单收口 |
-| 数据库 | schema 33；新增整页预览/生成不可变记录与全局单在途索引；此前模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval、生成核验调用审计与文本模型备注迁移保留 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
+| 数据库 | schema 34；schema 33 新增整页预览/生成不可变记录与全局单在途索引，schema 34 新增工作流检查点、证据、事件及租约状态；此前模块 migration/table ownership、durable work/outbox、lineage、layout、Prompt/GenerationApproval、生成核验调用审计与文本模型备注迁移保留 | review/composition/exporting 新表族与 v0.2→v0.3 迁移仍待 Wave 4/5 |
 | 后端能力 | 公开模块契约、版式门禁、结构化多角色 mapper、审批冻结和发送前复验已实现 | 缺少候选/质检/接受、PageApproval 与正式导出门禁 |
 | 前端 | feature boundary、Layout Workbench 与 Prompt Inspector 已实现 | 缺少 Candidate Review、页面批准和真实导出预检状态 |
 | 验收 | AC-09、AC-10 已完成离线 Mock 工单验收；《沙王》真实 V5 Full 零 Anlas 双角色页、12 页授权章节与 reroll 证据已完成；真实文本模型和 NovelAI 付费调用为 0 | AC-11/12、v0.3 迁移/恢复、多候选接受/PageApproval、外部文本与付费路径仍未完成 |
@@ -1301,8 +1301,8 @@ provider payload、秘密扫描与逐页视觉审片通过。证据见 `docs/san
 | MM-074 | Done | 宿主能力端口、持久双失败熔断；6 项定向测试通过，真实宿主另见 MM-078 |
 | MM-075 | Done | 摘要、证据分页/补读、租约与恢复接口；来源/冻结计划/图片/排版/审查记录核对，定向 API 测试通过 |
 | MM-076 | Done | 每页本地/应用检查点、跨进程文件锁、5 页批次、CLI 和前端入口；100 页脚本/API 断连恢复及 4 项 UI 测试通过 |
-| MM-077 | Done | 后端全量 411 项、前端 54 项通过；最后的恢复对应关系校验另有 13 项回归通过；Ruff、mypy、构建、diff 检查通过；见验收报告 |
-| MM-078 | Todo | 真实宿主压缩/历史替换及真实 100 页整书验收；不以 fake 或离线测试冒充 |
+| MM-077 | Done | 恢复功能开发阶段后端 411 项、前端 54 项及后续 13 项定向回归通过；v0.2.2 合并前再验为后端 411 项、前端 57 项，Ruff、mypy、构建、离线 CLI 与 diff 检查通过；见验收报告 |
+| MM-078 | Todo | 真实 100 页整书产物部分已完成，见文末；真实宿主压缩/历史替换仍待集成，不以 fake 或离线测试冒充 |
 
 ### MM-072 上下文预算与有界工具结果
 
