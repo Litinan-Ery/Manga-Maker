@@ -66,6 +66,8 @@ uv run python -m scripts.run_sandkings_v5_acceptance \
   --resume-project PROJECT_ID --reroll-pages 3,8 --confirm
 ```
 
+v0.2.2 增加 `--page-count 12|24`（默认 12）和 `--style-preset`，可显式选择扩展页数与样式；可用样式以 `--help` 为准。`--source`、`--app-data`、`--output-root` 指定本机输入和输出位置，`--novelai-profile` 选择既有凭证引用。更改页数或样式仍需核对冻结计划并显式传入 `--confirm`；新增选项不改写下文 2026-08-29 的 12 页历史验收结果。
+
 每张 reroll 重新冻结父素材、seed、payload 和审批，并在请求前再次查询 usage allowance。
 输出写入被 Git 忽略的 `workspace/acceptance/sandkings-v5/`，包含 manifest、联系表、逐页 PNG、
 PDF、CBZ、工程包和逐页审片记录。

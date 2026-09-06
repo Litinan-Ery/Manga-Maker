@@ -75,10 +75,10 @@ it("edits and rerenders a page locally without starting an image request", async
     />,
   );
 
-  const draft = await screen.findByRole("button", { name: "从当前素材建立漫画页" });
+  const draft = await screen.findByRole("button", { name: "按批准版式建立或更新漫画页" });
   await waitFor(() => expect(draft).toBeEnabled());
   fireEvent.click(draft);
-  expect(await screen.findByText(/未调用任何图像 API/)).toBeInTheDocument();
+  expect(await screen.findByText(/已按批准版式拼页/)).toBeInTheDocument();
 
   fireEvent.change(await screen.findByLabelText("颜色"), { target: { value: "color" } });
   fireEvent.change(screen.getByLabelText("分页与条漫模板"), {
@@ -202,7 +202,8 @@ function pageVersion(version: number, text: string) {
       color_mode: "grayscale" as const,
       background_color: "#ffffff",
       language: "zh-Hans" as const,
-      template_id: "grid-1",
+      template_id: "approved-layout",
+      layout_source: { version_id: "layout-v1", content_sha256: "a".repeat(64) },
       storyboard_version_id: "storyboard-version-1",
       panels: [
         {

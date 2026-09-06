@@ -124,11 +124,11 @@ fixture 不包含真实凭证、真实小说全文或供应商响应中的敏感
 | bytes | 113,758 |
 | SHA-256 | `2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684` |
 | Swagger/title/version | `2.0` / `Omegalaser API` / `1.0` |
-| Manga Maker mapping | `novelai-image-2026-08-29.4-v5-full-1` |
+| Manga Maker mapping | `novelai-image-2026-09-06.5-explicit-uc-1` |
 | machine-readable metadata | `contracts/novelai/image-api.contract.json` |
 
 哈希变化只触发人工 diff，不会在启动时联网升级。MM-036 的结构化
-ProviderExecutionSpec 现映射到 `novelai-image-2026-08-29.4-v5-full-1`；V4 命名的
+ProviderExecutionSpec 现映射到 `novelai-image-2026-09-06.5-explicit-uc-1`；V4 命名的
 结构化提示字段是 V5 仍使用的线协议字段，不代表运行模型回退到 V4。
 
 ## 8. 文档一致性报告

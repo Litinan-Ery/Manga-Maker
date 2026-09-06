@@ -413,6 +413,36 @@ export function PromptWorkbench({
           {promptDraft.packages.map((item, index) => (
             <article className="prompt-package-card" key={item.prompt_package_id}>
               <h4>面板 {item.panel_id.slice(0, 8)}</h4>
+              {item.structured_package && (
+                <label>
+                  <span>画面描述（完整句子）</span>
+                  <textarea
+                    rows={4}
+                    value={item.structured_package.prompt_plan.base.visual_description ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setPromptDraft((current) => current ? {
+                        ...current,
+                        packages: current.packages.map((entry, entryIndex) => {
+                          if (entryIndex !== index || !entry.structured_package) return entry;
+                          const structured = entry.structured_package;
+                          return { ...entry, structured_package: {
+                            ...structured, prompt_plan: { ...structured.prompt_plan,
+                              base: { ...structured.prompt_plan.base, visual_description: value },
+                            },
+                          } };
+                        }),
+                      } : current);
+                    }}
+                  />
+                </label>
+              )}
+              {item.structured_package?.prompt_plan.base.composition_prompt && (
+                <details>
+                  <summary>批准版式中的构图要求</summary>
+                  <pre>{item.structured_package.prompt_plan.base.composition_prompt}</pre>
+                </details>
+              )}
               <label>
                 <span>画面基础 tags</span>
                 <textarea
@@ -435,7 +465,7 @@ export function PromptWorkbench({
                 />
               </label>
               <div className="prompt-preview">
-                <strong>最终正向 prompt</strong>
+                <strong>正向提示内容概览</strong>
                 <code>{item.compiled_prompt}</code>
                 <strong>最终负向 prompt</strong>
                 <code>{item.compiled_negative_prompt}</code>

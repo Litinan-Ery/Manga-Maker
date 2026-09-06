@@ -54,6 +54,13 @@ PRODUCTION_MIGRATIONS: tuple[RegisteredMigration, ...] = (
         ).read_text(encoding="utf-8"),
         source_path=_VERIFICATION_CALL_AUDIT_SOURCE_PATH,
     ),
+    RegisteredMigration(
+        version=33,
+        owner="production",
+        name="full_page_generations",
+        statements=Path(__file__).with_name("0033_full_page_generations.sql").read_text("utf-8"),
+        source_path="backend/app/modules/production/migrations/0033_full_page_generations.sql",
+    ),
 )
 
 __all__ = ["PRODUCTION_MIGRATIONS"]

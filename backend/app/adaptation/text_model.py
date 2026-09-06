@@ -25,7 +25,7 @@ from .page_policy import STORYBOARD_PAGE_POLICY_VERSION, validate_storyboard_pag
 PROMPT_TEMPLATE_VERSION = "storyboard-1.1"
 BIBLE_PROMPT_TEMPLATE_VERSION = "bibles-1.0"
 CHARACTER_TAG_PROMPT_TEMPLATE_VERSION = "character-tags-1.0"
-PANEL_PROMPT_TEMPLATE_VERSION = "panel-plan-v2"
+PANEL_PROMPT_TEMPLATE_VERSION = "panel-plan-v3-composition"
 MAX_REPAIR_ATTEMPTS = 2
 DocumentT = TypeVar("DocumentT", bound=BaseModel)
 
@@ -151,8 +151,7 @@ class OpenAICompatibleTextModel:
                 request=request,
                 document_type=BibleDraftBundle,
                 safeguards=(
-                    "保持输入中的 bible id 和 storyboard version id，"
-                    "不得添加分镜之外的角色。"
+                    "保持输入中的 bible id 和 storyboard version id，不得添加分镜之外的角色。"
                 ),
             ),
             lambda invalid, problem: artifact_repair_messages(
@@ -196,6 +195,10 @@ class OpenAICompatibleTextModel:
                     "必须逐字沿用 target_prompt_package_ids。每个角色块只能给 variable_tags、"
                     "negative_tags、角色自身 action、连续 order，center 必须与已批准 layout 一致。"
                     "不得复制或改写 fixed_tags。多角色必须给 relationship_action，"
+                    "每格必须给 visual_description，用完整英文句子描述该格唯一瞬间、"
+                    "可见动作、环境、视线和空间关系，保留镜头衔接所需的物件与方向。"
+                    "自然语言可包含标点与换行，不要拆进 tags。不得把先后多个动作挤入一格。"
+                    "景别以已批准 layout 的 shot_scale 为准，不输出冲突景别 tags。"
                     "不得生成文字、对白气泡、页码、水印或 logo。"
                 ),
             ),

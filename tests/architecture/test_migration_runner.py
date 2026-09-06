@@ -154,7 +154,10 @@ def test_schema29_database_rebuilds_prompt_idempotency_index_at_schema30(
             str(row[2])
             for row in connection.execute("PRAGMA index_info(prompt_approval_idempotency)")
         ]
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 32
+        assert (
+            connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            == DATABASE_MIGRATION_REGISTRY.latest_version
+        )
     assert after == ["prompt_bundle_version_id", "idempotency_key"]
 
 
@@ -180,7 +183,10 @@ def test_schema30_database_adds_generation_verification_call_audit_at_schema31(
         attempt_columns = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(generation_attempts)")
         }
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 32
+        assert (
+            connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            == DATABASE_MIGRATION_REGISTRY.latest_version
+        )
     assert {"verification_calls_started", "verification_calls_completed"} <= job_columns
     assert {"verification_request_started", "verification_request_completed"} <= attempt_columns
 
@@ -219,10 +225,11 @@ def test_schema31_database_adds_optional_text_model_remark_at_schema32(
 
     assert target.with_name("schema31.db.pre-migration-v31.bak").is_file()
     with sqlite3.connect(target) as connection:
-        row = connection.execute(
-            "SELECT model, remark_name FROM text_model_configs"
-        ).fetchone()
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 32
+        row = connection.execute("SELECT model, remark_name FROM text_model_configs").fetchone()
+        assert (
+            connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            == DATABASE_MIGRATION_REGISTRY.latest_version
+        )
     assert row == ("legacy-model", None)
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Literal, cast
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -17,15 +19,27 @@ from ..database import Database
 from ..errors import ApplicationError
 from ..generation.assets import canonical_json, fsync_directory, write_synced
 from ..ids import uuid7
-from .models import PageDocument, PanelPlacement, PixelRect, TextLayer
+from ..modules.adaptation.contracts import StoryboardVersionRefV1
+from ..modules.layout.errors import LayoutError
+from ..modules.layout.public import (
+    ApprovedPageLayoutSnapshotV1,
+    LayoutFacade,
+    LayoutPageRequirementV1,
+)
+from ..shared_kernel import canonical_sha256
+from .layout import compose_layout_document
+from .models import PageDocument, PageLayoutSource, PixelRect, TextLayer
 from .renderer import PageRenderer, PageRenderError, RenderedPage
-from .templates import PageTemplate, all_templates, template_for_count
+from .templates import PageTemplate, all_templates
 
 
 class PageService:
-    def __init__(self, database: Database, renderer: PageRenderer | None = None) -> None:
+    def __init__(
+        self, database: Database, renderer: PageRenderer | None = None, *, layout: LayoutFacade
+    ) -> None:
         self.database = database
         self.renderer = renderer or PageRenderer()
+        self.layout = layout
 
     def template_payloads(self) -> list[dict[str, object]]:
         return [page_template.payload() for page_template in all_templates()]
@@ -34,43 +48,130 @@ class PageService:
         self._require_project(project_id)
 
     def draft_pages(self, project_id: str, chapter_id: str) -> list[dict[str, Any]]:
-        storyboard_version_id, storyboard = self._approved_storyboard(
-            project_id, chapter_id
+        storyboard_version_id, storyboard = self._approved_storyboard(project_id, chapter_id)
+        layouts = self._approved_page_layouts(
+            project_id, chapter_id, storyboard_version_id, storyboard
         )
         results: list[dict[str, Any]] = []
         for page in storyboard.pages:
+            approved = layouts[str(page.page_id)]
+            source = PageLayoutSource(
+                version_id=str(approved.version.page_layout_draft_version_id),
+                content_sha256=approved.version.layout.content_sha256,
+            )
             existing = self._optional_current(project_id, str(page.page_id))
-            if existing is not None:
+            previous = PageDocument.model_validate(existing["document"]) if existing else None
+            if previous is not None and previous.layout_source == source:
+                assert existing is not None
                 results.append(existing)
                 continue
-            page_template = template_for_count(len(page.panels))
             assets = self._current_assets_for_page(project_id, page)
-            document = PageDocument(
-                page_id=str(page.page_id),
-                page_number=page.page_number,
-                template_id=page_template.template_id,
-                storyboard_version_id=storyboard_version_id,
-                panels=[
-                    PanelPlacement(
-                        panel_id=str(panel.panel_id),
-                        asset_version_id=assets[str(panel.panel_id)]["asset_version_id"],
-                        frame=page_template.frames[index],
-                    )
-                    for index, panel in enumerate(page.panels)
-                ],
-                text_layers=default_text_layers(page, page_template),
+            document = compose_layout_document(
+                page,
+                storyboard_version_id,
+                approved.version.layout,
+                source,
+                assets,
+                previous,
             )
-            self._insert_page_root(project_id, chapter_id, page)
+            if existing is None:
+                self._insert_page_root(project_id, chapter_id, page)
             results.append(
                 self._create_version(
                     project_id,
                     str(page.page_id),
                     document,
-                    expected_revision=1,
-                    initial=True,
+                    expected_revision=int(existing["page_revision"]) if existing else 1,
+                    initial=existing is None,
+                    approved_layout_recompose=True,
                 )
             )
         return results
+
+    def _approved_page_layouts(
+        self,
+        project_id: str,
+        chapter_id: str,
+        storyboard_version_id: str,
+        storyboard: StoryboardDocument,
+    ) -> dict[str, ApprovedPageLayoutSnapshotV1]:
+        with self.database.reader() as connection:
+            row = connection.execute(
+                "SELECT version, document_json FROM storyboard_versions "
+                "WHERE storyboard_version_id = ?",
+                (storyboard_version_id,),
+            ).fetchone()
+        assert row is not None
+        reference = StoryboardVersionRefV1(
+            storyboard_id=str(storyboard.storyboard_id),
+            storyboard_version_id=storyboard_version_id,
+            version=int(row["version"]),
+            content_sha256=canonical_sha256(json.loads(str(row["document_json"]))),
+            approved=True,
+        )
+        requirements = tuple(
+            LayoutPageRequirementV1(
+                page_id=page.page_id, panel_ids=tuple(p.panel_id for p in page.panels)
+            )
+            for page in storyboard.pages
+        )
+        try:
+            snapshot = self.layout.approved_chapter_snapshot(
+                UUID(project_id),
+                UUID(chapter_id),
+                reference,
+                requirements,
+            )
+        except LayoutError as exc:
+            raise ApplicationError(
+                "PAGE_LAYOUT_NOT_READY", "请先批准当前分镜对应的完整页面版式，再重新拼页。", 409
+            ) from exc
+        return {str(page.version.layout.page_id): page for page in snapshot.pages}
+
+    def adopt_full_page(
+        self,
+        project_id: str,
+        chapter_id: str,
+        document: PageDocument,
+        *,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        storyboard_version_id, storyboard = self._approved_storyboard(project_id, chapter_id)
+        layouts = self._approved_page_layouts(
+            project_id, chapter_id, storyboard_version_id, storyboard
+        )
+        approved = layouts.get(document.page_id)
+        if (
+            document.page_image is None
+            or approved is None
+            or document.storyboard_version_id != storyboard_version_id
+            or document.layout_source is None
+            or document.layout_source.version_id
+            != str(approved.version.page_layout_draft_version_id)
+        ):
+            raise ApplicationError(
+                "FULL_PAGE_LAYOUT_STALE", "成图的分镜或版式已变化，请重新生成。", 409
+            )
+        existing = self._optional_current(project_id, document.page_id)
+        if existing is not None and existing["document"].get(
+            "page_image"
+        ) == document.page_image.model_dump(mode="json"):
+            return existing
+        if expected_revision != (int(existing["page_revision"]) if existing else 0):
+            raise ApplicationError(
+                "PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后再采用成图。", 409
+            )
+        if existing is None:
+            page = next(page for page in storyboard.pages if str(page.page_id) == document.page_id)
+            self._insert_page_root(project_id, chapter_id, page)
+        return self._create_version(
+            project_id,
+            document.page_id,
+            document,
+            expected_revision=expected_revision or 1,
+            initial=existing is None,
+            approved_layout_recompose=True,
+        )
 
     def list_pages(self, project_id: str, chapter_id: str) -> list[dict[str, Any]]:
         self._require_project(project_id)
@@ -101,9 +202,7 @@ class PageService:
             raise ApplicationError("PAGE_VERSION_NOT_FOUND", "没有找到当前页面版本。", 404)
         return self._payload(row)
 
-    def get_version(
-        self, project_id: str, page_id: str, page_version_id: str
-    ) -> dict[str, Any]:
+    def get_version(self, project_id: str, page_id: str, page_version_id: str) -> dict[str, Any]:
         with self.database.reader() as connection:
             row = connection.execute(
                 """
@@ -146,9 +245,7 @@ class PageService:
     ) -> dict[str, Any]:
         root, current = self._version_context(project_id, page_id)
         if int(root["revision"]) != expected_revision:
-            raise ApplicationError(
-                "PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后重试。", 409
-            )
+            raise ApplicationError("PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后重试。", 409)
         target = self.get_version(project_id, page_id, page_version_id)
         if current is not None and str(current["page_version_id"]) == page_version_id:
             return target
@@ -356,9 +453,7 @@ class PageService:
             initial=False,
         )
 
-    def content_path(
-        self, project_id: str, page_id: str, page_version_id: str
-    ) -> Path:
+    def content_path(self, project_id: str, page_id: str, page_version_id: str) -> Path:
         with self.database.reader() as connection:
             row = connection.execute(
                 """
@@ -387,16 +482,13 @@ class PageService:
         *,
         expected_revision: int,
         initial: bool,
+        approved_layout_recompose: bool = False,
     ) -> dict[str, Any]:
         root, current = self._version_context(project_id, page_id)
         if int(root["revision"]) != expected_revision:
-            raise ApplicationError(
-                "PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后重试。", 409
-            )
+            raise ApplicationError("PAGE_REVISION_CONFLICT", "页面已被修改，请刷新后重试。", 409)
         if document.page_id != page_id or document.page_number != int(root["page_number"]):
-            raise ApplicationError(
-                "PAGE_DOCUMENT_ID_MISMATCH", "页面文档与目标页不匹配。", 422
-            )
+            raise ApplicationError("PAGE_DOCUMENT_ID_MISMATCH", "页面文档与目标页不匹配。", 422)
         if initial and current is not None:
             return self.get_current(project_id, page_id)
         if not initial and current is None:
@@ -410,12 +502,12 @@ class PageService:
                 409,
             )
         if current is not None:
-            current_document = PageDocument.model_validate_json(
-                str(current["document_json"])
-            )
-            if [panel.panel_id for panel in document.panels] != [
-                panel.panel_id for panel in current_document.panels
-            ]:
+            current_document = PageDocument.model_validate_json(str(current["document_json"]))
+            old_ids = [panel.panel_id for panel in current_document.panels]
+            new_ids = [panel.panel_id for panel in document.panels]
+            if set(new_ids) != set(old_ids) or (
+                new_ids != old_ids and not approved_layout_recompose
+            ):
                 raise ApplicationError(
                     "PAGE_PANEL_SET_MISMATCH",
                     "布局编辑不能删除、新增或重排分镜面板。",
@@ -424,14 +516,20 @@ class PageService:
         asset_paths = self._validate_assets(project_id, document)
         serialized = canonical_json(document.model_dump(mode="json"))
         document_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-        if current is not None and document_sha256 == str(current["document_sha256"]):
-            return self.get_current(project_id, page_id)
         try:
             rendered = self.renderer.render(document, asset_paths)
         except PageRenderError as exc:
             raise ApplicationError(
                 "PAGE_RENDER_INVALID", f"页面无法确定性渲染: {exc}", 422
             ) from exc
+        if (
+            current is not None
+            and document_sha256 == str(current["document_sha256"])
+            and rendered.renderer_version == str(current["renderer_version"])
+            and rendered.font_sha256 == str(current["font_sha256"])
+            and rendered.sha256 == str(current["render_sha256"])
+        ):
+            return self.get_current(project_id, page_id)
         version = int(current["version"]) + 1 if current is not None else 1
         page_version_id = str(uuid7())
         relative_path = self._persist_render_file(
@@ -514,9 +612,7 @@ class PageService:
             ) from exc
         return self.get_current(project_id, page_id)
 
-    def _insert_page_root(
-        self, project_id: str, chapter_id: str, page: PageCandidate
-    ) -> None:
+    def _insert_page_root(self, project_id: str, chapter_id: str, page: PageCandidate) -> None:
         with self.database.writer() as connection:
             connection.execute(
                 """
@@ -550,6 +646,39 @@ class PageService:
     def _validate_assets(self, project_id: str, document: PageDocument) -> dict[str, Path]:
         result: dict[str, Path] = {}
         with self.database.reader() as connection:
+            if document.page_image is not None:
+                row = connection.execute(
+                    """SELECT g.*, p.workspace_path FROM full_page_generations g
+                    JOIN projects p ON p.project_id = g.project_id
+                    WHERE g.project_id = ? AND g.page_id = ? AND g.generation_id = ?
+                      AND g.status = 'ready'""",
+                    (project_id, document.page_id, document.page_image.generation_id),
+                ).fetchone()
+                if row is None:
+                    raise ApplicationError(
+                        "PAGE_IMAGE_INVALID", "页面引用的整页素材不存在或不匹配。", 422
+                    )
+                frozen = json.loads(str(row["plan_json"]))["page_document"]
+                if (
+                    frozen["page_image"] != document.page_image.model_dump(mode="json")
+                    or frozen["storyboard_version_id"] != document.storyboard_version_id
+                    or {panel["panel_id"] for panel in frozen["panels"]}
+                    != {panel.panel_id for panel in document.panels}
+                ):
+                    raise ApplicationError(
+                        "PAGE_IMAGE_INVALID", "整页素材与分镜或文字策略不匹配。", 422
+                    )
+                workspace = Path(str(row["workspace_path"])).resolve()
+                path = (workspace / str(row["image_relative_path"])).resolve()
+                if (
+                    not path.is_relative_to(workspace)
+                    or not path.is_file()
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != row["image_sha256"]
+                ):
+                    raise ApplicationError(
+                        "PAGE_IMAGE_MISSING", "整页素材文件缺失或校验失败。", 409
+                    )
+                return {document.page_image.generation_id: path}
             for placement in document.panels:
                 row = connection.execute(
                     """
@@ -594,10 +723,7 @@ class PageService:
     ) -> str:
         workspace = workspace.resolve()
         relative_directory = (
-            Path("pages")
-            / page_id
-            / "versions"
-            / f"{version:04d}-{page_version_id}"
+            Path("pages") / page_id / "versions" / f"{version:04d}-{page_version_id}"
         )
         final_directory = (workspace / relative_directory).resolve()
         staging_directory = (workspace / "pages" / ".staging" / page_version_id).resolve()
@@ -628,9 +754,7 @@ class PageService:
                 (project_id, chapter_id),
             ).fetchone()
         if row is None:
-            raise ApplicationError(
-                "PAGE_STORYBOARD_NOT_APPROVED", "请先审批当前分镜。", 409
-            )
+            raise ApplicationError("PAGE_STORYBOARD_NOT_APPROVED", "请先审批当前分镜。", 409)
         document = StoryboardDocument.model_validate_json(str(row["document_json"]))
         findings = storyboard_page_policy_findings(document)
         if findings:
@@ -671,8 +795,7 @@ class PageService:
                 (project_id, *panel_ids),
             ).fetchall()
         assets = {
-            str(row["panel_id"]): {"asset_version_id": str(row["asset_version_id"])}
-            for row in rows
+            str(row["panel_id"]): {"asset_version_id": str(row["asset_version_id"])} for row in rows
         }
         missing = [panel_id for panel_id in panel_ids if panel_id not in assets]
         if missing:
@@ -729,9 +852,7 @@ class PageService:
             "external_requests_started": 0,
         }
 
-    def _version_for_source_job(
-        self, project_id: str, source_job_id: str
-    ) -> dict[str, Any] | None:
+    def _version_for_source_job(self, project_id: str, source_job_id: str) -> dict[str, Any] | None:
         with self.database.reader() as connection:
             row = connection.execute(
                 """
@@ -743,9 +864,7 @@ class PageService:
             ).fetchone()
         if row is None:
             return None
-        return self.get_version(
-            project_id, str(row["page_id"]), str(row["page_version_id"])
-        )
+        return self.get_version(project_id, str(row["page_id"]), str(row["page_version_id"]))
 
 
 def default_text_layers(page: PageCandidate, page_template: PageTemplate) -> list[TextLayer]:
@@ -759,9 +878,7 @@ def default_text_layers(page: PageCandidate, page_template: PageTemplate) -> lis
         cursor = frame.y + 28
         if narration:
             bounds = layer_bounds(frame, cursor, preferred_width=frame.width - 56, height=190)
-            layers.extend(
-                chunked_layers("narration", narration, panel_id, bounds, font_size=42)
-            )
+            layers.extend(chunked_layers("narration", narration, panel_id, bounds, font_size=42))
             cursor += 210
         if dialogue:
             bounds = layer_bounds(
@@ -770,9 +887,7 @@ def default_text_layers(page: PageCandidate, page_template: PageTemplate) -> lis
                 preferred_width=min(680, frame.width - 72),
                 height=280,
             )
-            layers.extend(
-                chunked_layers("dialogue", dialogue, panel_id, bounds, font_size=42)
-            )
+            layers.extend(chunked_layers("dialogue", dialogue, panel_id, bounds, font_size=42))
         if sfx:
             bounds = layer_bounds(
                 frame,

@@ -31,6 +31,7 @@ class RuntimeLifecycleInstaller:
         container.database.migrate()
         container.recovery_coordinator.run(RecoveryTrigger.STARTUP)
         container.legacy.recovery.reconcile_startup()
+        container.full_pages.reconcile_startup()
 
     async def stop(self, container: AppContainer) -> None:
         container.durable_worker.stop()

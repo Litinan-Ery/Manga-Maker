@@ -17,6 +17,7 @@ from .modules.text_execution.migrations import TEXT_EXECUTION_MIGRATIONS
 from .platform.durable_work.migrations import DURABLE_WORK_MIGRATIONS
 from .platform.persistence import MigrationRegistry, ModuleMigrationRunner, RegisteredMigration
 from .platform.recovery.migrations import RECOVERY_MIGRATIONS
+from .workflows.book_production.migrations import BOOK_WORKFLOW_MIGRATIONS
 
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (
@@ -971,8 +972,10 @@ MODULE_MIGRATIONS: tuple[RegisteredMigration, ...] = (
     *PROMPTING_MIGRATIONS[:1],
     *PRODUCTION_MIGRATIONS[2:3],
     *PROMPTING_MIGRATIONS[1:],
-    *PRODUCTION_MIGRATIONS[3:],
+    *PRODUCTION_MIGRATIONS[3:4],
     *TEXT_EXECUTION_MIGRATIONS,
+    *PRODUCTION_MIGRATIONS[4:],
+    *BOOK_WORKFLOW_MIGRATIONS,
 )
 DATABASE_MIGRATION_REGISTRY = MigrationRegistry((*LEGACY_REGISTERED_MIGRATIONS, *MODULE_MIGRATIONS))
 

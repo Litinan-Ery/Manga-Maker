@@ -97,6 +97,57 @@ it("requires confirmation for immutable export and package restore", async () =>
   }
 });
 
+it("freezes every chapter in book order and invalidates the plan when scope changes", async () => {
+  window.history.replaceState(null, "", "/#session=session-test&csrf=csrf-test");
+  consumeLocalSession();
+  const chapters = [1, 2, 3].map((ordinal) => ({
+    ...chapterSet.chapters[0], chapter_id: `chapter-${ordinal}`, ordinal,
+  }));
+  const bookPlan = {
+    ...exportPlan, scope: "book", chapter_ids: chapters.map((chapter) => chapter.chapter_id),
+    chapter_title: "全书", page_count: 100,
+    pages: Array.from({ length: 100 }, (_, index) => ({
+      ...selectedPage, ordinal: index + 1, page_version_id: `version-${index + 1}`,
+      chapter_ordinal: index < 35 ? 1 : index < 70 ? 2 : 3,
+      page_number: index < 35 ? index + 1 : index < 70 ? index - 34 : index - 69,
+    })),
+  };
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if ((init?.method ?? "GET") === "GET") return Promise.resolve(jsonResponse([]));
+    if (path.endsWith("/exports/book/preflight")) return Promise.resolve(jsonResponse(bookPlan));
+    if (path.endsWith("/exports/book")) {
+      return Promise.resolve(jsonResponse({ ...exportRevision, ...bookPlan }, 201));
+    }
+    return Promise.reject(new Error(`unexpected request: ${path}`));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<ExportCenter projectId="project-1" chapterSet={{ ...chapterSet, chapters }} onError={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("导出范围"), { target: { value: "book" } });
+  expect(screen.getByLabelText("章节")).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "预检并冻结页面版本" }));
+  expect(await screen.findByText(/100 页 · 工程包/)).toBeInTheDocument();
+  expect(screen.getByText(/第 36 页（第 2 章，第 1 页）/)).toBeInTheDocument();
+  const preflight = fetchMock.mock.calls.find(([path]) => String(path).endsWith("/book/preflight"));
+  expect(JSON.parse(String(preflight?.[1]?.body))).toEqual({ chapter_ids: bookPlan.chapter_ids });
+  fireEvent.click(screen.getByLabelText(/我确认以上页面版本和顺序/));
+  fireEvent.change(screen.getByLabelText("导出范围"), { target: { value: "chapter" } });
+  await waitFor(() => expect(screen.queryByText(/100 页 · 工程包/)).not.toBeInTheDocument());
+  fireEvent.change(screen.getByLabelText("导出范围"), { target: { value: "book" } });
+  fireEvent.click(screen.getByRole("button", { name: "预检并冻结页面版本" }));
+  expect(await screen.findByText(/100 页 · 工程包/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "生成并校验四种格式" })).toBeDisabled();
+  fireEvent.click(screen.getByLabelText(/我确认以上页面版本和顺序/));
+  fireEvent.click(screen.getByRole("button", { name: "生成并校验四种格式" }));
+  await screen.findByText(/零泄露扫描/);
+  const create = fetchMock.mock.calls.find(([path]) => String(path).endsWith("/exports/book"));
+  expect(JSON.parse(String(create?.[1]?.body))).toEqual({
+    chapter_ids: bookPlan.chapter_ids,
+    page_version_ids: bookPlan.pages.map((page) => page.page_version_id),
+    plan_fingerprint: bookPlan.plan_fingerprint, confirmed: true,
+  });
+});
+
 const chapterSet = {
   source_file_id: "source-1",
   chapter_set_id: "chapter-set-1",

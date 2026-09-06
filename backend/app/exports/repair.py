@@ -129,6 +129,53 @@ def repair_remapped_v15_records(
     )
     _repair_generation_history(connection, project_id, prompts)
     _repair_lineage(connection, project_id, storyboards, layouts, prompts)
+    _repair_composition_sources(connection, project_id, layouts)
+
+
+def _repair_composition_sources(
+    connection: sqlite3.Connection,
+    project_id: str,
+    layouts: dict[str, _LayoutState],
+) -> None:
+    """Rebind additive page layout references after immutable ID rebasing."""
+
+    def rebind(document: dict[str, Any]) -> None:
+        source = document.get("layout_source")
+        if source and source["version_id"] in layouts:
+            source["content_sha256"] = layouts[source["version_id"]].content_sha256
+
+    for row in connection.execute(
+        """SELECT v.page_version_id, v.document_json FROM page_versions v
+        JOIN comic_pages p ON p.page_id = v.page_id WHERE p.project_id = ?""",
+        (project_id,),
+    ).fetchall():
+        document = json.loads(str(row["document_json"]))
+        rebind(document)
+        connection.execute(
+            "UPDATE page_versions SET document_json = ?, document_sha256 = ? "
+            "WHERE page_version_id = ?",
+            (canonical_json(document), canonical_sha256(document), str(row["page_version_id"])),
+        )
+    for row in connection.execute(
+        "SELECT * FROM full_page_generations WHERE project_id = ?",
+        (project_id,),
+    ).fetchall():
+        plan = json.loads(str(row["plan_json"]))
+        rebind(plan["page_document"])
+        source = plan["page_document"].get("layout_source")
+        if source:
+            plan["provider_execution_spec"]["page_layout_draft_sha256"] = source["content_sha256"]
+        connection.execute(
+            """UPDATE full_page_generations SET plan_json = ?, plan_sha256 = ?,
+            approval_sha256 = NULL, status = ?, error_code = ? WHERE generation_id = ?""",
+            (
+                canonical_json(plan),
+                canonical_sha256(plan),
+                "ready" if row["status"] == "ready" else "needs_review",
+                None if row["status"] == "ready" else "FULL_PAGE_RESTORED_REPREVIEW_REQUIRED",
+                str(row["generation_id"]),
+            ),
+        )
 
 
 def _repair_storyboards(

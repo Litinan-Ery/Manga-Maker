@@ -25,10 +25,13 @@ from httpx import Response
 from PIL import Image, ImageDraw
 from pydantic import SecretStr
 
+from backend.app.acceptance.sandkings_24 import PAGE_BEATS_24
 from backend.app.acceptance.sandkings_v5 import (
+    LIMITED_COLOR_STYLE,
     PAGE_BEATS,
     PAGE_COUNT,
     PROJECT_TITLE,
+    STYLE_PRESETS,
     TEXT_MODEL_BASE_URL,
     TEXT_MODEL_NAME,
     SandkingsV5AcceptanceTextModel,
@@ -52,6 +55,9 @@ DIMENSION_CAPABILITIES = json.loads(
 )
 UNLOCK_TIMEOUT_SECONDS = 10 * 60
 MAX_CALLS_PER_TARGET = 3
+DEFAULT_PAGE_BEATS = PAGE_BEATS
+DEFAULT_PROJECT_TITLE = PROJECT_TITLE
+ACTIVE_STYLE = LIMITED_COLOR_STYLE
 
 
 class AcceptanceFailure(RuntimeError):
@@ -66,6 +72,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--app-data", type=Path, default=DEFAULT_APP_DATA)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--novelai-profile", default="novelai")
+    parser.add_argument(
+        "--page-count",
+        type=int,
+        choices=(12, 24),
+        default=12,
+        help="Select the deterministic 12-page or expanded 24-page story plan.",
+    )
+    parser.add_argument(
+        "--style-preset",
+        choices=tuple(STYLE_PRESETS),
+        default=LIMITED_COLOR_STYLE.key,
+        help="Select the image prompt and page color treatment.",
+    )
     parser.add_argument("--resume-project")
     parser.add_argument(
         "--reroll-pages",
@@ -84,6 +103,7 @@ def main() -> int:
     args = parse_args()
     if not args.confirm:
         raise AcceptanceFailure("Refusing to call NovelAI without --confirm")
+    _activate_run_configuration(args.page_count, args.style_preset)
     reroll_pages = _parse_pages(args.reroll_pages)
     settings = Settings(
         app_data_dir=args.app_data.expanduser().resolve(),
@@ -175,6 +195,23 @@ def main() -> int:
     return 0
 
 
+def _activate_run_configuration(page_count: int, style_preset: str) -> None:
+    global ACTIVE_STYLE, PAGE_BEATS, PAGE_COUNT, PROJECT_TITLE
+    if page_count == 12:
+        PAGE_BEATS = DEFAULT_PAGE_BEATS
+    elif page_count == 24:
+        PAGE_BEATS = PAGE_BEATS_24
+    else:
+        raise AcceptanceFailure(f"unsupported Sandkings page count: {page_count}")
+    PAGE_COUNT = len(PAGE_BEATS)
+    ACTIVE_STYLE = STYLE_PRESETS[style_preset]
+    PROJECT_TITLE = (
+        DEFAULT_PROJECT_TITLE
+        if page_count == 12 and style_preset == LIMITED_COLOR_STYLE.key
+        else f"沙王 - {page_count}页 {ACTIVE_STYLE.summary}"
+    )
+
+
 def _parse_pages(raw: str) -> list[int]:
     if not raw.strip():
         return []
@@ -257,7 +294,7 @@ def _unlock_page(*, action_path: str, error: str | None = None) -> str:
 <body>
   <main>
     <h1>解锁 Manga Maker</h1>
-    <p>输入本机凭证库主密码后，沙王的 12 页 NovelAI V5 验收生成会自动继续。</p>
+    <p>输入本机凭证库主密码后，沙王的 NovelAI V5 生成或定向重绘任务会自动继续。</p>
     {error_html}
     <form method="post" action="{action_path}" autocomplete="off">
       <label>主密码
@@ -508,6 +545,8 @@ def _prepare_story_pipeline(
             SandkingsV5AcceptanceTextModel(
                 configuration,
                 secret_reader,
+                page_beats=PAGE_BEATS,
+                style_preset=ACTIVE_STYLE.key,
             )
         )
         storyboard = _ok(
@@ -517,10 +556,10 @@ def _prepare_story_pipeline(
                 json={"chapter_id": chapter_id, "page_budget": PAGE_COUNT},
             ),
             201,
-            "generate 12-page storyboard",
+            f"generate {PAGE_COUNT}-page storyboard",
         ).json()
         if len(storyboard["document"]["pages"]) != PAGE_COUNT:
-            raise AcceptanceFailure("storyboard did not contain exactly 12 pages")
+            raise AcceptanceFailure(f"storyboard did not contain exactly {PAGE_COUNT} pages")
         _ok(
             client.post(
                 f"/api/v1/projects/{project_id}/adaptation/storyboards/"
@@ -777,7 +816,9 @@ def _generate_initial_comic(
         "create bounded V5 generation job",
     ).json()
     started = _transition(client, headers, project_id, created, "start")
-    print(f"Generating {PAGE_COUNT} real NovelAI V5 images serially...")
+    print(
+        f"Generating {PAGE_COUNT} real NovelAI V5 images serially with style {ACTIVE_STYLE.key}..."
+    )
     state = _app_state(client)
     asyncio.run(state.generation_executor.run_until_blocked(started["job_id"]))
     completed = cast(
@@ -795,8 +836,9 @@ def _generate_initial_comic(
         "compose 12 comic pages",
     ).json()
     if len(pages) != PAGE_COUNT:
-        raise AcceptanceFailure("page compositor did not produce exactly 12 pages")
-    _enable_color_pages(client, headers, project_id, pages)
+        raise AcceptanceFailure(f"page compositor did not produce exactly {PAGE_COUNT} pages")
+    if ACTIVE_STYLE.color_mode == "color":
+        _enable_color_pages(client, headers, project_id, pages)
     return completed
 
 
@@ -908,7 +950,7 @@ def _refine_prompts_for_visual_failures(
     chapter_id: str,
     page_numbers: list[int],
 ) -> None:
-    supported = {8, 12}
+    supported = {8, 12} if PAGE_COUNT == 12 else {24}
     selected = supported.intersection(page_numbers)
     if not selected:
         return
@@ -1005,7 +1047,7 @@ def _refine_prompts_for_visual_failures(
         if package["relationship_action"] != relationship:
             package["relationship_action"] = relationship
             changed = True
-    if 12 in selected:
+    if PAGE_COUNT == 12 and 12 in selected:
         package = packages[panel_by_page[12]]
         changed |= _replace_tag(
             package["base_visual_tags"],
@@ -1032,6 +1074,101 @@ def _refine_prompts_for_visual_failures(
                 "crowd",
             ],
         )
+    if PAGE_COUNT == 24 and 24 in selected:
+        package = packages[panel_by_page[24]]
+        if "exactly six stippled-orange alien children arranged in a clear semicircle" in package[
+            "base_visual_tags"
+        ]:
+            changed |= _replace_tag(
+                package["base_visual_tags"],
+                "exactly six stippled-orange alien children arranged in a clear semicircle",
+                "exactly three stippled-orange four-armed alien children",
+            )
+        else:
+            changed |= _replace_tag(
+                package["base_visual_tags"],
+                "circle of small stippled-orange humanoid creatures",
+                "exactly three stippled-orange four-armed alien children",
+            )
+        six_child_anatomy = (
+            "each of the six alien children visibly has exactly two legs and exactly four "
+            "separate arms in two symmetric pairs plus the same pale angular male face"
+        )
+        three_child_anatomy = (
+            "each of exactly three alien children visibly has exactly two legs and exactly "
+            "four separate arms in two symmetric pairs plus a smaller version of the captured "
+            "man's pale angular face"
+        )
+        if six_child_anatomy in package["base_visual_tags"]:
+            changed |= _replace_tag(
+                package["base_visual_tags"],
+                six_child_anatomy,
+                three_child_anatomy,
+            )
+        else:
+            changed |= _replace_tag(
+                package["base_visual_tags"],
+                "every creature has exactly two legs four arms and the same pale angular male face",
+                three_child_anatomy,
+            )
+        changed |= _append_tags(
+            package["base_visual_tags"],
+            [
+                "four hands clearly visible on every alien child",
+                "two upper arms and two lower arms attached to every alien child",
+                "all four arms spread apart and unobstructed on foreground creatures",
+                "the single intact adult man is horizontal with both feet visibly off the ground",
+                "the left and right children use all four arms to lift the man's "
+                "shoulders and knees",
+                "the third four-armed child leads them toward the doorway",
+                "exactly one intact adult male head and exactly one intact adult male body",
+                (
+                    "every child has an exact smaller duplicate of the captured man's human "
+                    "face with pale angular skin slicked-back short black hair silver temples "
+                    "deep-set eyes a sharp human nose and a closed human mouth"
+                ),
+                "all three child faces are fully human and visibly identical to the "
+                "adult man's face",
+                "exactly one breathing black doorway behind the group",
+                "no large crowd",
+            ],
+        )
+        changed |= _append_tags(
+            package["negative_tags"],
+            [
+                "two-armed child",
+                "three-armed child",
+                "six-armed child",
+                "missing arms",
+                "hidden arms",
+                "fused arms",
+                "ordinary human child",
+                "faceless creature",
+                "uncountable crowd",
+                "standing adult man",
+                "walking adult man",
+                "kneeling adult man",
+                "hunched adult man",
+                "duplicate adult head",
+                "extra adult face",
+                "duplicate adult body",
+                "adult fused with child",
+                "alien monster face",
+                "insect face",
+                "skull face",
+                "hairless monster head",
+                "fangs",
+                "snout",
+                "different child faces",
+            ],
+        )
+        relationship = (
+            "exactly three four-armed alien children carry one intact adult man horizontally "
+            "above the ground toward one breathing black doorway"
+        )
+        if package["relationship_action"] != relationship:
+            package["relationship_action"] = relationship
+            changed = True
     if not changed:
         print("Visual-review prompt fixes are already current")
         return
@@ -1166,8 +1303,8 @@ def _export_and_audit(
         range(1, PAGE_COUNT + 1)
     ):
         raise AcceptanceFailure("current page set is incomplete")
-    if any(page["document"]["color_mode"] != "color" for page in pages):
-        raise AcceptanceFailure("current comic pages do not preserve the V5 limited color art")
+    if any(page["document"]["color_mode"] != ACTIVE_STYLE.color_mode for page in pages):
+        raise AcceptanceFailure(f"current comic pages do not use {ACTIVE_STYLE.color_mode} output")
 
     preflight = _ok(
         client.post(
@@ -1259,6 +1396,12 @@ def _export_and_audit(
         "project_id": project_id,
         "chapter_id": chapter_id,
         "output_dir": str(output_dir.resolve()),
+        "production": {
+            "page_count": PAGE_COUNT,
+            "style_preset": ACTIVE_STYLE.key,
+            "style_summary": ACTIVE_STYLE.summary,
+            "page_color_mode": ACTIVE_STYLE.color_mode,
+        },
         "source": source_manifest,
         "provider": {
             "model_id": "nai-diffusion-5-full",
@@ -1327,6 +1470,9 @@ def _export_and_audit(
     summary = {
         "project_id": project_id,
         "chapter_id": chapter_id,
+        "page_count": PAGE_COUNT,
+        "style_preset": ACTIVE_STYLE.key,
+        "page_color_mode": ACTIVE_STYLE.color_mode,
         "output_dir": str(output_dir.resolve()),
         "manifest": str(manifest_path.resolve()),
         "contact_sheet": str(contact_sheet.resolve()),
@@ -1438,9 +1584,11 @@ def _create_contact_sheet(page_paths: list[Path], target: Path) -> Path:
 
 def _review_template(page_paths: list[Path]) -> str:
     lines = [
-        "# 沙王 NovelAI V5 视觉审片",
+        f"# 沙王 {PAGE_COUNT} 页 NovelAI V5 视觉审片",
         "",
         "状态: 待 Codex 逐页视觉审片; 技术完整性见 `manifest.json`。",
+        "",
+        f"风格: {ACTIVE_STYLE.summary}。",
         "",
         "审片标准: 叙事事件可辨、主角设计连续、无破坏性随机文字、构图不遮挡旁白、",
         "四臂幼体与沙王母题可辨。未通过的页面必须以零 Anlas reroll 生成新版本后重审。",

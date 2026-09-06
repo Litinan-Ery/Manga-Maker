@@ -82,7 +82,7 @@ it("generates, previews, and approves fixed tags and PromptPackages", async () =
 
   fireEvent.click(confirmation);
   fireEvent.click(screen.getByRole("button", { name: "生成逐格 PromptPackage" }));
-  expect(await screen.findByText("最终正向 prompt")).toBeInTheDocument();
+  expect(await screen.findByText("正向提示内容概览")).toBeInTheDocument();
   expect(await screen.findByRole("heading", { name: /Prompt Inspector/ })).toBeInTheDocument();
   const inspector = screen.getByRole("region", { name: "Prompt Inspector" });
   expect(within(inspector).queryByDisplayValue("1girl, shoulder-length black hair")).toBeNull();
@@ -92,6 +92,11 @@ it("generates, previews, and approves fixed tags and PromptPackages", async () =
   expect(screen.getAllByText(/shoulder-length black hair/).length).toBeGreaterThanOrEqual(2);
   const approve = screen.getByRole("button", { name: "审批全部 PromptPackage" });
   await waitFor(() => expect(approve).toBeEnabled());
+  const description = screen.getByLabelText("画面描述（完整句子）");
+  fireEvent.change(description, { target: { value: "She turns, surprised.\nRain falls outside." } });
+  expect(description).toHaveValue("She turns, surprised.\nRain falls outside.");
+  expect(approve).toBeDisabled();
+  fireEvent.change(description, { target: { value: "She looks toward the doorway." } });
   fireEvent.change(screen.getByLabelText("角色 1 动作"), {
     target: { value: "turns toward the rain" },
   });
@@ -237,6 +242,8 @@ function structuredPackage() {
         positive_tags: ["black and white manga"],
         negative_tags: ["bad anatomy"],
         relationship_action: null,
+        visual_description: "She looks toward the doorway.",
+        composition_prompt: "Draw a single manga panel using a medium shot.",
       },
       characters: [
         {

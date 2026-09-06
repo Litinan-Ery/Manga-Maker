@@ -291,6 +291,51 @@ class AdaptationService:
     def provider_error(self, error: Exception) -> ApplicationError:
         return self._provider_error(error)
 
+    def local_source(self, project_id: str, chapter_id: str, *, page_budget: int) -> dict[str, Any]:
+        source = self._source_context(
+            project_id, chapter_id, page_budget=page_budget, adaptation_preferences=[]
+        )
+        return {
+            "request": source.request.model_dump(mode="json"),
+            "source_fingerprint": source.fingerprint,
+            "external_requests_started": 0,
+        }
+
+    def import_storyboard(
+        self,
+        project_id: str,
+        chapter_id: str,
+        document: StoryboardDocument,
+        *,
+        page_budget: int,
+        expected_source_fingerprint: str,
+        source_note: str,
+    ) -> dict[str, Any]:
+        source = self._source_context(
+            project_id, chapter_id, page_budget=page_budget, adaptation_preferences=[]
+        )
+        if (
+            source.fingerprint != expected_source_fingerprint
+            or document.chapter_version != source.request.chapter_version
+        ):
+            raise ApplicationError("ADAPTATION_SOURCE_CHANGED", "来源已变化，请重新核对分镜。", 409)
+        version_id = self._persist_document(
+            project_id,
+            source,
+            document,
+            page_budget=page_budget,
+            provenance={
+                "change_type": "local_import",
+                "source_note": source_note,
+                "document_sha256": hashlib.sha256(
+                    canonical_json(document.model_dump(mode="json")).encode()
+                ).hexdigest(),
+                "external_requests_started": 0,
+            },
+            enforce_page_policy=True,
+        )
+        return self.get_storyboard_version(project_id, version_id)
+
     async def generate_storyboard(
         self,
         project_id: str,
@@ -401,9 +446,7 @@ class AdaptationService:
             "unresolved_count": unresolved_count,
             "page_policy_version": STORYBOARD_PAGE_POLICY_VERSION,
             "page_policy_valid": not page_policy_findings,
-            "page_policy_findings": [
-                finding.payload() for finding in page_policy_findings
-            ],
+            "page_policy_findings": [finding.payload() for finding in page_policy_findings],
             "is_current": bool(row["is_current"]),
             "created_at": str(row["created_at"]),
         }
@@ -430,14 +473,10 @@ class AdaptationService:
         parent_document = StoryboardDocument.model_validate_json(str(parent["document_json"]))
         if parent_document.schema_version != "1.1" or document.schema_version != "1.1":
             legacy_document = (
-                parent_document
-                if parent_document.schema_version != "1.1"
-                else document
+                parent_document if parent_document.schema_version != "1.1" else document
             )
             raise self._page_policy_application_error(
-                StoryboardPagePolicyError(
-                    storyboard_page_policy_findings(legacy_document)
-                )
+                StoryboardPagePolicyError(storyboard_page_policy_findings(legacy_document))
             )
         source = self._source_context(
             project_id,

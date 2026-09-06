@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MODULES_ROOT = ROOT / "backend" / "app" / "modules"
 DURABLE_WORK_ROOT = ROOT / "backend" / "app" / "platform" / "durable_work"
 RECOVERY_ROOT = ROOT / "backend" / "app" / "platform" / "recovery"
+BOOK_WORKFLOW_ROOT = ROOT / "backend" / "app" / "workflows" / "book_production"
 V02_DATABASE = ROOT / "tests" / "fixtures" / "v0.2" / "schema16.db.fixture"
 
 WRITE_TARGET = re.compile(
@@ -36,9 +37,7 @@ WRITE_TARGET = re.compile(
     r")\s+[\"`\[]?([a-zA-Z_][a-zA-Z0-9_]*)",
     re.IGNORECASE,
 )
-REFERENCE_TARGET = re.compile(
-    r"\bREFERENCES\s+[\"`\[]?([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE
-)
+REFERENCE_TARGET = re.compile(r"\bREFERENCES\s+[\"`\[]?([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
 SQL_MARKER = re.compile(
     r"\b(?:SELECT|CREATE|ALTER|DROP|INSERT|REPLACE|UPDATE|DELETE)\b", re.IGNORECASE
 )
@@ -49,6 +48,7 @@ def _module_sql() -> Iterable[tuple[str, Path, int, str]]:
         (MODULES_ROOT, None),
         (DURABLE_WORK_ROOT, "durable_work"),
         (RECOVERY_ROOT, "recovery"),
+        (BOOK_WORKFLOW_ROOT, "book_workflow"),
     )
     for root, fixed_owner in roots:
         for path in sorted(root.rglob("*.sql")):
@@ -73,8 +73,7 @@ def test_v02_fixture_tables_have_one_exact_registered_owner() -> None:
         actual = {
             str(row[0])
             for row in connection.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             )
         }
     assert len(TABLE_OWNER_ENTRIES) == len(TABLE_OWNERS)
@@ -82,8 +81,7 @@ def test_v02_fixture_tables_have_one_exact_registered_owner() -> None:
         table for table, introduced_in in TABLE_SCHEMA_VERSIONS.items() if introduced_in <= 16
     }
     assert actual == expected, (
-        f"unregistered={sorted(actual - expected)}; "
-        f"orphaned={sorted(expected - actual)}"
+        f"unregistered={sorted(actual - expected)}; orphaned={sorted(expected - actual)}"
     )
 
 
@@ -106,7 +104,7 @@ def test_database_migrations_are_globally_registered_and_module_files_are_not_or
 
     disk_paths = {
         path.relative_to(ROOT).as_posix()
-        for migration_root in (MODULES_ROOT, DURABLE_WORK_ROOT, RECOVERY_ROOT)
+        for migration_root in (MODULES_ROOT, DURABLE_WORK_ROOT, RECOVERY_ROOT, BOOK_WORKFLOW_ROOT)
         for path in migration_root.rglob("migrations/*.sql")
     }
     registered_paths = {
@@ -126,6 +124,11 @@ def test_database_migrations_are_globally_registered_and_module_files_are_not_or
         allowed_prefixes = (
             f"backend/app/modules/{migration.owner}/migrations/",
             f"backend/app/platform/{migration.owner}/migrations/",
+            *(
+                ("backend/app/workflows/book_production/migrations/",)
+                if migration.owner == "book_workflow"
+                else ()
+            ),
         )
         assert migration.source_path.startswith(allowed_prefixes)
 
@@ -151,7 +154,6 @@ def test_module_sql_writes_only_owner_tables_and_has_no_cross_module_cascade() -
                     violations.append(f"{location}: cascade references unregistered table {table}")
                 elif target_owner != source_owner:
                     violations.append(
-                        f"{location}: cross-module cascade {source_owner} -> "
-                        f"{target_owner}.{table}"
+                        f"{location}: cross-module cascade {source_owner} -> {target_owner}.{table}"
                     )
     assert not violations, "\n".join(violations)

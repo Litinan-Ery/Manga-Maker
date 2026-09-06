@@ -49,26 +49,43 @@ class TextLayer(PageContractModel):
         return self
 
 
+class PageLayoutSource(PageContractModel):
+    version_id: str = Field(min_length=1, max_length=64)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PageImageSource(PageContractModel):
+    generation_id: str = Field(min_length=1, max_length=64)
+    text_policy: Literal["local", "model"]
+
+
 class PageDocument(PageContractModel):
     schema_version: Literal["1.0", "2.0"] = "1.0"
     page_id: str = Field(min_length=1, max_length=64)
     page_number: int = Field(ge=1, le=10_000)
     width: int = Field(default=PAGE_WIDTH, ge=512, le=MAX_PAGE_WIDTH)
     height: int = Field(default=PAGE_HEIGHT, ge=512, le=MAX_PAGE_HEIGHT)
-    reading_direction: Literal[
-        "left_to_right", "right_to_left", "top_to_bottom"
-    ] = "left_to_right"
+    reading_direction: Literal["left_to_right", "right_to_left", "top_to_bottom"] = "left_to_right"
     color_mode: Literal["grayscale", "color"] = "grayscale"
     background_color: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     language: Literal["zh-Hans"] = "zh-Hans"
     template_id: str = Field(min_length=1, max_length=64)
     storyboard_version_id: str = Field(min_length=1, max_length=64)
+    layout_source: PageLayoutSource | None = None
+    page_image: PageImageSource | None = None
     panels: list[PanelPlacement] = Field(min_length=1, max_length=6)
     text_layers: list[TextLayer] = Field(default_factory=list, max_length=200)
     show_page_number: bool = True
 
     @model_validator(mode="after")
     def unique_ids_and_valid_links(self) -> PageDocument:
+        if self.page_image is not None:
+            if self.schema_version != "2.0" or any(
+                panel.asset_version_id != self.page_image.generation_id for panel in self.panels
+            ):
+                raise ValueError("full-page placements must refer to the page image")
+            if self.page_image.text_policy == "model" and self.text_layers:
+                raise ValueError("model lettering must not be duplicated by local text layers")
         if self.width * self.height > MAX_PAGE_PIXELS:
             raise ValueError("page canvas exceeds the local rendering pixel limit")
         if self.schema_version == "1.0" and (

@@ -21,6 +21,8 @@ export interface PromptInspectorPlan {
     positive_tags: string[];
     negative_tags: string[];
     relationship_action: string | null;
+    visual_description?: string | null;
+    composition_prompt?: string | null;
   };
   characters: PromptInspectorCharacter[];
   style_tags: string[];

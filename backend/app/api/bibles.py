@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..bibles.models import CharacterBibleDocument, StyleBibleDocument
 from ..bibles.service import MAX_REFERENCE_BYTES, BibleService
@@ -26,6 +26,13 @@ class ReviseCharacterBibleRequest(BaseModel):
 
 class ReviseStyleBibleRequest(BaseModel):
     document: StyleBibleDocument
+
+
+class ImportBibleBundleRequest(BaseModel):
+    storyboard_version_id: str = Field(min_length=1, max_length=64)
+    character_bible: CharacterBibleDocument
+    style_bible: StyleBibleDocument
+    source_note: str = Field(min_length=1, max_length=500)
 
 
 def verify_session(request: Request, headers: Headers) -> None:
@@ -57,6 +64,23 @@ async def generate_bible_bundle(
         project_id,
         body.storyboard_version_id,
         confirmed_data_send=body.confirmed_data_send,
+    )
+
+
+@router.post("/import", status_code=status.HTTP_201_CREATED)
+def import_bible_bundle(
+    project_id: str,
+    request: Request,
+    body: ImportBibleBundleRequest,
+    headers: Headers,
+) -> dict[str, Any]:
+    verify_session(request, headers)
+    return bible_service(request).import_bundle(
+        project_id,
+        body.storyboard_version_id,
+        body.character_bible,
+        body.style_bible,
+        source_note=body.source_note,
     )
 
 

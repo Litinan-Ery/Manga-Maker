@@ -165,11 +165,13 @@ class TxtIngestionService:
 
         source_file_id = str(uuid7())
         source_root = workspace / "source"
-        original_path = source_root / f"original-{source_file_id}.txt"
+        suffix = Path(str(row["original_filename"])).suffix.lower()
+        markdown = suffix in {".md", ".markdown"}
+        original_path = source_root / f"original-{source_file_id}{suffix if markdown else '.txt'}"
         normalized_path = source_root / f"normalized-{source_file_id}.txt"
         self._write_bytes(original_path, content)
         self._write_bytes(normalized_path, normalized_text.encode("utf-8"))
-        boundaries = detect_chapters(normalized_text)
+        boundaries = detect_chapters(normalized_text, markdown=markdown)
         chapter_set_id = str(uuid7())
         try:
             with self.database.writer() as connection:
@@ -721,12 +723,22 @@ def normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
 
 
-def detect_chapters(text: str) -> list[ChapterBoundary]:
+def detect_chapters(text: str, *, markdown: bool = False) -> list[ChapterBoundary]:
+    boundaries: list[ChapterBoundary] = []
+    if markdown:
+        headings = markdown_chapter_headings(text)
+        if headings:
+            if headings[0][0] > 0:
+                boundaries.append(ChapterBoundary("正文前内容", 0, headings[0][0]))
+            for index, (start, title) in enumerate(headings):
+                end = headings[index + 1][0] if index + 1 < len(headings) else len(text)
+                boundaries.append(ChapterBoundary(title, start, end))
+            validate_boundaries(boundaries, len(text))
+            return boundaries
     matches = list(CHAPTER_PATTERN.finditer(text))
     if not matches:
         return [ChapterBoundary(title="全文", start_offset=0, end_offset=len(text))]
 
-    boundaries: list[ChapterBoundary] = []
     if matches[0].start() > 0:
         boundaries.append(
             ChapterBoundary(
@@ -741,6 +753,29 @@ def detect_chapters(text: str) -> list[ChapterBoundary]:
         boundaries.append(ChapterBoundary(title=title, start_offset=match.start(), end_offset=end))
     validate_boundaries(boundaries, len(text))
     return boundaries
+
+
+def markdown_chapter_headings(text: str) -> list[tuple[int, str]]:
+    """Suggest H2 boundaries without modifying source offsets or parsing fenced content."""
+    headings: list[tuple[int, str]] = []
+    fence: str | None = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+        if marker:
+            run, remainder = marker.groups()
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not remainder.strip():
+                fence = None
+        elif fence is None:
+            heading = re.match(r"^ {0,3}##[ \t]+(.+?)\s*$", line)
+            if heading:
+                title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[1]).strip()
+                if title and len(title) <= 200:
+                    headings.append((offset, title))
+        offset += len(line)
+    return headings
 
 
 def validate_boundaries(boundaries: list[ChapterBoundary], text_length: int) -> None:

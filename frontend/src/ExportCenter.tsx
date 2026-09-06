@@ -29,6 +29,7 @@ export function ExportCenter({
   onProjectRestored,
 }: ExportCenterProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
+  const [scope, setScope] = useState<"chapter" | "book">("chapter");
   const [plan, setPlan] = useState<ExportPreflight | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [exports, setExports] = useState<ExportRevision[]>([]);
@@ -51,11 +52,12 @@ export function ExportCenter({
     return () => {
       active = false;
     };
-  }, [chapterId, onError, projectId]);
+  }, [chapterId, scope, chapterSet.chapter_set_id, onError, projectId]);
 
   async function handlePreflight() {
     await run(async () => {
-      const result = await preflightExport(projectId, chapterId);
+      const result = await preflightExport(projectId, scope === "book"
+        ? chapterSet.chapters.map((chapter) => chapter.chapter_id) : chapterId);
       setPlan(result);
       setConfirmed(false);
       setMessage("已冻结页面版本、顺序和哈希；尚未写出文件。");
@@ -148,8 +150,17 @@ export function ExportCenter({
         <section className="export-card">
           <h3>四种格式导出</h3>
           <label>
+            <span>导出范围</span>
+            <select value={scope} disabled={busy}
+              onChange={(event) => setScope(event.target.value as "chapter" | "book")}>
+              <option value="chapter">当前章节</option>
+              <option value="book">全书（全部 {chapterSet.chapters.length} 章）</option>
+            </select>
+          </label>
+          <label>
             <span>章节</span>
-            <select value={chapterId} onChange={(event) => setChapterId(event.target.value)}>
+            <select value={chapterId} disabled={busy || scope === "book"}
+              onChange={(event) => setChapterId(event.target.value)}>
               {chapterSet.chapters.map((chapter) => (
                 <option key={chapter.chapter_id} value={chapter.chapter_id}>
                   {chapter.ordinal}. {chapter.title}
@@ -166,7 +177,9 @@ export function ExportCenter({
               <ol>
                 {plan.pages.map((page) => (
                   <li key={page.page_version_id}>
-                    第 {page.page_number} 页 · v{page.version} · {page.render_sha256.slice(0, 12)}
+                    第 {plan.scope === "book" ? page.ordinal : page.page_number} 页
+                    {page.chapter_ordinal != null && `（第 ${page.chapter_ordinal} 章，第 ${page.page_number} 页）`}
+                    {" "}· v{page.version} · {page.render_sha256.slice(0, 12)}
                   </li>
                 ))}
               </ol>

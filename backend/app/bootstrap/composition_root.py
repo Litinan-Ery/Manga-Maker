@@ -7,6 +7,7 @@ from ..config import Settings
 from ..continuity.service import ContinuityService
 from ..database import Database
 from ..exports.service import ExportService
+from ..fullpages.service import FullPageService
 from ..generation.assets import AssetStore
 from ..generation.executor import GenerationExecutor
 from ..generation.queue import GenerationQueueService
@@ -33,7 +34,10 @@ from ..safety import SecretScanner
 from ..security import LocalSession
 from ..shared_kernel import SystemClock, Uuid7IdFactory
 from ..vault import CredentialVault
+from ..workflows.book_production.public import WorkflowContextService
+from ..workflows.book_production.store import CheckpointStore
 from .container import AppContainer, LegacyCompatibilityBindings
+from .context_reader import LegacyContextDomainReader
 from .legacy_adapters import LegacyAdaptationFacade
 
 
@@ -81,7 +85,7 @@ def build_app_container(settings: Settings) -> AppContainer:
     generation_queue = GenerationQueueService(database, bibles, prompting)
     book_production = BookProductionService(database, generation_queue)
     asset_store = AssetStore(database, generation_queue, lineage)
-    pages = PageService(database)
+    pages = PageService(database, layout=layout)
     composition = LegacyCompositionFacade(pages)
     asset_library = AssetLibraryService(database)
     revisions = RevisionService(database, generation_queue, pages)
@@ -120,6 +124,11 @@ def build_app_container(settings: Settings) -> AppContainer:
         recovery=recovery,
         generation_executor=generation_executor,
     )
+    full_pages = FullPageService(database, prompting, novelai, vault, pages)
+    workflow_context = WorkflowContextService(
+        CheckpointStore(database, projects.workspace_path),
+        LegacyContextDomainReader(ingestion, full_pages, pages),
+    )
     return AppContainer(
         settings=settings,
         database=database,
@@ -134,5 +143,7 @@ def build_app_container(settings: Settings) -> AppContainer:
         layout=layout,
         adaptation_facade=adaptation_facade,
         composition=composition,
+        full_pages=full_pages,
+        workflow_context=workflow_context,
         legacy=legacy,
     )

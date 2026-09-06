@@ -419,6 +419,7 @@ export interface PageTextLayer {
 }
 
 export interface PageDocument {
+  page_image?: { generation_id: string; text_policy: "local" | "model" } | null;
   schema_version: "1.0" | "2.0";
   page_id: string;
   page_number: number;
@@ -430,6 +431,7 @@ export interface PageDocument {
   language: "zh-Hans";
   template_id: string;
   storyboard_version_id: string;
+  layout_source?: { version_id: string; content_sha256: string } | null;
   panels: PagePanelPlacement[];
   text_layers: PageTextLayer[];
   show_page_number: boolean;
@@ -460,6 +462,9 @@ export type ExportFileKind = "engineering_package" | "png" | "pdf" | "cbz";
 
 export interface ExportPageSelection {
   ordinal: number;
+  chapter_id?: string;
+  chapter_ordinal?: number;
+  export_scope?: "book";
   page_id: string;
   page_number: number;
   page_version_id: string;
@@ -475,6 +480,8 @@ export interface ExportPreflight {
   project_id: string;
   project_title: string;
   chapter_id: string;
+  scope?: "chapter" | "book";
+  chapter_ids?: string[];
   chapter_title: string;
   schema_version: "1.0" | "1.1";
   page_count: number;
@@ -1028,6 +1035,8 @@ export interface StructuredPromptPackageV2 {
       positive_tags: string[];
       negative_tags: string[];
       relationship_action: string | null;
+      visual_description?: string | null;
+      composition_prompt?: string | null;
     };
     characters: StructuredCharacterV2[];
     style_tags: string[];
@@ -1954,14 +1963,15 @@ export async function getComicPageImage(
 
 export function preflightExport(
   projectId: string,
-  chapterId: string,
+  chapterId: string | string[],
 ): Promise<ExportPreflight> {
   return request<ExportPreflight>(
-    `/api/v1/projects/${projectId}/exports/preflight`,
+    `/api/v1/projects/${projectId}/exports/${Array.isArray(chapterId) ? "book/" : ""}preflight`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chapter_id: chapterId }),
+      body: JSON.stringify(Array.isArray(chapterId)
+        ? { chapter_ids: chapterId } : { chapter_id: chapterId }),
     },
     true,
   );
@@ -1972,12 +1982,13 @@ export function createExport(
   plan: ExportPreflight,
 ): Promise<ExportRevision> {
   return request<ExportRevision>(
-    `/api/v1/projects/${projectId}/exports`,
+    `/api/v1/projects/${projectId}/exports${plan.scope === "book" ? "/book" : ""}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chapter_id: plan.chapter_id,
+        ...(plan.scope === "book"
+          ? { chapter_ids: plan.chapter_ids } : { chapter_id: plan.chapter_id }),
         page_version_ids: plan.pages.map((page) => page.page_version_id),
         plan_fingerprint: plan.plan_fingerprint,
         confirmed: true,
@@ -2186,6 +2197,7 @@ export function revisePromptBundle(
       prompt_package_id: item.prompt_package_id,
       panel_id: item.panel_id,
       base_visual_tags: item.base_visual_tags,
+      visual_description: item.structured_package?.prompt_plan.base.visual_description || null,
       character_blocks: item.character_blocks.map((block) => ({
         character_id: block.character_id,
         tag_set_id: block.tag_set_id,
@@ -2362,7 +2374,7 @@ export async function getReferenceImage(
   return response.blob();
 }
 
-async function request<T>(path: string, init: RequestInit, needsSession: boolean): Promise<T> {
+export async function request<T>(path: string, init: RequestInit, needsSession: boolean): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (needsSession) {

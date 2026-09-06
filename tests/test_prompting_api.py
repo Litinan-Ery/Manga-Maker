@@ -45,9 +45,7 @@ def test_three_field_text_model_configuration_encrypts_key_locally(
     assert payload["model_name"] == "structured-manga-model"
     assert payload["text_model_profile_id"] == project["project_id"]
     assert secret not in saved.text
-    assert client.app.state.vault.get_secret(
-        f"text-model-{project['project_id']}"
-    ) == secret
+    assert client.app.state.vault.get_secret(f"text-model-{project['project_id']}") == secret
     with client.app.state.database.reader() as connection:
         config = dict(connection.execute("SELECT * FROM text_model_configs").fetchone())
         audits = [
@@ -103,9 +101,10 @@ def test_prompt_packages_inject_fixed_tags_and_freeze_all_versions(
     assert len(binding["dimension_selection_sha256"]) == 64
     structured = package["structured_package"]
     assert structured["schema_version"] == "2.0"
-    assert structured["prompt_plan_sha256"] == structured["prompt_plan"][
-        "content_sha256"
-    ]
+    # The text-model fixture omits visual_description: the approved storyboard survives.
+    assert structured["prompt_plan"]["base"]["visual_description"]
+    assert "medium shot" in structured["prompt_plan"]["base"]["composition_prompt"]
+    assert structured["prompt_plan_sha256"] == structured["prompt_plan"]["content_sha256"]
     assert structured["prompt_plan"]["characters"][0]["action"]
     assert structured["prompt_plan"]["characters"][0]["center"] == {
         "x": 0.5,
@@ -115,18 +114,18 @@ def test_prompt_packages_inject_fixed_tags_and_freeze_all_versions(
     assert block["fixed_tags"] == tag_set["fixed_tags"]
     assert block["fixed_tags_sha256"] == tag_set["fixed_tags_sha256"]
     assert all(tag in package["compiled_prompt"] for tag in tag_set["fixed_tags"])
-    assert hashlib.sha256(package["compiled_prompt"].encode()).hexdigest() == package[
-        "compiled_prompt_sha256"
-    ]
-
-    estimate = estimate_plan(
-        client, session_headers, project_id, str(chapter["chapter_id"])
+    assert (
+        hashlib.sha256(package["compiled_prompt"].encode()).hexdigest()
+        == package["compiled_prompt_sha256"]
     )
+
+    estimate = estimate_plan(client, session_headers, project_id, str(chapter["chapter_id"]))
     assert estimate["character_tag_bundle_version_id"] == tag_version["version_id"]
     assert estimate["prompt_bundle_version_id"] == prompt_version["version_id"]
-    assert estimate["text_model_config_revision"] == prompt_version["document"][
-        "text_model_config_revision"
-    ]
+    assert (
+        estimate["text_model_config_revision"]
+        == prompt_version["document"]["text_model_config_revision"]
+    )
     assert estimate["panels"][0]["compiled_prompt"] == package["compiled_prompt"]
 
     changed = copy.deepcopy(tag_version["document"])
@@ -233,8 +232,7 @@ def test_prompt_inspector_maps_current_snapshot_without_secrets_or_external_requ
         "estimated_cost_upper_anlas": None,
         "cost_status": "requires_generation_estimate",
         "cost_notice": (
-            "Prompt 审批不产生费用。保守成本上限在生成预估中按用户确认的"
-            "每格上限计算。"
+            "Prompt 审批不产生费用。保守成本上限在生成预估中按用户确认的每格上限计算。"
         ),
     }
     panel = payload["panels"][0]
@@ -354,58 +352,54 @@ def test_manual_prompting_revisions_preserve_stable_artifact_ids(
     changed_prompt = {
         "schema_version": "1.0",
         "storyboard_version_id": prompt_document["storyboard_version_id"],
-        "character_tag_bundle_version_id": prompt_document[
-            "character_tag_bundle_version_id"
-        ],
+        "character_tag_bundle_version_id": prompt_document["character_tag_bundle_version_id"],
         "packages": [
             {
                 "prompt_package_id": package["prompt_package_id"],
                 "panel_id": package["panel_id"],
                 "base_visual_tags": package["base_visual_tags"],
                 "character_blocks": [
-                        {
-                            "character_id": block["character_id"],
-                            "tag_set_id": block["tag_set_id"],
-                            "variable_tags": block["variable_tags"],
-                            "negative_tags": next(
-                                character["negative_tags"]
-                                for character in package["structured_package"][
-                                    "prompt_plan"
-                                ]["characters"]
-                                if character["character_id"] == block["character_id"]
-                            ),
-                            "action": next(
-                                character["action"]
-                                for character in package["structured_package"][
-                                    "prompt_plan"
-                                ]["characters"]
-                                if character["character_id"] == block["character_id"]
-                            ),
-                            "order": next(
-                                character["order"]
-                                for character in package["structured_package"][
-                                    "prompt_plan"
-                                ]["characters"]
-                                if character["character_id"] == block["character_id"]
-                            ),
-                            "center": next(
-                                character["center"]
-                                for character in package["structured_package"][
-                                    "prompt_plan"
-                                ]["characters"]
-                                if character["character_id"] == block["character_id"]
-                            ),
-                        }
+                    {
+                        "character_id": block["character_id"],
+                        "tag_set_id": block["tag_set_id"],
+                        "variable_tags": block["variable_tags"],
+                        "negative_tags": next(
+                            character["negative_tags"]
+                            for character in package["structured_package"]["prompt_plan"][
+                                "characters"
+                            ]
+                            if character["character_id"] == block["character_id"]
+                        ),
+                        "action": next(
+                            character["action"]
+                            for character in package["structured_package"]["prompt_plan"][
+                                "characters"
+                            ]
+                            if character["character_id"] == block["character_id"]
+                        ),
+                        "order": next(
+                            character["order"]
+                            for character in package["structured_package"]["prompt_plan"][
+                                "characters"
+                            ]
+                            if character["character_id"] == block["character_id"]
+                        ),
+                        "center": next(
+                            character["center"]
+                            for character in package["structured_package"]["prompt_plan"][
+                                "characters"
+                            ]
+                            if character["character_id"] == block["character_id"]
+                        ),
+                    }
                     for block in package["character_blocks"]
                 ],
                 "style_tags": package["style_tags"],
                 "negative_tags": package["negative_tags"],
-                "relationship_action": package["structured_package"]["prompt_plan"][
-                    "base"
-                ]["relationship_action"],
-                "continuity_tags": package["structured_package"]["prompt_plan"][
-                    "continuity_tags"
+                "relationship_action": package["structured_package"]["prompt_plan"]["base"][
+                    "relationship_action"
                 ],
+                "continuity_tags": package["structured_package"]["prompt_plan"]["continuity_tags"],
             }
             for package in prompt_document["packages"]
         ],
@@ -419,3 +413,29 @@ def test_manual_prompting_revisions_preserve_stable_artifact_ids(
     )
     assert prompt_revision.status_code == 422
     assert prompt_revision.json()["error"]["code"] == "INVALID_MODEL_ARTIFACT_IDS"
+
+    description = "She turns, surprised.\nRain falls outside the empty room."
+    changed_prompt["packages"][0]["prompt_package_id"] = prompt_document["packages"][0][
+        "prompt_package_id"
+    ]
+    changed_prompt["packages"][0]["visual_description"] = description
+    revised = client.post(
+        f"/api/v1/projects/{project_id}/prompting/prompt-bundles/"
+        f"{prompt_version['version_id']}/revisions",
+        headers=session_headers,
+        json={"document": changed_prompt},
+    )
+    assert revised.status_code == 201, revised.text
+    version = revised.json()
+    assert (
+        version["document"]["packages"][0]["structured_package"]["prompt_plan"]["base"][
+            "visual_description"
+        ]
+        == description
+    )
+    inspected = client.get(
+        f"/api/v1/projects/{project_id}/prompting/prompt-bundles/{version['version_id']}/inspector",
+        params={"snapshot_sha256": version["snapshot_sha256"]},
+    )
+    assert inspected.status_code == 200, inspected.text
+    assert description in inspected.json()["panels"][0]["provider_payload"]["input"]

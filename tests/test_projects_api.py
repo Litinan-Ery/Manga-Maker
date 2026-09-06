@@ -15,6 +15,40 @@ def create_project(
     return response.json()
 
 
+def test_markdown_import_preserves_source_and_ignores_fenced_headings(
+    client: TestClient, session_headers: dict[str, str], app_data_dir: Path
+) -> None:
+    project = create_project(client, session_headers)
+    project_id = project["project_id"]
+    original = (
+        "\ufeff# 测试小说\r\n\r\n## 第一部\r\n正文甲。\r\n"
+        "```text\r\n## 不是章节\r\n```\r\n"
+        "## 2\r\n正文乙。\r\n~~~\r\n## 也不是章节\r\n~~~\r\n"
+    ).encode()
+    prefix = f"/api/v1/projects/{project_id}/source"
+    preflight = client.post(
+        prefix + "/preflight",
+        headers=session_headers,
+        files={"file": ("novel.md", original, "text/markdown")},
+    ).json()
+    response = client.post(
+        prefix + "/confirm",
+        headers=session_headers,
+        json={"preflight_id": preflight["preflight_id"], "encoding": "utf-8"},
+    )
+    assert response.status_code == 201, response.text
+    result = response.json()
+    chapters = result["chapters"]
+    assert [c["title"] for c in chapters] == ["正文前内容", "第一部", "2"]
+    reconstructed = "".join(
+        client.get(prefix + f"/chapters/{c['chapter_id']}/text").json()["text"] for c in chapters
+    )
+    assert reconstructed == original.decode().replace("\r\n", "\n").lstrip("\ufeff")
+    source_path = app_data_dir / "projects" / project_id / "source"
+    assert (source_path / f"original-{result['source_file_id']}.md").read_bytes() == original
+    assert preflight["sha256"] == hashlib.sha256(original).hexdigest()
+
+
 def test_create_project_builds_safe_workspace(
     client: TestClient, session_headers: dict[str, str], app_data_dir: Path
 ) -> None:

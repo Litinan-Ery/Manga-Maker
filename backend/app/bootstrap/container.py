@@ -9,6 +9,7 @@ from ..config import Settings
 from ..continuity.service import ContinuityService
 from ..database import Database
 from ..exports.service import ExportService
+from ..fullpages.service import FullPageService
 from ..generation.assets import AssetStore
 from ..generation.executor import GenerationExecutor
 from ..generation.queue import GenerationQueueService
@@ -31,6 +32,7 @@ from ..recovery import RecoveryService
 from ..safety import SecretScanner
 from ..security import LocalSession
 from ..vault import CredentialVault
+from ..workflows.book_production.public import WorkflowContextService
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,4 +74,6 @@ class AppContainer:
     layout: LayoutFacade
     adaptation_facade: AdaptationFacade
     composition: CompositionFacade
+    full_pages: FullPageService
+    workflow_context: WorkflowContextService
     legacy: LegacyCompatibilityBindings

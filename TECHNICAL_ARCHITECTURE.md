@@ -3,13 +3,27 @@
 | 项目 | 内容 |
 |---|---|
 | 文档版本 | v0.3 |
-| 日期 | 2026-08-13 |
+| 日期 | 2026-09-06 |
+| 本次架构补充 | FR-25/26 必备封面与启动前画家风格确认，新增目标设计待实现；见第 25 节 |
+| 上下文恢复交付 | FR-24 / AC-13 本地检查点、预算/失败状态机和脚本/API/UI 已实现；宿主集成与整书验收分别记录于 MM-078，见第 23 节 |
 | 状态 | v0.2 本地/Mock 基线已实现；v0.3 架构底座、Storyboard 1.1 逐页政策、版式先行、PromptPlan/PromptPackage v2、NovelAI 多角色映射、审批冻结与 Prompt Inspector 已完成 Mock 验收，候选/审片、迁移发布门禁与 Token 流水线仍待实现 |
 | 对应产品文档 | [README.md](README.md)、[PRD.md](PRD.md) |
 | P0 形态 | macOS 本机单用户、本地 Web 应用 |
 | P0 验收单位 | 一个 TXT 小说章节的完整漫画化闭环 |
 
 > 本文定义 v0.3 目标系统边界、组件、数据流、接口和验收方法。当前 v0.2 已交付从 TXT 到四格式导出的离线 Mock 单章闭环，并覆盖启动 reconciliation、未知计费、磁盘不足、诊断脱敏和凭证零泄露扫描；跨章节连续性、整本有界计划、高级页面 profile、扩展模板和可复用素材库也已存在。v0.3 已按工单完成架构底座、Storyboard 1.1 自动 `page_type` 与普通页 3–6 格本地门禁、版式先行、结构化多角色映射、审批冻结和 Prompt Inspector，其他目标不得由本文推断为已交付。2026-08-29 已以授权《沙王》完成真实 NovelAI V5 Full 零 Anlas 12 页图像、重绘、排版与导出闭环；Storyboard 1.1 已完成本地 Mock/E2E 验收，但外部文本模型真实分类、付费 Anlas、多候选接受/PageApproval 和其余 v0.3 目标仍未验收。
+
+## 2026-09-06 分镜链路实现补充
+
+本节记录本轮已实现范围，详细用例与分层结果见 [分镜修复验收](docs/storyboard-repair-cases.md)。其余 v0.3 目标状态不变。
+
+- `pages/layout.py` 从批准的 LayoutFacade 快照递归解析父子格框，转换为确定性页面像素；新 PageVersion 绑定 `layout_source`。相同版本拼页幂等，新版式保留旧素材、文字编辑与页面历史。
+- PromptPlan 的可选 `base.visual_description` 保留完整自然语言，`composition_prompt` 从景别、焦点、裁切保护和文字区确定性编译。旧字段未出现时不加入序列化，保护历史哈希。NovelAI mapper 把这些段落传入实际 base caption。
+- `fullpages/compiler.py` 和 `FullPageService` 提供独立 V5 Full 整页用例，冻结批准输入、文字策略、seed、模型配置、ProviderExecutionSpec 与最终 payload。`generation_scope=full_page` 的 base-only 契约与逐格角色区块校验分开。
+- schema 33 在 production 名下增加 `full_page_generations`。逐格队列 claim 与整页 claim 都在同一 SQLite writer 事务中检查两种运行记录，实现跨模式单在途；整页固定单候选、最多一次图像请求，未知结果转人工核查，启动不重放。
+- `/full-pages` 提供 sources、preview、history、generate、content、adopt。预览不出网，generate 要求冻结哈希与明确确认；采用要求成图 ready、来源仍有效以及当前页修订匹配。
+- PageDocument 的 `page_image` 让渲染器整图绘制一次，不再把同一整页图裁进各格。本地文字策略保留图层；模型文字策略禁止重复图层。不可变图像、provenance 和整页记录进入 v1.5 工程包，旧 v1.5 包无此可选表仍可恢复。
+- 恢复工程重新绑定 ID 与版式哈希，保留成图但清除执行审批；重新配置、预览与确认后才能创建新的生成。V5 逐格映射升级为 `novelai-image-2026-09-06.5-explicit-uc-1`，整页映射为 `novelai-v5-full-page-2026-09-06.1`。
 
 ## 1. 架构结论
 
@@ -18,7 +32,7 @@ Manga Maker v0.3 继续采用本地模块化单体：React/TypeScript 提供阶�
 最重要的技术决策如下：
 
 1. **不把 NovelAI Scripting API 当作外部集成通道。** Scripting API 运行在 NovelAI 网页内部的隔离 Web Worker，只能调用预定义的 `api.v1` 接口，不能任意访问网络或 DOM；其 Generation API 当前是文字生成接口，不提供图片生成。Manga Maker 直接从本地后端调用独立的 Image API。
-2. **先批准版式，再生成单格画面。** `PageLayoutDraft` 在 Prompt 与图像请求之前冻结格框比例、阅读顺序、焦点、人物粗略位置和文字安全区；NovelAI 仍只生成单格画面，本地确定性合成器负责格框、裁切、气泡、中文对白、旁白、音效和页码。
+2. **先批准版式，再生成画面。** `PageLayoutDraft` 在 Prompt 与图像请求之前冻结格框比例、阅读顺序、焦点、人物粗略位置和文字安全区；默认逐格模式由本地合成器负责格框、裁切和文字。V5 Full 整页模式把版式作为模型参考，一页生成一图，人工检查后采用。
 3. **每次外部生成都来自可审计的人类操作。** 用户确认固定章节、面板清单、模型、参考图和成本上限后，才能启动有界任务；恢复暂停或崩溃任务需要新的用户操作。
 4. **P0 默认串行。** 同一时刻最多存在一个在途 NovelAI 请求，不做隐藏并发、定时生成或无限后台生产。
 5. **领域契约与供应商请求分离。** `ImageIntent`、`PromptPlan`、`GenerationSpec` 和 NovelAI 专用 `ProviderExecutionSpec` 分层；版本化映射器把结构化 base/角色正负区块/坐标转换为当前官方字段，禁止先扁平化再反推角色。
@@ -229,13 +243,13 @@ flowchart LR
 |---|---|---|
 | `project_source` | Project、SourceFile/SourceChapter、SourceAnchor、工作区身份、导入与章节边界 | Storyboard、模型调用、生成任务 |
 | `text_execution` | TextModelProfile 非敏感配置引用、ModelCapabilitySnapshot、TokenBudget、TextStageRun、checkpoint、token ledger | 理解漫画语义、决定页/格内容、构造 NovelAI Prompt |
-| `adaptation` | StoryBeat、Storyboard 1.1、`PageType`、逐页非空与格数政策、来源覆盖、章节/场景/页/格改编不变量和分镜审批 | 页面几何、角色固定 Tags、供应商请求 |
-| `world_bible` | CharacterBible、CharacterTagSet、StyleBible、ContinuityLedger、参考素材的语义归属与审批 | 生成排队、页面渲染、候选接受 |
+| `adaptation` | StoryBeat、Storyboard 1.1、`PageType`、逐页非空与格数政策、来源覆盖、章节/场景/页/格改编不变量和分镜审批；新增 CoverBrief 语义计划，待 §25 实现 | 页面几何、角色固定 Tags、供应商请求 |
+| `world_bible` | CharacterBible、CharacterTagSet、StyleBible、ContinuityLedger、参考素材的语义归属与审批；新增 ArtistStyleIntent 的项目级确认，待 §25 实现 | 生成排队、页面渲染、候选接受 |
 | `layout` | 消费已批准 StoryboardPage Snapshot，按页型/格数选择模板；拥有 PageLayoutDraft、FrameSpec、阅读顺序、焦点/安全区、DimensionSelection 和版式审批 | 推断或修改 `page_type`、图像 HTTP、最终页面文字渲染 |
 | `prompting` | PromptPlan/PromptPackage、固定 Tags 注入、角色区块与冲突校验、Prompt 审批 | 文本模型/NovelAI HTTP、任务调度、图片落盘 |
 | `production` | GenerationApproval、GenerationSpec、ProviderExecutionSpec、GenerationJob/Item/Attempt、AssetVersion、用于 inpaint 的 MaskAsset | 候选美术判断、页面批准、成品导出 |
 | `review` | PanelCandidateSet、QualityRun/Finding、ReviewDecision、PageApproval、接受率等质量指标 | 修改原始素材、发起未获授权的生成、最终编码格式 |
-| `composition` | PageVersion、文字/气泡/格框图层、规范渲染与页面派生物 | 角色/Prompt 规则、供应商调用、发布授权 |
+| `composition` | PageVersion、文字/气泡/格框图层、规范渲染与页面派生物；新增 BookComposition 的封面/正文成员及顺序，待 §25 实现 | 角色/Prompt 规则、供应商调用、发布授权 |
 | `asset_catalog` | 项目内可复用 AssetVersion 引用的类型、名称、标签、备注与归档状态 | 复制/修改原始素材、生成任务、候选接受 |
 | `exporting` | ExportPreflight、ExportRevision、工程包、PNG/PDF/CBZ、清单与秘密扫描 | 自动修复页面或修改上游批准 |
 | `lineage` | ArtifactRef、依赖边、失效事件、stale 原因解释 | 保存业务文档内容、决定业务边是否合法 |
@@ -668,6 +682,8 @@ flowchart LR
 
 `finish_reason` 截断、空 content、上下文超限、Schema 不完整和证据失败使用不同错误码。只有响应基本完整但格式可修复时，才允许最多两次结构修复；修复调用也有独立 TokenBudget 和 attempt。阶段产物通过 Schema、来源和业务不变量校验后才写 checkpoint 并解锁下游。
 
+> 7.3 的 TokenBudget 管理应用内单次文本调用；跨工具、图片和多轮任务的累计上下文由[第 23 节](#long-task-context-recovery)定义。两者分别计量与验收，后者不能绕过前者或修改图像生成审批。
+
 ### 7.4 图片生成适配器
 
 ```python
@@ -692,7 +708,7 @@ class ImageGenerationProvider(Protocol):
 - crop safe rect 可被至少一个当前模型合法尺寸满足；
 - PageLayoutDraft 内容哈希和审批仍有效。
 
-`LayoutTemplateCatalog` 以 `(page_type, panel_count, production_profile)` 查询模板：`standard` 只返回 3–6 格模板，`cover/splash/special` 可返回 1–6 格模板。前端的模板过滤只是体验层，后端 `LayoutPlanner` 与 `LayoutValidator` 必须重复执行同一公开政策；layout 不得根据格数反推或改写 `page_type`。用户把普通页手工编辑为 1–2 格时保存 Storyboard 新版本，但分镜审批和 Layout 创建均失败，直到页面规划阶段由模型生成合法的新分类/分镜。
+`LayoutTemplateCatalog` 以 `(page_type, panel_count, production_profile)` 查询模板：`standard` 只返回 3–6 格模板，`cover/splash/special` 可返回 1–6 格模板。前端的模板过滤只是体验层，后端 `LayoutPlanner` 与 `LayoutValidator` 必须重复执行同一公开政策；layout 不得根据格数反推或改写 `page_type`。用户把普通页手工编辑为 1–2 格时，Storyboard 修订保存即失败，分镜审批和 Layout 创建也继续阻断，直到用户把格数改回合法范围，或由模型在页面规划阶段生成合法的新分类/分镜。
 
 `DimensionSelector` 不硬编码统一 `832×1216`。它从版本化 capability profile 的合法 `(width, height, pixel_limit, cost_class)` 集合中，按以下稳定排序选择：先最小化宽高比误差，再最小化 crop safe rect 风险，再接近目标像素，最后按成本与固定尺寸键破同分。输出 `DimensionSelection`，保存候选列表、规则版本、选中原因和 expected crop ratio，成为 GenerationSpec 的一部分。
 
@@ -1279,6 +1295,8 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 
 ## 18. v0.3 实施顺序
 
+FR-24 的实施顺序见[23.9](#context-recovery-delivery)：先完成应用可控制的摘要、检查点和恢复核对，再接宿主预算与压缩能力。此增量不将下列尚未实现的 v0.3 目标标为完成。
+
 1. **模块与契约基线**：冻结 PRD/本文、模块所有权表、依赖白名单、Storyboard 1.1/PageType/页面政策、PageLayoutDraft/PromptPlan/Review Schema、ADR、官方 Swagger hash 和 v0.2 → v0.3 fixture。
 2. **先建架构护栏**：建立纵向 module skeleton、typed AppContainer、table/migration registry、Port contract harness 和 backend/frontend architecture tests；用 legacy adapter 保持现有行为。
 3. **依赖图与 durable work 基础**：增加 artifact/dependency/invalidation、work item/outbox/lease；先接纯本地任务并实现 SSE replay，不改变现有付费授权边界。
@@ -1336,6 +1354,7 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 18. 一个授权章节完成版式 → 多角色 → 候选/QC/接受 → PageApproval → 导出的真实闭环，并报告接受率、修复、调用、估算/实际成本边界、墙钟和人工质量；
 19. 未通过项明确列出，不能用社区项目、文档或 mock 代替真实产品验收；
 20. Storyboard 1.1 的 PageType/逐页格数政策完成单元、Schema、文本修复、API、Layout consumer、E2E 和 1.0 只读升级测试；普通页 3/6 格通过，1/2/7 格与空页失败，特殊页 1/2/6 格通过且不要求用户另行标记。
+21. 交付 FR-24 时，累计上下文预算、检查点事务、恢复包、宿主能力降级、重试熔断与单写者恢复通过 PRD 的 UC-CTX-01～UC-CTX-10；该要求尚未实现，不能由文档变更推断为已通过。
 
 ## 21. 官方参考
 
@@ -1353,8 +1372,257 @@ CI 增加独立 `tests/architecture/`，使用 Python AST/模块图和前端 imp
 
 ## 22. 文档边界
 
+- 第 23 节的上下文编排器、宿主适配端口、检查点扩展及接口均为目标设计；当前已存在的逐页落盘和任务恢复能力不代表这些新增机制已经完成。
 - 本文以技术设计为主，不应据此推断功能已经交付；当前实现边界以 README 和开发工单为准。
 - v0.3 的 Storyboard 1.1 自动 `page_type` 与普通页 3–6 格政策、PageLayoutDraft、Artifact Dependency Graph、durable job/outbox、PromptPlan/PromptPackage v2、结构化多角色 ProviderExecutionSpec、GenerationApproval 冻结和 Prompt Inspector 已按工单完成 Mock 验收；Candidate/Quality/Review/PageApproval、迁移发布门禁和分层 Token Pipeline 仍是待实现目标。Mock 通过不等于外部文本模型真实分类、真实付费服务或发布门禁已经验收。
 - GitHub 社区项目仅作为公开设计参考，未被安装，也不构成 Manga Maker 的供应商支持承诺。
 - 本文不是法律意见。用户仍需确认小说、参考图、字体和生成内容的权利与发布条件。
 - 开发 NovelAI 适配器与每次真实验收前必须重新读取官方 Swagger、文档和条款，并记录新的核对日期。
+
+<a id="long-task-context-recovery"></a>
+
+## 23. 长任务上下文编排与检查点恢复（FR-24，2026-09-06）
+
+### 23.1 架构目标与控制边界
+
+对应 [PRD 第 25 节](PRD.md#long-task-context-recovery)、FR-24、NFR-07 和 AC-13。本地实现已落在 MM-072～076，验证记录见[验收报告](docs/context-recovery-acceptance.md)。预算策略只约束接入路径；当前适配器没有外部 Codex 强制压缩、历史替换或自动新建任务能力，真实集成为 MM-078。
+
+触发案例是一次 Codex 长任务在最后正常调用达到 236,925 / 258,400 输入 token 后，连续两次远程压缩连接/响应解码失败。此前 5 次压缩成功，最后周期有 53 个图片块；因此既需要限制材料增长，也需要在模型无法继续调用时仍可恢复的持久状态。图片规模与网络错误之间的直接因果尚未证实。
+
+| 控制层 | 负责范围 | 能力边界 |
+|---|---|---|
+| 应用内 `text_execution` | TextStageRun 的输入、Schema、输出预留、分片及阶段检查点 | 沿用 7.3；不能读取或修改外部 Codex 的会话历史 |
+| `chapter_workflow` / `book_workflow` | 工作单元、跨模块引用、任务检查点、执行权和恢复协调 | 不复制领域业务真源，不重放生成审批 |
+| 项目工具/运行脚本 | 返回小摘要、分页证据和明确的操作状态 | 预算只对经过该工具的返回路径有效 |
+| 外部宿主/自建执行器 | 实际上下文计数、请求前拦截、压缩和上下文替换 | 通过能力端口显式接入；无支持时采用检查点交接，不伪装为自动恢复 |
+
+应用自身的分阶段文本请求可直接从结构化产物构造下一次输入，通常不需要继承外部聊天历史。检查点和恢复计划均由本地确定性逻辑读取；不依赖压缩失败后再发一次模型请求。
+
+### 23.2 组件与数据所有权
+
+继续遵守 5.2～5.7 的模块所有权和公开契约，不增加跨模块万能 repository。
+
+| 已实现组件或适配边界 | 所有者/位置 | 输入与输出 |
+|---|---|---|
+| `capture()` / `manifest_units()` | bootstrap 只读适配器 / 生产脚本 | 从冻结计划或完整清单生成稳定 `unit_id`；脚本每批最多 5 页，审查按页记录；当前接入整页生产路径 |
+| `decide_budget()` | `platform/context_budget` 纯策略 | `ContextObservation + ContextPolicy + InputEvent[]` → `BudgetDecision`；不判断漫画质量、不发网络请求 |
+| `WorkflowContextCoordinator` | workflow application | 决定何时保存、等待、压缩或交接；依赖预算、checkpoint 和宿主端口 |
+| `CheckpointStore` | `workflows/book_production/store.py` | SQLite 中保存 revision、租约、产物引用和状态；不可变文件发布后在同一写事务提交指针 |
+| `WorkflowContextService` / `ContextDomainReader` | workflow query + bootstrap 只读兼容适配 | 通过领域公开查询返回计数、下一单元及分页证据；不扫描业务私表或默认返回全部正文 |
+| `ContextHostPort` / `LocalHandoffHost` | `workflows/book_production/host.py` | 提供能力声明和压缩端口；默认能力全部为 false，测试适配器可注入；历史替换尚无实现 |
+| 生成查询与恢复 | `production` | 使用 generation/attempt ID 查询事实，沿用单在途约束、批准和未知结果处理 |
+| 视觉记录与失效 | `review`，关联 `lineage` / `composition` | 复用有效检查结论，依赖变化触发精确失效；实际批准仍走现有领域命令 |
+
+SQLite 及领域不可变文件继续是正式业务真源。`LegacyContextDomainReader` 通过 `TxtIngestionService`、`FullPageService`、`PageService` 的公开方法核对原文、冻结输入、生成与排版文件。`ReviewRecord` 是绑定证据的审查记录，不构成 PageApproval。`scripts/produce_authored_manga.py` 的清单检查点是脚本状态投影；登记工作流后还会通过 API 保存应用检查点，不能反向覆盖领域对象或授予审批。
+
+### 23.3 预算对象与请求前决策
+
+策略版本为 `context-budget-1`，检查点 schema 为 `1.0`；初始数值沿用 PRD 25.3，配置调整需要保留试验与验收记录。准确字段以 Pydantic 契约为准：
+
+| 对象 | 最小字段 |
+|---|---|
+| `ContextPolicy` | `version`、50%/60%/70% 水位、40% 恢复目标、80% 请求预留门限、输出预留、合计文本/单结果预算、单次图片数、窗口图片阈值 |
+| `ContextObservation` | `window_id`、`model_id`、`context_limit`、`current_tokens`、`counted_through`、`images_in_window`、`observed_at`、`measurement=actual/estimated/stale/unknown`；能力由宿主端口单独声明 |
+| `InputEvent` | `sequence / text_tokens / image_tokens / images`；重复序号拒绝，只累计观测游标后的事件；`planned_output` 单独传入 |
+| `BudgetDecision` | `continue/checkpoint/compact/handoff`、触发原因、当前值与投影峰值、策略版本、下一步可用输入预算 |
+| `ToolResultEnvelope` | `summary`、`total_items`、`failure_count`、失败索引引用、`returned_range`、`truncated`、原始大小、完整 artifact 引用、`next_cursor` |
+
+预算计算为 `U + Δ + R ≤ 0.8 × W`：`U` 是已经计入的有效上下文，`Δ` 只包含观测游标之后尚未计入的事件，`R = max(16,000, 0.1 × W)` 为初始输出预留。若实际计划输出更大则取更大值。指令、工具定义、Schema 和推理输出按宿主计数语义计入一次，不重复相加；账单累计用量不能作为 `U`。
+
+60% 水位先持久化再尝试压缩；70% 或预留不足时不加入新材料。压缩成功后查询新 `context_window_id` 和计数，目标低于 40%；没有新计数时保持未验证状态，不能因为接口返回成功就继续大批输入。宿主只提供滞后日志时记录 `stale`，依赖保守预留与单元边界；窗口未知时使用有来源的保守策略或转交接，不能自行扩大窗口。
+
+一次编排的所有文本结果共用 6,000-token 目标；单个代码/日志通常 ≤ 2,000 token。先写安全结果，再构造受控 envelope；对多个子调用先合并计量，不能各自用满总预算。失败 ID 过多时返回精确失败总数及可分页索引，不能用截断隐藏失败。即使宿主只支持软性约束，本地查询接口仍须实施自身返回上限；完全绕过该接口的工具不在保证范围内。
+
+一次最多 2 个图片输入，窗口累计 12 个高分辨率输入后进入检查点评估。图片计数与文本 token 分开记录；正文、图片编码和完整浏览器树不进入常驻摘要。不能通过缩小至不可辨认的图片满足验收；细节仍需清晰视图。图片的实际计数无法获得时，单图输入加保守估计，并用后续实际用量校准。
+
+### 23.4 检查点契约与存储
+
+migration `0034_context_checkpoints.sql` 已注册到统一 runner，四张表 `workflow_context_runs/checkpoints/artifacts/events` 由 `book_workflow` 独占。`TaskSnapshot` 保存目标、约束、验收标准、阶段、下一动作、来源引用、稳定页码单元、检查证据和未决项；`RuntimeState` 保存 epoch、尝试次数、观测、revision 和租约。生成 ID 与冻结计划哈希必须成对出现。
+
+| 字段组 | 字段及约束 |
+|---|---|
+| 身份与版本 | `schema_version / checkpoint_id / run_id / revision / sha256`，SQLite 元数据另存 `created_at` |
+| 完整目标 | `objective / constraints / acceptance_criteria`，恢复不能缩小范围或丢弃限制 |
+| 当前进度 | `stage / current_unit / units / next_action`；每个 unit 保存稳定 ID、全书页码和产物引用，完成状态重新从领域读取 |
+| 来源与工作区 | 项目 UUID 解析工作区；`source_refs` 包含类型、UUID 和 SHA256；通用代码维护任务的 Git/worktree 专属契约仍属扩展 |
+| 证据与未决项 | `source_refs / check_refs / open_questions` 及每个 unit 的 `review.evidence_id`；失败明细在证据产物中 |
+| 在途状态 | unit 的 `generation_id + plan_sha256`，运行/未知/失败/ready 每次按 ID 查询；不复制供应商 journal 或审批，不保存密钥 |
+| 上下文 | RuntimeState 的 `observation / context_epoch / compaction_attempts / retry_at / last_error`；决策返回 `policy_version` |
+| 写入控制 | `expected_revision / writer_id / lease_expiry / fencing_token` |
+
+应用不可变恢复文件位于 `<project-workspace>/context/<run-id>/`：
+
+```text
+checkpoint-<uuid>.json           # 不可变 TaskSnapshot
+evidence-<uuid>.json             # 脱敏结构化证据
+recovery_bundle-<uuid>.json      # 不超过 8,000 UTF-8 字节上界的交接文件
+```
+
+最新指针和协调事件存于 SQLite，摘要按需派生。脚本另在 `<manifest-dir>/.context/<manifest-name>/` 保存 `checkpoints/<canonical-sha256>.json`、`CURRENT.json` 和 `RECOVERY.json`；这些是本地清单投影，状态必须与应用核对。文件权限为 0600，事件只保存种类、revision、run 和时间。
+
+不可变业务素材、原文、页面与诊断数据继续在所属模块的文件空间内保存，恢复目录只引用它们。默认事件记录不含完整正文、Prompt、凭据或工作区绝对路径；受授权的本地恢复包通过 workspace identity 解析真实位置，诊断导出继续脱敏。完整供应商响应沿用 7.2 的显式调试边界。
+
+写入采用 SQLite `BEGIN IMMEDIATE` → 校验租约/revision → 唯一 staging 文件写入/fsync → 不覆盖发布/fsync 目录 → 再次检查租约 → 同一事务提交 checkpoint 指针和 workflow 事件。提交前的读取者仍见旧指针；崩溃后残留文件只是未引用产物。缺文件/哈希错误会阻断恢复，摘要提供最近 5 个检查点的有效性；不会自动回退或从损坏内容猜测目标，修复需显式核对有效历史。
+
+外部提交前先由 `production` 保存批准快照和 attempt 意图，checkpoint 引用其 ID；响应后先由领域模块提交结果，再推进 workflow。不得试图通过一个 JSON 原子替换实现网络请求与多模块数据库的原子事务。
+
+### 23.5 执行权、幂等与在途核对
+
+协调租约与 revision 放在 workflow 自有表，沿用平台单写者与 fencing 规则，使执行权与检查点提交处于同一 SQLite 事务；不修改现有生成队列的 durable work 状态。同一 `run_id` 同时只有一个推进者。每次写入携带 `expected_revision` 和单调递增 `fencing_token`；旧执行者晚到会被拒绝。
+
+租约过期不意味着供应商没有执行。恢复先按已有 operation/generation/attempt ID 查询；服务端已有 `ready` 结果则验证计划与图片哈希并登记引用。尚不能确定结果时映射到现有 `needs_review`，不发起新的生成。新请求仍通过 `production` 的事务 claim、全局单在途检查及有效 GenerationApproval，不由 workflow 自己直接调用供应商。
+
+脚本 `prepare/generate` 全程持有稳定 inode 的非阻塞 `flock`，`save()` 使用唯一临时文件、fsync 和原子替换；每次生成最多 5 页。已登记 `workflow_context.run_id` 的清单逐页续租、保存检查点并核对恢复状态；未登记清单仍保留本地检查点和原有生成 ID 核对，但不宣称已受应用上下文状态机控制。运行中的旧脚本不受新文件锁约束，切换前须排空在途工作，不能热替换现有生产。已存在的生成 ID 和冻结哈希不得由脚本刷新接口静默替换。
+
+### 23.6 上下文状态机与宿主能力
+
+上下文状态属于 workflow 的独立协调状态，不增加或替换 9.2 的 GenerationJob 枚举，也不把“压缩完成”当作业务完成。
+
+```mermaid
+stateDiagram-v2
+    [*] --> collecting
+    collecting --> checkpointing: 工作单元结束或达到水位
+    checkpointing --> collecting: 预算仍充足
+    checkpointing --> compacting: 达到阈值且宿主支持
+    checkpointing --> handoff_required: 不支持压缩或预留不足
+    compacting --> rehydrating: 成功
+    compacting --> backoff: 首次可重试失败
+    backoff --> compacting: 退避约30秒后重试一次
+    compacting --> handoff_required: 第二次失败或不可重试
+    handoff_required --> rehydrating: 获授权后加载最小恢复包
+    rehydrating --> collecting: 版本和在途核对通过且预算充足
+    rehydrating --> handoff_required: 不一致或能力/预算不足
+```
+
+重试计数按 `run_id + context_epoch` 持久化，创建新 checkpoint 或重启都不清零。宿主压缩返回新的窗口且实际计数低于 40% 才进入新 epoch；状态转为 `rehydrating`，仍须领域核对。checkpoint 写入失败时脚本停止下一工作单元；现有在途操作按领域恢复规则核对。
+
+`ContextHostPort` 当前实现 `capabilities()` 和 `compact(checkpoint_id, request_id)`；`usage/compaction/context_replacement` 显式返回。默认适配器三项均为 false。实际用量通过受权的观测接口提交，前端只有在宿主声明 usage 且观测为 actual 时显示比例。`observe_usage()` 与 `replace_context()` 的真实宿主实现仍待集成；超时或未获得新窗口时不会假定压缩成功。
+
+普通 Codex 桌面任务目前可使用文件交接和所提供的任务工具，但本次可用接口没有对任意请求的预算拦截、强制压缩或历史替换能力。自动创建新的 Codex 任务还须有用户明确指示或宿主获得的授权；恢复包本身不能授权新建任务。`replace_context` 的本地 fake 测试通过不代表桌面集成已交付。
+
+### 23.7 读取、恢复接口与界面
+
+以下接口已通过 typed container 注入服务，路由位于 `api/workflow_context.py`，完整请求 schema 由应用 OpenAPI 生成。另有工作流创建/列表、`from-project`、租约领取/释放、检查点保存/刷新、观测和压缩协调接口；`compact` 只调用宿主端口，默认返回手动交接状态。
+
+| 已实现接口 | 行为 |
+|---|---|
+| `GET /api/v1/projects/{id}/workflows/{run_id}/context` | 返回阶段、生成/排版/有效审查记录计数、最新 checkpoint、观测精度和阻断原因；`export_approved=false`，不推断全书导出通过 |
+| `GET /api/v1/projects/{id}/workflows/{run_id}/evidence?cursor=...` | 分页返回授权工作区内的 ArtifactRef、页号和检查结果；服务端强制大小上限 |
+| `POST /api/v1/projects/{id}/workflows/{run_id}/recovery-plan` | 只读核对来源、版本和在途状态，生成带 `expected_revision` 的恢复计划；不调用图像供应商 |
+| `POST /api/v1/projects/{id}/workflows/{run_id}/recovery-bundles` | 持久化版本化小恢复包，绑定 checkpoint/输入哈希并返回引用；不创建新任务或图像 |
+| `POST /api/v1/projects/{id}/workflows/{run_id}/resume` | 重算 plan_hash，校验租约和 revision，来源/输入/文件/在途状态一致后恢复本地 collecting；返回外部请求数 0、仍需生成审批、未替换宿主上下文 |
+
+证据列表聚合 envelope 使用 6,000 UTF-8 字节作为保守 token 上界，超大单条保留索引并可经 `GET .../evidence/{artifact_id}/items/{index}?offset=...` 分块补读；完整失败总数独立于分页。该上界不声称是模型精确分词器。
+
+所有命令沿用 loopback/session/CSRF、工作区隔离和修订检查；恢复包不能含凭据。外部正文与工具输出视为证据数据，不进入系统指令。证据查询只接受由 file store 解析的合法引用，不接受任意文件路径。
+
+当前 `ReviewRecord` 复用校验绑定原图与排版哈希、冻结计划哈希、审查范围、`page-review-1` 规则、renderer/font 和同任务证据。公开领域查询重新检查冻结输入是否仍有效；规则/字体/渲染变化或证据损坏会令记录失效。缺少完整绑定的历史记录按待审处理；记录复用不生成 PageApproval，正式审批继续由领域负责。
+
+前端 `features/workflowContext` 显示阶段、下一动作和三个独立进度，支持刷新、记录当前冻结范围、导出交接包、核对并准备继续。上下文观测不可用时不显示精确百分比；writer 冲突/过期计划显示核对原因。完整生产清单通过 `scripts.workflow_context register/summary/handoff` 接入；这些命令均不生成图片。导出验收仍使用 ExportCenter 的真实结果。
+
+### 23.8 Codex 配置试验与可观察性
+
+针对复盘中 258,400-token 运行，可在支持相应配置的执行环境试验提前压缩和单结果保存预算；以下不是 Manga Maker 的默认配置，也未在本次文档修改中生效：
+
+```toml
+model_auto_compact_token_limit = 155000
+model_auto_compact_token_limit_scope = "total"
+tool_output_token_limit = 3000
+```
+
+键的语义见 [OpenAI 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。实施时核对有效配置层、运行版本和实际触发点；`tool_output_token_limit` 不代替多个结果的合计上限或图片预算，`model_context_window` 必须来自真实容量。
+
+官方 CLI 提供 `/compact`，桌面入口需实际核对；自建 Responses API 执行器可另行评估服务端/独立压缩。两条路径单独做集成验收。[官方命令文档](https://learn.chatgpt.com/docs/developer-commands?surface=cli)、[官方上下文文档](https://developers.openai.com/api/docs/guides/conversation-state)
+
+新增脱敏事件：`context_budget_observed`、`checkpoint_committed`、`compaction_attempted/succeeded/failed`、`handoff_required`、`recovery_reconciled`、`writer_conflict`。记录 workflow/unit/checkpoint/epoch、策略版本、用量精度和原因码，不记录原始正文、图片编码或凭据。
+
+按单元报告输入增量、峰值、压缩失败数、恢复时间、恢复包大小、重复请求数、验收覆盖和返工漏检率。`CONTEXT_BUDGET_EXCEEDED`、`CONTEXT_COMPACTION_FAILED`、`HOST_CAPABILITY_UNAVAILABLE`、`CHECKPOINT_INVALID`、`CHECKPOINT_WRITE_FAILED`、`RECOVERY_REVISION_CONFLICT` 属于目标协调错误；生成未知结果仍使用现有 `needs_review` 与生产错误，不混入自动重试分类。
+
+<a id="context-recovery-delivery"></a>
+
+### 23.9 交付顺序与验收矩阵
+
+1. **先恢复可见**：对接现有公开查询/兼容清单，输出小摘要、分页证据及当前未完成单元，核对它们与领域状态一致。
+2. **再恢复可靠**：实现版本化 checkpoint、统一领取、单写者 fencing、在途核对和恢复计划；每个 SQLite/文件提交边界注入中断。
+3. **再控制输入**：实现总输出 envelope 与请求前预算策略；用多子调用、滞后计数、图片未知用量和较小窗口测试真实边界。
+4. **最后宿主集成**：通过能力端口连接可用宿主，验证压缩、双失败熔断、重启计数继承和新上下文恢复；无能力时验收手动交接路径。
+
+| PRD 用例 | 技术验证重点 |
+|---|---|
+| UC-CTX-01 / UC-CTX-10 | 单个/聚合大输出、失败索引分页、显式截断、敏感信息与工作区边界 |
+| UC-CTX-02 | 50%/60%/70% 边界、单步跨水位、输出预留、计数去重和压缩后重新观测 |
+| UC-CTX-03 | 两次可重试失败、不可重试错误、超时、进程重启后仍不重复循环、无宿主能力降级 |
+| UC-CTX-04 | 恢复包大小与目标/限制保真，旧哈希/缺文件/错误 revision，检查点半写入与回退 |
+| UC-CTX-05 | 外发前/后、响应前/后、领域提交与游标推进之间崩溃；未知结果不得重发 |
+| UC-CTX-06 | 双执行者、租约过期、旧 fencing token 晚提交、旧脚本与新协调器互斥 |
+| UC-CTX-07 / UC-CTX-09 | 图片/文字/版式/字体/规则变化的精确失效，ready 与 PageApproval 分离 |
+| UC-CTX-08 | 授权 100 页生产全链路，跨阶段恢复后逐页覆盖、连续性、导出与重开验收 |
+
+文档更新、fake 通过、宿主配置被读取和真实恢复成功分别记录。交付证据必须说明实际覆盖的宿主与执行路径；未完成宿主集成时不宣称 Codex 上下文问题已经由应用修复。
+
+## 24. 100页跨章节导出与特写角色选择
+
+`FullPageOptions.panel_characters`允许按分格ID覆盖本次完整出镜角色列表；值必须是该格已批准角色的无重复子集，空列表表示只按镜头描述表现物件、手部或画外对话。省略时使用原分镜。编译器仅汇集有效出镜角色的全页和逐格外观引用。选择属于冻结计划内容，编辑后撤销确认；读取历史计划先校验原始JSON哈希，再应用兼容默认值，避免模型新增字段改变旧计划哈希。
+
+`/api/v1/projects/{project_id}/exports/book/preflight`和`/exports/book`接受有序的当前全部章节ID与可选冻结页面版本。全书路径要求每章当前已批准分镜完整、章节/页码有序且版本无重复；单章原有64页边界保持，全书允许至4096页。`ExportService`沿用同一PNG/PDF/CBZ/工程包写入及秘密扫描，不另造生成路径。导出记录以首章作为既有外键锚点，page_selection保留book scope、chapter_id、chapter_ordinal和连续全书ordinal；scope和章节集由该不可变选择恢复，无需数据库迁移。
+
+前端导出中心切换当前章/全书时撤销旧预检与确认；预检可见连续全书页码、章内页码、版本和哈希。100页真实验收及恢复后300个可编辑文字层证据见[验收报告](docs/canticle-100-acceptance.md)。该报告不代表宿主上下文自动替换或通用产品发布门禁完成。
+
+<a id="cover-and-artist-style"></a>
+
+## 25. 必备封面与画家风格启动门禁（目标设计，待实现）
+
+对应 [PRD §26 / FR-25/26 / AC-14/15](PRD.md#cover-and-artist-style)，开发工单为 [MM-079～084](WORK_ITEMS.md#cover-and-artist-style-tickets)。本节为新增设计，不表示当前 API、数据库或生产脚本已具备这些能力；§24 的正文导出与 §23 的上下文恢复验收保持原范围。
+
+### 25.1 确认早于生产，风格意图独立于分镜
+
+现有 `StyleBibleDocument` 依赖 `storyboard_version_id`，只能在分镜之后建立，无法承担“启动前询问”的事实记录。因此新增项目级 `ArtistStyleIntent`，由 `world_bible` 拥有，通过公开 Port 供改编、Prompt、生成和 workflow 使用；后续各章 StyleBible 引用同一已确认意图，不能反向推断用户选择。
+
+保持 §5.4 依赖方向：workflow 启动用例先核对 world_bible 的确认快照，再将其投影为 adaptation 自有的风格输入值及通用 ArtifactRef；adaptation 不反向查询或导入 world_bible，以免与已有设定生成依赖形成环。这个输入仅用于本次命令，不建立第二个意图真源；HTTP/CLI 不能自行提交一份未经服务端核对的“已确认快照”。
+
+| 对象 | 最小契约与约束 |
+|---|---|
+| `ArtistStyleIntent` | `id / project_id / version / mode / primary_artist / user_notes / confirmed_features / status / sha256 / confirmed_at`；mode 为 `artist` 或 `no_specific_artist`，待决定保留 draft。artist 必须有一位主要画家，不指定必须有明确选择与已确认的风格说明 |
+| `StyleIntentRef` | 意图 ID、版本、内容哈希和确认快照；不能只传姓名字符串或一个 `confirmed=true` |
+| `StyleBible` 新版 | 原有可执行风格字段 + `style_intent_ref`；风格原文与线条/造型/光影等具体特征均可回溯 |
+
+前端在生产入口展示提问与确认。保存和确认意图是纯本地命令，不自动调用模型；请求建议保持 draft，建议必须由用户明确选定。服务端公共启动用例校验有效 StyleIntentRef，缺失返回 `STYLE_INTENT_REQUIRED`，版本不一致返回 `STYLE_INTENT_STALE`；外部业务请求数为 0。API、CLI、批量执行和恢复入口必须调用同一校验。项目读取、历史导出、本地导入、健康检查等不受该生产门禁影响。
+
+改编/设定阶段消费意图与特征摘要；PromptPlan 及最终 GenerationApproval/Spec 冻结相同 StyleIntentRef 与 StyleBibleRef。最终发送前再检查当前版本与依赖哈希，阻止检查后又变更风格的竞争条件。更换画家或有效特征通过 lineage 使受影响设定、Prompt、生成审批、审查和导出预检失效；进行中的旧请求只登记到原输入版本，绝不改标为新风格结果，也不自动重发。
+
+### 25.2 封面身份、计划和正式书目顺序
+
+`page_type=cover` 只规定页型/格数，不足以证明全书具备正式封面。新增稳定封面身份与正式书目成员关系；一部书或作为独立作品的单章都必须在 BookComposition 中拥有唯一 `cover_front`。
+
+| 对象/职责 | 所有者 | 约束 |
+|---|---|---|
+| `CoverBrief` | `adaptation` | 内容主题、标题/可选署名、主视觉、构图、源摘要与设定/风格引用；封面身份属于项目，不伪造正文情节或章节 |
+| 封面布局 | `layout` | 消费已批准 CoverBrief，沿用画布/格框/文字安全区与特殊页 1–6 格约束 |
+| `BookComposition` | `composition` | 唯一封面引用 + 完整有序正文引用；分别保存 `body_page_count / cover_count / total_leaf_count` 和预算口径 |
+| 封面生成目标 | `production` | 将目标明确区分 `body_page` 与 `cover_front`，冻结 CoverBrief、版式、设定/风格、seed、成本与审批引用；沿用现有单在途与未知结果处理 |
+| 封面文字/版本与审查 | `composition` / `review` | 复用文字渲染与不可变 PageVersion；审查绑定具体素材、文字、renderer/font 和风格依赖，不由 ready 推导批准 |
+
+封面默认不占正文页预算。示例：body=100、cover=1、total=101；正文仍按章内/全书正文序号 1～100 标识，封面 `body_page_number=null`，实际导出位置为 1。新的布局/页面/执行契约以角色区分封面，不传正文 `page_number=0`、不借用正文第一页、不创建虚假章节绕过现有校验。已有 schema 按原字段解析，新角色进入新版本契约。
+
+封面候选数、图像请求、订阅核验和成本单独计入启动预检，不能借用已批准的正文 100 页额度。封面请求仍走同一 production 队列、冻结与审批路径，不新增可绕过审批的生成客户端。标题等文字以本地图层渲染，修改标题可复用原图并只派生封面新版本；正文引用与图片哈希保持不变。
+
+### 25.3 导出、检查点和兼容
+
+`exporting` 从 BookComposition 的公开快照构造唯一的冻结列表：封面在前，正文沿原章节顺序排列。预检同时校验完整正文和有效封面批准，缺失/未通过分别返回 `COVER_REQUIRED / COVER_NOT_APPROVED`；正式 PNG/PDF/CBZ 共享该列表，工程包保存成员角色、封面可编辑结构、风格确认及所有引用哈希。部分预览/备份明确保留未完成状态，不能用导出成功标识整书通过。
+
+扩展检查点契约时，现有 `units` 继续表示正文，新增独立 `cover_unit`、`style_intent_ref` 和 `book_composition_ref`；封面单元不占正文页码，摘要分别报告正文计数与封面状态。新 schema 的内容哈希纳入这些引用，恢复前重新核对风格、封面与正文生成 ID/文件及批准，不仅恢复界面文本。
+
+旧检查点 1.0、无画家字段的 StyleBible 和旧工程包继续只读兼容，不将缺失解释为已确认或封面通过。新增范围通过显式创建后继运行/快照并关联原检查点完成，保持既有全部正文 unit ID、页号与引用；不得直接改写不可变快照、缩小原目标或把旧正文页挪作封面。工程包恢复保留风格选择与封面编辑数据，执行审批仍按既有规则重新核对。
+
+数据库迁移按对象所有者注册统一 runner，实施时核对实际最新序号再分配，不预占具体 migration 数字。旧运行任务在原版本结束或核对后才进入新版流程，文档更新不触发热迁移、自动重绘或供应商请求。
+
+### 25.4 契约与验证要求
+
+新增接口围绕 `world_bible` 的意图读取/保存/确认、`adaptation` 的封面计划、`composition` 的书目成员与封面派生版本；统一由 typed container 接线，沿用 session/CSRF、项目 UUID 隔离、revision 与幂等规则。准确路径和 OpenAPI 在对应工单实施时冻结，禁止临时 UI 标记绕过后端领域校验。
+
+- UC-STYLE-01/02：空白/取消/草稿不可推进；明确不指定有效；确认命令本地执行，后续实际 Prompt 与执行规格携带同一意图哈希。
+- UC-STYLE-03/04：重启后恢复确认、旧工程补问、API/CLI 绕过失败、风格确认与发送竞争、在途旧结果归属和依赖失效。
+- UC-COVER-01/02：100 页正文 + 1 封面预算，封面唯一、来源/项目一致；缺封面或缺批准阻断正式发布，不阻断备份。
+- UC-COVER-03/04：四格式首张与总数相同、中文标题检查、独立封面编辑/重绘、正文哈希不变、包恢复与封面待办保真；旧 `page_type=cover` 不自动改写为书目封面。
+
+离线测试、UI 实测和授权的真实风格一致性/封面成品验收分别记录；只有文档或 mock 不将 MM-079～084 标记完成。

@@ -2543,3 +2543,23 @@ button.quiet-button:hover:not(:disabled) {
     grid-column: 1;
   }
 }
+.generation-mode-selector { display: grid; gap: 8px; margin: 24px 0; max-width: 540px; }
+.full-page-workbench { margin: 24px 0; padding: 24px; border: 1px solid #d6d8dc; border-radius: 12px; }
+.full-page-workbench fieldset { border: 0; padding: 0; min-width: 0; }
+.full-page-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+.full-page-workbench label { display: grid; gap: 6px; margin: 12px 0; }
+.full-page-workbench textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.full-page-workbench details { margin: 14px 0; }
+.full-page-workbench .confirmation-row { display: flex; align-items: center; gap: 10px; }
+.full-page-preview { margin-top: 24px; padding-top: 16px; border-top: 1px solid #d6d8dc; }
+.full-page-image { display: block; max-width: min(100%, 680px); height: auto; margin: 18px auto; }
+.full-page-history { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+/* Context recovery is kept compact; complete evidence lives in the local project. */
+.workflow-context { padding: 24px; margin-block: 20px; border: 1px solid #dad6cb; border-radius: 16px; background: #fffdf8; }
+.workflow-context-heading, .workflow-context-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.workflow-context-counts { display: flex; gap: 32px; flex-wrap: wrap; }
+.workflow-context-counts dd { margin: 6px 0; font-size: 1.25rem; font-weight: 600; }
+.workflow-context label { display: grid; gap: 8px; margin-block: 12px; }
+.workflow-context textarea { width: 100%; resize: vertical; font-family: monospace; }
+.workflow-context details { margin-top: 20px; }
+.workflow-context summary { cursor: pointer; }

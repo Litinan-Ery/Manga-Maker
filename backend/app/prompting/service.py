@@ -49,6 +49,7 @@ from ..novelai.contracts import CONTRACT_SHA256, MAPPING_VERSION
 from ..shared_kernel import canonical_sha256
 from .models import (
     CharacterTagBundleDocument,
+    CharacterTagDraftBundle,
     CharacterTagGenerationRequest,
     CharacterTagSetDocument,
     PromptBundleDocument,
@@ -74,6 +75,55 @@ class PromptingService:
         self.bibles = bibles
         self.layout = layout
         self.lineage = lineage
+
+    def import_character_tags(
+        self,
+        project_id: str,
+        chapter_id: str,
+        document: CharacterTagDraftBundle,
+        *,
+        source_note: str,
+    ) -> dict[str, Any]:
+        inputs = self._approved_inputs(project_id, chapter_id)
+        model_id = self._provider_model_id(project_id)
+        targets = self._target_tag_set_ids(project_id, chapter_id, inputs["characters"])
+        request = CharacterTagGenerationRequest(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            storyboard_version_id=UUID(inputs["storyboard_version_id"]),
+            character_bible_version_id=UUID(inputs["character_version_id"]),
+            style_bible_version_id=UUID(inputs["style_version_id"]),
+            character_bible=inputs["characters"],
+            style_bible=inputs["style"],
+            target_tag_set_ids=targets,
+            provider_model_id=model_id,
+        )
+        # Imported root IDs are allocated locally; source version and character IDs remain strict.
+        rebound = document.model_copy(
+            update={
+                "tag_sets": [
+                    tag.model_copy(
+                        update={"tag_set_id": targets.get(str(tag.character_id), tag.tag_set_id)}
+                    )
+                    for tag in document.tag_sets
+                ]
+            }
+        )
+        normalized = self._normalize_tag_document(rebound, request)
+        self._assert_inputs_still_current(project_id, chapter_id, inputs)
+        version_id = self._persist_tag_document(
+            project_id,
+            chapter_id,
+            normalized,
+            provider_model_id=model_id,
+            provenance={
+                "change_type": "local_import",
+                "source_note": source_note,
+                "document_sha256": canonical_sha256(document.model_dump(mode="json")),
+                "external_requests_started": 0,
+            },
+        )
+        return self.get_character_tag_version(project_id, version_id)
 
     async def generate_character_tags(
         self,
@@ -123,9 +173,7 @@ class PromptingService:
     ) -> dict[str, Any]:
         row = self._tag_version_row(project_id, version_id)
         self._require_tag_current_and_fresh(row)
-        current_document = CharacterTagBundleDocument.model_validate_json(
-            str(row["document_json"])
-        )
+        current_document = CharacterTagBundleDocument.model_validate_json(str(row["document_json"]))
         inputs = self._approved_inputs(project_id, str(row["chapter_id"]))
         request = CharacterTagGenerationRequest(
             project_id=project_id,
@@ -136,8 +184,7 @@ class PromptingService:
             character_bible=inputs["characters"],
             style_bible=inputs["style"],
             target_tag_set_ids={
-                str(tag.character_id): tag.tag_set_id
-                for tag in current_document.tag_sets
+                str(tag.character_id): tag.tag_set_id for tag in current_document.tag_sets
             },
             provider_model_id=str(row["provider_model_id"]),
         )
@@ -205,9 +252,7 @@ class PromptingService:
             style_bible_version_id=UUID(inputs["style_version_id"]),
             character_bible=inputs["characters"],
             style_bible=inputs["style"],
-            character_tag_bundle_version_id=UUID(
-                str(tag_row["character_tag_bundle_version_id"])
-            ),
+            character_tag_bundle_version_id=UUID(str(tag_row["character_tag_bundle_version_id"])),
             character_tags=tags,
             target_prompt_package_ids=target_ids,
             provider_model_id=provider_model_id,
@@ -263,15 +308,11 @@ class PromptingService:
     ) -> dict[str, Any]:
         row = self._prompt_version_row(project_id, version_id)
         self._require_prompt_current_and_fresh(row)
-        current_document = PromptBundleDocument.model_validate_json(
-            str(row["document_json"])
-        )
+        current_document = PromptBundleDocument.model_validate_json(str(row["document_json"]))
         chapter_id = str(row["chapter_id"])
         inputs = self._approved_inputs(project_id, chapter_id)
         layout_snapshot = self._approved_layout_snapshot(project_id, chapter_id, inputs)
-        tag_row = self._tag_version_row(
-            project_id, str(row["character_tag_bundle_version_id"])
-        )
+        tag_row = self._tag_version_row(project_id, str(row["character_tag_bundle_version_id"]))
         tags = CharacterTagBundleDocument.model_validate_json(str(tag_row["document_json"]))
         request = PromptGenerationRequest(
             project_id=project_id,
@@ -282,9 +323,7 @@ class PromptingService:
             style_bible_version_id=UUID(inputs["style_version_id"]),
             character_bible=inputs["characters"],
             style_bible=inputs["style"],
-            character_tag_bundle_version_id=UUID(
-                str(tag_row["character_tag_bundle_version_id"])
-            ),
+            character_tag_bundle_version_id=UUID(str(tag_row["character_tag_bundle_version_id"])),
             character_tags=tags,
             target_prompt_package_ids={
                 str(package.panel_id): package.prompt_package_id
@@ -472,8 +511,7 @@ class PromptingService:
                     page_layout_draft_sha256=binding.layout_content_sha256,
                     width=binding.selected_width,
                     height=binding.selected_height,
-                    seed=int(structured.prompt_plan.content_sha256[:8], 16)
-                    % 4_294_967_288,
+                    seed=int(structured.prompt_plan.content_sha256[:8], 16) % 4_294_967_288,
                     steps=28,
                     scale=5.0,
                     sampler="k_euler_ancestral",
@@ -506,11 +544,7 @@ class PromptingService:
             snapshot_sha256=snapshot_sha256,
         )
         candidate_counts = [
-            int(
-                cast(dict[str, Any], panel["provider_payload"])["parameters"].get(
-                    "n_samples", 1
-                )
-            )
+            int(cast(dict[str, Any], panel["provider_payload"])["parameters"].get("n_samples", 1))
             for panel in panels
         ]
         return {
@@ -530,8 +564,7 @@ class PromptingService:
                 "estimated_cost_upper_anlas": None,
                 "cost_status": "requires_generation_estimate",
                 "cost_notice": (
-                    "Prompt 审批不产生费用。保守成本上限在生成预估中按用户确认的"
-                    "每格上限计算。"
+                    "Prompt 审批不产生费用。保守成本上限在生成预估中按用户确认的每格上限计算。"
                 ),
             },
             "redaction": {
@@ -575,9 +608,7 @@ class PromptingService:
             "input": payload["input"],
             "model": payload["model"],
             "parameters": {
-                key: parameters[key]
-                for key in allowlisted_parameter_fields
-                if key in parameters
+                key: parameters[key] for key in allowlisted_parameter_fields if key in parameters
             },
         }
 
@@ -585,16 +616,12 @@ class PromptingService:
         tag_row = self._current_tag_row(project_id, chapter_id)
         prompt_row = self._current_prompt_row(project_id, chapter_id)
         blockers: list[str] = []
-        tag_payload = (
-            self._tag_payload(project_id, tag_row) if tag_row is not None else None
-        )
+        tag_payload = self._tag_payload(project_id, tag_row) if tag_row is not None else None
         prompt_payload = (
             self._prompt_payload(project_id, prompt_row) if prompt_row is not None else None
         )
         prompt_document = (
-            cast(dict[str, Any], prompt_payload["document"])
-            if prompt_payload is not None
-            else None
+            cast(dict[str, Any], prompt_payload["document"]) if prompt_payload is not None else None
         )
         structured_prompt_ready = bool(
             prompt_document is not None
@@ -637,6 +664,24 @@ class PromptingService:
 
     def get_character_tag_version(self, project_id: str, version_id: str) -> dict[str, Any]:
         return self._tag_payload(project_id, self._tag_version_row(project_id, version_id))
+
+    def approved_comic_inputs(self, project_id: str, chapter_id: str) -> dict[str, Any]:
+        """Read the shared approved sources without requiring a per-panel generation plan."""
+        inputs = self._approved_inputs(project_id, chapter_id)
+        layout = self._approved_layout_snapshot(project_id, chapter_id, inputs)
+        tag_row = self._current_tag_row(project_id, chapter_id)
+        if tag_row is None or tag_row["approval_hash"] is None:
+            raise ApplicationError(
+                "CHARACTER_TAGS_APPROVAL_REQUIRED", "请先审批当前角色固定 tags。", 409
+            )
+        self._require_tag_current_and_fresh(tag_row)
+        return {
+            **inputs,
+            "layout": layout,
+            "tags": CharacterTagBundleDocument.model_validate_json(str(tag_row["document_json"])),
+            "tag_version_id": str(tag_row["character_tag_bundle_version_id"]),
+            "tag_approval_hash": str(tag_row["approval_hash"]),
+        }
 
     def get_prompt_version(self, project_id: str, version_id: str) -> dict[str, Any]:
         return self._prompt_payload(project_id, self._prompt_version_row(project_id, version_id))
@@ -704,9 +749,9 @@ class PromptingService:
     ) -> CharacterTagBundleDocument:
         if str(source.storyboard_version_id) != str(request.storyboard_version_id):
             self._invalid_model_ids("角色 tags 的分镜版本不一致。")
-        if str(source.character_bible_version_id) != str(
-            request.character_bible_version_id
-        ) or str(source.style_bible_version_id) != str(request.style_bible_version_id):
+        if str(source.character_bible_version_id) != str(request.character_bible_version_id) or str(
+            source.style_bible_version_id
+        ) != str(request.style_bible_version_id):
             self._invalid_model_ids("角色 tags 的设定版本不一致。")
         expected = {str(character.character_id) for character in request.character_bible.characters}
         actual = {str(item.character_id) for item in source.tag_sets}
@@ -755,16 +800,12 @@ class PromptingService:
         prompt_version: int,
         layout_snapshot: Any,
     ) -> PromptBundleDocument:
-        if (
-            str(draft.storyboard_version_id) != str(request.storyboard_version_id)
-            or str(draft.character_tag_bundle_version_id)
-            != str(request.character_tag_bundle_version_id)
-        ):
+        if str(draft.storyboard_version_id) != str(request.storyboard_version_id) or str(
+            draft.character_tag_bundle_version_id
+        ) != str(request.character_tag_bundle_version_id):
             self._invalid_model_ids("PromptPackage 的输入版本与请求不一致。")
         panels = {
-            str(panel.panel_id): panel
-            for page in request.storyboard.pages
-            for panel in page.panels
+            str(panel.panel_id): panel for page in request.storyboard.pages for panel in page.panels
         }
         packages = {str(package.panel_id): package for package in draft.packages}
         if set(packages) != set(panels):
@@ -773,9 +814,7 @@ class PromptingService:
                 "每个分镜格必须恰好有一个 PromptPackage。",
                 422,
             )
-        tags_by_character = {
-            str(tag.character_id): tag for tag in request.character_tags.tag_sets
-        }
+        tags_by_character = {str(tag.character_id): tag for tag in request.character_tags.tag_sets}
         aliases: dict[str, str] = {}
         for character in request.character_bible.characters:
             for name in [character.name, *character.aliases]:
@@ -896,6 +935,7 @@ class PromptingService:
                         draft=StructuredPanelPromptDraft(
                             prompt_package_id=package.prompt_package_id,
                             panel_id=package.panel_id,
+                            visual_description=package.visual_description or panel.visual_prompt,
                             base_positive_tags=tuple(package.base_visual_tags),
                             base_negative_tags=tuple(package.negative_tags),
                             relationship_action=package.relationship_action,
@@ -947,6 +987,7 @@ class PromptingService:
             layout_snapshot_sha256=layout_snapshot.content_sha256,
             packages=compiled,
         )
+
     def _approved_layout_snapshot(
         self,
         project_id: str,
@@ -1473,9 +1514,7 @@ class PromptingService:
         current = self._current_tag_row(project_id, chapter_id)
         existing: dict[str, UUID] = {}
         if current is not None:
-            document = CharacterTagBundleDocument.model_validate_json(
-                str(current["document_json"])
-            )
+            document = CharacterTagBundleDocument.model_validate_json(str(current["document_json"]))
             existing = {str(item.character_id): item.tag_set_id for item in document.tag_sets}
         return {
             str(character.character_id): existing.get(str(character.character_id), uuid7())
@@ -1585,9 +1624,7 @@ class PromptingService:
                 "storyboard_version_id": str(row["storyboard_version_id"]),
                 "character_bible_version_id": str(row["character_bible_version_id"]),
                 "style_bible_version_id": str(row["style_bible_version_id"]),
-                "character_tag_bundle_version_id": str(
-                    row["character_tag_bundle_version_id"]
-                ),
+                "character_tag_bundle_version_id": str(row["character_tag_bundle_version_id"]),
                 "provider_model_id": str(row["provider_model_id"]),
                 "layout_snapshot_sha256": document.layout_snapshot_sha256,
                 "prompt_packages": [
@@ -1650,10 +1687,7 @@ def _layout_character_slot_id(value: str) -> UUID:
         return UUID(value)
     encoded = value.encode("utf-8").hex()
     padded = (encoded + ("0" * 32))[:32]
-    return UUID(
-        f"{padded[:8]}-{padded[8:12]}-7{padded[13:16]}-"
-        f"8{padded[17:20]}-{padded[20:32]}"
-    )
+    return UUID(f"{padded[:8]}-{padded[8:12]}-7{padded[13:16]}-8{padded[17:20]}-{padded[20:32]}")
 
 
 def _bind_layout_character_slots(
@@ -1689,9 +1723,7 @@ def _bind_layout_character_slots(
         update={
             "character_positions": [
                 position.model_copy(
-                    update={
-                        "character_id": UUID(slot_to_character[str(position.character_id)])
-                    }
+                    update={"character_id": UUID(slot_to_character[str(position.character_id)])}
                 )
                 for position in frame.character_positions
             ]
@@ -1731,7 +1763,11 @@ def _legacy_flat_positive(package: Any) -> str:
         parts.extend(character.fixed_tags)
         parts.extend(character.variable_positive_tags)
         parts.append(character.action)
-    return _join_tags(parts)
+    return "\n\n".join(
+        part
+        for part in (_join_tags(parts), plan.base.visual_description, plan.base.composition_prompt)
+        if part
+    )
 
 
 def _legacy_flat_negative(package: Any) -> str:

@@ -5,7 +5,7 @@
   "generation_spec_id": "01900000-0000-7000-8000-000000000602",
   "provider": "novelai",
   "action": "generate",
-  "mapping_version": "novelai-image-2026-08-29.4-v5-full-1",
+  "mapping_version": "novelai-image-2026-09-06.5-explicit-uc-1",
   "contract_sha256": "2bd3c5fcd491016e1951f5a3f347d0207d49d4add153899405224e21fd1dc684",
   "capability_snapshot_sha256": "abababababababababababababababababababababababababababababababab",
   "model_id": "nai-diffusion-5-full",

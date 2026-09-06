@@ -24,9 +24,10 @@ interface PageComposerProps {
   projectId: string;
   chapterSet: ChapterSet;
   onError: (message: string) => void;
+  refreshKey?: number;
 }
 
-export function PageComposer({ projectId, chapterSet, onError }: PageComposerProps) {
+export function PageComposer({ projectId, chapterSet, onError, refreshKey = 0 }: PageComposerProps) {
   const [chapterId, setChapterId] = useState(chapterSet.chapters[0]?.chapter_id ?? "");
   const [templates, setTemplates] = useState<PageTemplate[]>([]);
   const [library, setLibrary] = useState<AssetLibraryItem[]>([]);
@@ -78,7 +79,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
     return () => {
       active = false;
     };
-  }, [chapterId, onError, projectId]);
+  }, [chapterId, onError, projectId, refreshKey]);
 
   useEffect(() => {
     if (!selectedPage) {
@@ -97,7 +98,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
       const drafted = await draftComicPages(projectId, chapterId);
       setPages(drafted);
       setSelectedPageId(drafted[0]?.page_id ?? "");
-      setMessage("已用当前面板素材建立规范页面；未调用任何图像 API。");
+      setMessage("已按批准版式拼页，保留现有素材和已保存文字。");
     });
   }
 
@@ -252,7 +253,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
         <span>{pages.length ? `${pages.length} 页` : "尚未建立"}</span>
       </div>
       <p className="panel-description">
-        面板图像作为不可变素材，支持黑白或彩色分页、右到左阅读与竖向条漫；格框、裁切和中文文字仍全部在本机确定性合成。
+        页面和素材均保留不可变版本。逐格页面在本地绘制格框与文字；整页成图保留模型格框，按所选文字策略继续编辑。
       </p>
       <div className="page-composer-toolbar">
         <label>
@@ -270,7 +271,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
           disabled={busy || pagesLoading || !chapterId}
           onClick={() => void handleDraft()}
         >
-          从当前素材建立漫画页
+          按批准版式建立或更新漫画页
         </button>
       </div>
 
@@ -312,6 +313,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
                 <span>阅读方向</span>
                 <select
                   value={document.reading_direction}
+                  disabled={!!document.page_image}
                   onChange={(event) =>
                     setDocument({
                       ...document,
@@ -343,7 +345,10 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
             </div>
             <label>
               <span>分页与条漫模板</span>
-              <select value={document.template_id} onChange={(event) => applyTemplate(event.target.value)}>
+              <select disabled={!!document.page_image} value={document.template_id} onChange={(event) => applyTemplate(event.target.value)}>
+                {document.template_id === "approved-layout" && (
+                  <option value="approved-layout">已批准的自定义版式</option>
+                )}
                 {templates
                   .filter((item) => item.panel_count === document.panels.length)
                   .map((item) => (
@@ -352,7 +357,10 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
               </select>
             </label>
 
-            <div className="page-panel-controls">
+            {document.page_image && <p>本页格框已画入整页素材。{document.page_image.text_policy === "model"
+              ? "文字也已画入图片，修改格框、画面或文字需重新生成整页。"
+              : "调整格框或画面请回到整页生成；下方可编辑本地文字。"}</p>}
+            {!document.page_image && <div className="page-panel-controls">
               {document.panels.map((panel, index) => (
                 <PanelControls
                   key={panel.panel_id}
@@ -364,12 +372,12 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
                   onChange={(next) => updatePanel(index, next)}
                 />
               ))}
-            </div>
+            </div>}
 
             <div className="page-text-controls">
               <div className="bible-section-heading">
                 <h3>本地文字图层</h3>
-                <button type="button" className="quiet-button" onClick={addTextLayer}>
+                <button type="button" className="quiet-button" disabled={document.page_image?.text_policy === "model"} onClick={addTextLayer}>
                   添加文字图层
                 </button>
               </div>
@@ -389,7 +397,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
                 />
               ))}
             </div>
-            <section className="asset-library-panel">
+            {!document.page_image && <section className="asset-library-panel">
               <div className="bible-section-heading">
                 <div>
                   <h3>项目可复用素材库</h3>
@@ -437,7 +445,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
                   ))}
                 </div>
               )}
-            </section>
+            </section>}
             <label className="confirmation-row">
               <input
                 type="checkbox"
@@ -449,7 +457,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
             <button type="button" disabled={busy} onClick={() => void handleSave()}>
               保存并重新渲染页面（仅本地）
             </button>
-            <RevisionWorkbench
+            {!document.page_image && <RevisionWorkbench
               projectId={projectId}
               page={selectedPage}
               onPageChange={(next) => {
@@ -459,7 +467,7 @@ export function PageComposer({ projectId, chapterSet, onError }: PageComposerPro
                 setSelectedPageId(next.page_id);
               }}
               onError={onError}
-            />
+            />}
           </div>
         </div>
       )}

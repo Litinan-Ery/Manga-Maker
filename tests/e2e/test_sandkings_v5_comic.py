@@ -10,17 +10,23 @@ from typing import Any
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from backend.app.acceptance.sandkings_24 import PAGE_BEATS_24
 from backend.app.acceptance.sandkings_v5 import (
+    LIMITED_COLOR_STYLE,
+    MONOCHROME_90S_AMERICAN_STYLE,
+    PAGE_BEATS,
     PAGE_COUNT,
     PROJECT_TITLE,
     TEXT_MODEL_BASE_URL,
     TEXT_MODEL_NAME,
+    SandkingsPageBeat,
     SandkingsV5AcceptanceTextModel,
     extract_sandkings_source,
 )
 from backend.app.novelai.mock import MockNovelAIClient
 from scripts.run_sandkings_v5_acceptance import (
     MAX_CALLS_PER_TARGET,
+    _activate_run_configuration,
     _refine_prompts_for_visual_failures,
 )
 from tests.test_bibles_api import generate_bibles
@@ -78,7 +84,7 @@ def test_sandkings_v5_mock_pipeline_exports_complete_auditable_comic(
     assert all(payload["parameters"]["steps"] == 23 for payload in payloads)
     assert all(payload["parameters"]["scale"] == 7.0 for payload in payloads)
     assert all(payload["parameters"]["tag_hint_qt"] == 1 for payload in payloads)
-    assert all(payload["parameters"]["tag_hint_uc_preset"] == 4 for payload in payloads)
+    assert all(payload["parameters"]["tag_hint_uc_preset"] == 0 for payload in payloads)
     assert all("director_reference_images" not in payload["parameters"] for payload in payloads)
 
     provider = MockNovelAIClient()
@@ -221,10 +227,77 @@ def test_visual_review_prompt_fixes_are_approved_and_target_only_failed_pages(
     assert unchanged["version_id"] == revised["version_id"]
 
 
+def test_24_page_monochrome_prompt_pipeline_is_frozen_before_generation(
+    client: TestClient,
+    session_headers: dict[str, str],
+    tmp_path: Path,
+) -> None:
+    extracted = extract_sandkings_source(_source_fixture(tmp_path))
+    project_id, chapter_id = _prepare_inputs(
+        client,
+        session_headers,
+        extracted.text,
+        page_beats=PAGE_BEATS_24,
+        style_preset=MONOCHROME_90S_AMERICAN_STYLE.key,
+    )
+
+    storyboard = client.get(
+        f"/api/v1/projects/{project_id}/adaptation/storyboards/current",
+        params={"chapter_id": chapter_id},
+    ).json()
+    assert len(storyboard["document"]["pages"]) == 24
+    workflow = client.get(
+        f"/api/v1/projects/{project_id}/prompting",
+        params={"chapter_id": chapter_id},
+    ).json()
+    packages = workflow["prompt_bundle"]["document"]["packages"]
+    assert len(packages) == 24
+    assert all(
+        "1990s DC Comics aesthetic" in package["style_tags"] for package in packages
+    )
+    assert all("color" in package["negative_tags"] for package in packages)
+    _activate_run_configuration(24, MONOCHROME_90S_AMERICAN_STYLE.key)
+    try:
+        _refine_prompts_for_visual_failures(
+            client,
+            session_headers,
+            project_id,
+            chapter_id,
+            [24],
+        )
+    finally:
+        _activate_run_configuration(12, LIMITED_COLOR_STYLE.key)
+    revised_workflow = client.get(
+        f"/api/v1/projects/{project_id}/prompting",
+        params={"chapter_id": chapter_id},
+    ).json()
+    page_24_panel = storyboard["document"]["pages"][23]["panels"][0]["panel_id"]
+    page_24 = next(
+        package
+        for package in revised_workflow["prompt_bundle"]["document"]["packages"]
+        if package["panel_id"] == page_24_panel
+    )
+    assert "four hands clearly visible on every alien child" in page_24[
+        "base_visual_tags"
+    ]
+    assert "two-armed child" in page_24["negative_tags"]
+    estimate = estimate_plan(
+        client,
+        session_headers,
+        project_id,
+        chapter_id,
+        per_panel_cost_ceiling_anlas=0,
+    )
+    assert estimate["page_count"] == estimate["panel_count"] == 24
+
+
 def _prepare_inputs(
     client: TestClient,
     headers: dict[str, str],
     source_text: str,
+    *,
+    page_beats: tuple[SandkingsPageBeat, ...] = PAGE_BEATS,
+    style_preset: str = LIMITED_COLOR_STYLE.key,
 ) -> tuple[str, str]:
     project = client.post("/api/v1/projects", headers=headers, json={"title": PROJECT_TITLE})
     assert project.status_code == 201, project.text
@@ -279,16 +352,18 @@ def _prepare_inputs(
         SandkingsV5AcceptanceTextModel(
             configuration,
             secret_reader,
+            page_beats=page_beats,
+            style_preset=style_preset,
         )
     )
     storyboard = client.post(
         f"/api/v1/projects/{project_id}/adaptation/storyboards/generate",
         headers=headers,
-        json={"chapter_id": chapter_id, "page_budget": PAGE_COUNT},
+        json={"chapter_id": chapter_id, "page_budget": len(page_beats)},
     )
     assert storyboard.status_code == 201, storyboard.text
     storyboard_payload = storyboard.json()
-    assert len(storyboard_payload["document"]["pages"]) == PAGE_COUNT
+    assert len(storyboard_payload["document"]["pages"]) == len(page_beats)
     approved_storyboard = client.post(
         f"/api/v1/projects/{project_id}/adaptation/storyboards/"
         f"{storyboard_payload['storyboard_version_id']}/approve",

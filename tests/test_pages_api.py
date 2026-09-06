@@ -5,11 +5,41 @@ import copy
 from io import BytesIO
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from backend.app.novelai.mock import MockNovelAIClient
 from tests.test_generation_queue import prepare_job, transition
+
+
+def test_saving_same_document_after_renderer_upgrade_creates_a_local_revision(
+    client: TestClient, session_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.app.pages import renderer
+
+    prepared, provider, page = prepare_page(client, session_headers)
+    calls = provider.generation_calls
+    monkeypatch.setattr(renderer, "RENDERER_VERSION", "test-upgraded-renderer")
+    endpoint = f"/api/v1/projects/{prepared['project_id']}/pages/{page['page_id']}/versions"
+    response = client.post(
+        endpoint,
+        headers=session_headers,
+        json={"expected_revision": page["page_revision"], "document": page["document"]},
+    )
+    assert response.status_code == 201, response.text
+    updated = response.json()
+    assert updated["page_version_id"] != page["page_version_id"]
+    assert updated["parent_page_version_id"] == page["page_version_id"]
+    assert updated["document_sha256"] == page["document_sha256"]
+    assert updated["renderer_version"] == "test-upgraded-renderer"
+    repeated = client.post(
+        endpoint,
+        headers=session_headers,
+        json={"expected_revision": updated["page_revision"], "document": updated["document"]},
+    )
+    assert repeated.json()["page_version_id"] == updated["page_version_id"]
+    assert provider.generation_calls == calls
 
 
 def test_page_draft_and_revision_render_without_external_image_calls(
@@ -54,8 +84,7 @@ def test_page_draft_and_revision_render_without_external_image_calls(
     assert provider.generation_calls == calls_before_layout
 
     old_version = client.get(
-        f"/api/v1/projects/{project_id}/pages/{page['page_id']}/versions/"
-        f"{page['page_version_id']}"
+        f"/api/v1/projects/{project_id}/pages/{page['page_id']}/versions/{page['page_version_id']}"
     )
     assert old_version.status_code == 200
     assert old_version.json()["is_current"] is False
@@ -120,9 +149,7 @@ def test_page_templates_cover_one_to_six_panels(
     client: TestClient, session_headers: dict[str, str]
 ) -> None:
     prepared, _provider, _page = prepare_page(client, session_headers)
-    response = client.get(
-        f"/api/v1/projects/{prepared['project_id']}/pages/templates"
-    )
+    response = client.get(f"/api/v1/projects/{prepared['project_id']}/pages/templates")
     assert response.status_code == 200
     templates = response.json()
     assert [item["panel_count"] for item in templates[:6]] == [1, 2, 3, 4, 5, 6]
@@ -134,8 +161,7 @@ def test_page_templates_cover_one_to_six_panels(
         if item["panel_count"] <= 2
     )
     assert all(
-        set(item["compatible_page_types"])
-        == {"standard", "cover", "splash", "special"}
+        set(item["compatible_page_types"]) == {"standard", "cover", "splash", "special"}
         for item in templates
         if item["panel_count"] >= 3
     )
@@ -149,8 +175,7 @@ def test_page_templates_cover_one_to_six_panels(
         "reading_direction": "top_to_bottom",
         "layout_mode": "vertical_strip",
         "frames": [
-            {"x": 96, "y": 96 + index * 1536, "width": 1248, "height": 1500}
-            for index in range(6)
+            {"x": 96, "y": 96 + index * 1536, "width": 1248, "height": 1500} for index in range(6)
         ],
     }
 
@@ -159,12 +184,10 @@ def prepare_page(
     client: TestClient, session_headers: dict[str, str]
 ) -> tuple[dict[str, Any], MockNovelAIClient, dict[str, Any]]:
     prepared = prepare_job(client, session_headers, title_suffix="页面")
-    started = transition(
-        client, session_headers, prepared["project_id"], prepared["job"], "start"
-    )
+    started = transition(client, session_headers, prepared["project_id"], prepared["job"], "start")
     provider = MockNovelAIClient()
-    client.app.state.generation_executor.provider_factory = (
-        lambda _configuration, _secret_reader: provider
+    client.app.state.generation_executor.provider_factory = lambda _configuration, _secret_reader: (
+        provider
     )
     asyncio.run(client.app.state.generation_executor.run_until_blocked(started["job_id"]))
     drafted = client.post(
